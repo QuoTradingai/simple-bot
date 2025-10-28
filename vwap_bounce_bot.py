@@ -1,0 +1,669 @@
+"""
+VWAP Bounce Bot - Mean Reversion Trading Strategy
+Event-driven bot that trades bounces off VWAP standard deviation bands
+"""
+
+import os
+import logging
+from datetime import datetime, time, timedelta
+from collections import deque
+from typing import Dict, List, Optional, Tuple, Callable
+import pytz
+
+# Configuration Dictionary
+CONFIG = {
+    # Trading Parameters
+    "instrument": "MES",
+    "trading_window": {
+        "start": time(10, 0),  # 10:00 AM ET
+        "end": time(15, 30)    # 3:30 PM ET
+    },
+    "timezone": "America/New_York",
+    
+    # Risk Management
+    "risk_per_trade": 0.001,  # 0.1% of account equity
+    "max_contracts": 1,
+    "max_trades_per_day": 5,
+    "daily_loss_limit": 400.0,  # Conservative limit before TopStep's $1000
+    
+    # Instrument Specifications (MES)
+    "tick_size": 0.25,
+    "tick_value": 1.25,
+    
+    # Strategy Parameters
+    "trend_filter_period": 50,  # bars
+    "trend_timeframe": 15,  # minutes
+    "vwap_timeframe": 1,  # minutes
+    "vwap_sd_multipliers": {
+        "band_1": 1.0,
+        "band_2": 2.0
+    },
+    "risk_reward_ratio": 1.5,
+    
+    # System Settings
+    "dry_run": True,
+    "log_file": "vwap_bounce_bot.log",
+    "max_tick_storage": 10000,
+    "max_bars_storage": 200
+}
+
+# Global SDK client instance
+sdk_client = None
+
+# State management dictionary
+state = {}
+
+
+def setup_logging():
+    """Configure logging for the bot"""
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+        handlers=[
+            logging.FileHandler(CONFIG["log_file"]),
+            logging.StreamHandler()
+        ]
+    )
+    return logging.getLogger(__name__)
+
+
+logger = setup_logging()
+
+
+# ============================================================================
+# PHASE TWO: SDK Integration
+# ============================================================================
+
+def initialize_sdk():
+    """
+    Initialize the TopStep SDK client using environment variable token.
+    Returns the initialized client or exits if token is missing.
+    """
+    global sdk_client
+    
+    token = os.getenv("TOPSTEP_API_TOKEN")
+    if not token:
+        logger.error("TOPSTEP_API_TOKEN environment variable not found!")
+        logger.error("Please set your API token: export TOPSTEP_API_TOKEN='your_token_here'")
+        exit(1)
+    
+    try:
+        # Placeholder for actual SDK initialization
+        # sdk_client = TopStepSDK(api_token=token)
+        logger.info("SDK client initialized successfully")
+        logger.warning("Running in simulation mode - actual SDK not imported")
+        sdk_client = {"mock": True, "token": token}  # Mock client for now
+        return sdk_client
+    except Exception as e:
+        logger.error(f"Failed to initialize SDK: {e}")
+        exit(1)
+
+
+def get_account_equity() -> float:
+    """
+    Fetch current account equity from SDK.
+    Returns account equity/balance.
+    """
+    if sdk_client is None:
+        logger.error("SDK client not initialized")
+        return 0.0
+    
+    try:
+        # Placeholder for actual SDK call
+        # account_info = sdk_client.get_account_info()
+        # equity = account_info.get('equity') or account_info.get('balance')
+        
+        # Mock equity for development
+        equity = 50000.0
+        logger.info(f"Account equity: ${equity:.2f}")
+        return equity
+    except Exception as e:
+        logger.error(f"Error fetching account equity: {e}")
+        return 0.0
+
+
+def place_market_order(symbol: str, side: str, quantity: int) -> Optional[Dict]:
+    """
+    Place a market order through the SDK.
+    
+    Args:
+        symbol: Instrument symbol (e.g., 'MES')
+        side: 'BUY' or 'SELL'
+        quantity: Number of contracts
+    
+    Returns:
+        Order object or None if failed
+    """
+    logger.info(f"{'[DRY RUN] ' if CONFIG['dry_run'] else ''}Market Order: {side} {quantity} {symbol}")
+    
+    if CONFIG["dry_run"]:
+        return {
+            "order_id": f"MOCK_{datetime.now().timestamp()}",
+            "symbol": symbol,
+            "side": side,
+            "quantity": quantity,
+            "type": "MARKET",
+            "status": "FILLED",
+            "dry_run": True
+        }
+    
+    try:
+        # Placeholder for actual SDK call
+        # order = sdk_client.create_market_order(
+        #     symbol=symbol,
+        #     side=side,
+        #     quantity=quantity
+        # )
+        # return order
+        
+        logger.warning("Live trading not implemented - SDK integration required")
+        return None
+    except Exception as e:
+        logger.error(f"Error placing market order: {e}")
+        return None
+
+
+def place_stop_order(symbol: str, side: str, quantity: int, stop_price: float) -> Optional[Dict]:
+    """
+    Place a stop order through the SDK.
+    
+    Args:
+        symbol: Instrument symbol
+        side: 'BUY' or 'SELL'
+        quantity: Number of contracts
+        stop_price: Stop trigger price
+    
+    Returns:
+        Order object or None if failed
+    """
+    logger.info(f"{'[DRY RUN] ' if CONFIG['dry_run'] else ''}Stop Order: {side} {quantity} {symbol} @ {stop_price}")
+    
+    if CONFIG["dry_run"]:
+        return {
+            "order_id": f"MOCK_STOP_{datetime.now().timestamp()}",
+            "symbol": symbol,
+            "side": side,
+            "quantity": quantity,
+            "type": "STOP",
+            "stop_price": stop_price,
+            "status": "PENDING",
+            "dry_run": True
+        }
+    
+    try:
+        # Placeholder for actual SDK call
+        # order = sdk_client.create_stop_order(
+        #     symbol=symbol,
+        #     side=side,
+        #     quantity=quantity,
+        #     stop_price=stop_price
+        # )
+        # return order
+        
+        logger.warning("Live trading not implemented - SDK integration required")
+        return None
+    except Exception as e:
+        logger.error(f"Error placing stop order: {e}")
+        return None
+
+
+def subscribe_market_data(symbol: str, callback: Callable):
+    """
+    Subscribe to real-time market data for a symbol.
+    
+    Args:
+        symbol: Instrument symbol
+        callback: Function to call with tick data (symbol, price, volume, timestamp)
+    """
+    logger.info(f"{'[DRY RUN] ' if CONFIG['dry_run'] else ''}Subscribing to market data: {symbol}")
+    
+    if CONFIG["dry_run"]:
+        logger.info(f"Mock subscription to {symbol} - callback registered")
+        return
+    
+    try:
+        # Placeholder for actual SDK call
+        # sdk_client.subscribe_ticks(symbol=symbol, callback=callback)
+        logger.warning("Live data subscription not implemented - SDK integration required")
+    except Exception as e:
+        logger.error(f"Error subscribing to market data: {e}")
+
+
+def fetch_historical_bars(symbol: str, timeframe: int, count: int) -> List[Dict]:
+    """
+    Fetch historical bars for initial trend calculation.
+    
+    Args:
+        symbol: Instrument symbol
+        timeframe: Bar timeframe in minutes
+        count: Number of bars to fetch
+    
+    Returns:
+        List of bar dictionaries with OHLCV data
+    """
+    logger.info(f"Fetching {count} historical {timeframe}min bars for {symbol}")
+    
+    try:
+        # Placeholder for actual SDK call
+        # bars = sdk_client.get_historical_bars(
+        #     symbol=symbol,
+        #     interval=f"{timeframe}m",
+        #     limit=count
+        # )
+        # return bars
+        
+        # Mock data for development
+        logger.warning("Returning mock historical data - SDK integration required")
+        return []
+    except Exception as e:
+        logger.error(f"Error fetching historical bars: {e}")
+        return []
+
+
+# ============================================================================
+# PHASE THREE: State Management
+# ============================================================================
+
+def initialize_state(symbol: str):
+    """
+    Initialize state tracking for an instrument.
+    
+    Args:
+        symbol: Instrument symbol
+    """
+    state[symbol] = {
+        # Tick data storage
+        "ticks": deque(maxlen=CONFIG["max_tick_storage"]),
+        
+        # Bar storage
+        "bars_1min": deque(maxlen=CONFIG["max_bars_storage"]),
+        "bars_15min": deque(maxlen=100),
+        
+        # Current incomplete bars
+        "current_1min_bar": None,
+        "current_15min_bar": None,
+        
+        # VWAP calculation data
+        "vwap": None,
+        "vwap_bands": {
+            "upper_1": None,
+            "upper_2": None,
+            "lower_1": None,
+            "lower_2": None
+        },
+        "vwap_std_dev": None,
+        
+        # Trend filter
+        "trend_ema": None,
+        "trend_direction": None,  # 'UP', 'DOWN', or None
+        
+        # Daily tracking
+        "trading_day": None,
+        "daily_trade_count": 0,
+        "daily_pnl": 0.0,
+        
+        # Position tracking
+        "position": {
+            "active": False,
+            "side": None,
+            "quantity": 0,
+            "entry_price": None,
+            "stop_price": None,
+            "target_price": None,
+            "entry_time": None
+        },
+        
+        # Volume history
+        "volume_history": deque(maxlen=CONFIG["max_bars_storage"])
+    }
+    
+    logger.info(f"State initialized for {symbol}")
+
+
+def reset_daily_state(symbol: str):
+    """
+    Reset daily tracking at start of new trading day.
+    
+    Args:
+        symbol: Instrument symbol
+    """
+    if symbol not in state:
+        return
+    
+    logger.info(f"Resetting daily state for {symbol}")
+    
+    state[symbol]["bars_1min"].clear()
+    state[symbol]["daily_trade_count"] = 0
+    state[symbol]["daily_pnl"] = 0.0
+    state[symbol]["vwap"] = None
+    state[symbol]["vwap_bands"] = {
+        "upper_1": None,
+        "upper_2": None,
+        "lower_1": None,
+        "lower_2": None
+    }
+    state[symbol]["vwap_std_dev"] = None
+    state[symbol]["trading_day"] = datetime.now(pytz.timezone(CONFIG["timezone"])).date()
+
+
+# ============================================================================
+# PHASE FOUR: Data Processing Pipeline
+# ============================================================================
+
+def on_tick(symbol: str, price: float, volume: int, timestamp_ms: int):
+    """
+    Handle incoming tick data.
+    
+    Args:
+        symbol: Instrument symbol
+        price: Tick price
+        volume: Tick volume
+        timestamp_ms: Timestamp in milliseconds
+    """
+    if symbol not in state:
+        initialize_state(symbol)
+    
+    # Create tick object
+    tick = {
+        "price": price,
+        "volume": volume,
+        "timestamp": timestamp_ms
+    }
+    
+    # Append to tick storage
+    state[symbol]["ticks"].append(tick)
+    
+    # Convert timestamp to datetime
+    dt = datetime.fromtimestamp(timestamp_ms / 1000.0, tz=pytz.timezone(CONFIG["timezone"]))
+    
+    # Check if new trading day
+    current_day = dt.date()
+    if state[symbol]["trading_day"] != current_day:
+        reset_daily_state(symbol)
+    
+    # Update 1-minute bars
+    update_1min_bar(symbol, price, volume, dt)
+    
+    # Update 15-minute bars
+    update_15min_bar(symbol, price, volume, dt)
+
+
+def update_1min_bar(symbol: str, price: float, volume: int, dt: datetime):
+    """
+    Update or create 1-minute bars for VWAP calculation.
+    
+    Args:
+        symbol: Instrument symbol
+        price: Current price
+        volume: Current volume
+        dt: Current datetime
+    """
+    # Get current minute boundary
+    minute_boundary = dt.replace(second=0, microsecond=0)
+    
+    current_bar = state[symbol]["current_1min_bar"]
+    
+    if current_bar is None or current_bar["timestamp"] != minute_boundary:
+        # Finalize previous bar if exists
+        if current_bar is not None:
+            state[symbol]["bars_1min"].append(current_bar)
+            # Calculate VWAP after new bar is added
+            calculate_vwap(symbol)
+        
+        # Start new bar
+        state[symbol]["current_1min_bar"] = {
+            "timestamp": minute_boundary,
+            "open": price,
+            "high": price,
+            "low": price,
+            "close": price,
+            "volume": volume
+        }
+    else:
+        # Update current bar
+        current_bar["high"] = max(current_bar["high"], price)
+        current_bar["low"] = min(current_bar["low"], price)
+        current_bar["close"] = price
+        current_bar["volume"] += volume
+
+
+def update_15min_bar(symbol: str, price: float, volume: int, dt: datetime):
+    """
+    Update or create 15-minute bars for trend filter.
+    
+    Args:
+        symbol: Instrument symbol
+        price: Current price
+        volume: Current volume
+        dt: Current datetime
+    """
+    # Get 15-minute boundary
+    minute = (dt.minute // 15) * 15
+    boundary_15min = dt.replace(minute=minute, second=0, microsecond=0)
+    
+    current_bar = state[symbol]["current_15min_bar"]
+    
+    if current_bar is None or current_bar["timestamp"] != boundary_15min:
+        # Finalize previous bar if exists
+        if current_bar is not None:
+            state[symbol]["bars_15min"].append(current_bar)
+            # Update trend filter after new bar is added
+            update_trend_filter(symbol)
+        
+        # Start new bar
+        state[symbol]["current_15min_bar"] = {
+            "timestamp": boundary_15min,
+            "open": price,
+            "high": price,
+            "low": price,
+            "close": price,
+            "volume": volume
+        }
+    else:
+        # Update current bar
+        current_bar["high"] = max(current_bar["high"], price)
+        current_bar["low"] = min(current_bar["low"], price)
+        current_bar["close"] = price
+        current_bar["volume"] += volume
+
+
+def update_trend_filter(symbol: str):
+    """
+    Update the trend filter using EMA of 15-minute bars.
+    
+    Args:
+        symbol: Instrument symbol
+    """
+    bars = state[symbol]["bars_15min"]
+    period = CONFIG["trend_filter_period"]
+    
+    if len(bars) < period:
+        logger.debug(f"Not enough bars for trend filter: {len(bars)}/{period}")
+        return
+    
+    # Calculate EMA
+    closes = [bar["close"] for bar in bars]
+    ema = calculate_ema(closes, period)
+    
+    if ema is not None:
+        state[symbol]["trend_ema"] = ema
+        
+        # Determine trend direction
+        current_price = closes[-1]
+        if current_price > ema:
+            state[symbol]["trend_direction"] = "UP"
+        elif current_price < ema:
+            state[symbol]["trend_direction"] = "DOWN"
+        else:
+            state[symbol]["trend_direction"] = None
+        
+        logger.debug(f"Trend EMA: {ema:.2f}, Direction: {state[symbol]['trend_direction']}")
+
+
+def calculate_ema(values: List[float], period: int) -> Optional[float]:
+    """
+    Calculate Exponential Moving Average.
+    
+    Args:
+        values: List of values
+        period: EMA period
+    
+    Returns:
+        EMA value or None
+    """
+    if len(values) < period:
+        return None
+    
+    multiplier = 2.0 / (period + 1)
+    
+    # Start with SMA
+    ema = sum(values[:period]) / period
+    
+    # Calculate EMA for remaining values
+    for value in values[period:]:
+        ema = (value - ema) * multiplier + ema
+    
+    return ema
+
+
+# ============================================================================
+# PHASE FIVE: VWAP Calculation
+# ============================================================================
+
+def calculate_vwap(symbol: str):
+    """
+    Calculate VWAP and standard deviation bands from 1-minute bars.
+    VWAP is volume-weighted average price, reset daily.
+    
+    Args:
+        symbol: Instrument symbol
+    """
+    bars = state[symbol]["bars_1min"]
+    
+    if len(bars) == 0:
+        return
+    
+    # Calculate cumulative VWAP
+    total_pv = 0.0  # price * volume
+    total_volume = 0.0
+    
+    for bar in bars:
+        typical_price = (bar["high"] + bar["low"] + bar["close"]) / 3.0
+        pv = typical_price * bar["volume"]
+        total_pv += pv
+        total_volume += bar["volume"]
+    
+    if total_volume == 0:
+        return
+    
+    # VWAP = sum(price * volume) / sum(volume)
+    vwap = total_pv / total_volume
+    state[symbol]["vwap"] = vwap
+    
+    # Calculate standard deviation (volume-weighted)
+    variance_sum = 0.0
+    for bar in bars:
+        typical_price = (bar["high"] + bar["low"] + bar["close"]) / 3.0
+        squared_diff = (typical_price - vwap) ** 2
+        variance_sum += squared_diff * bar["volume"]
+    
+    variance = variance_sum / total_volume
+    std_dev = variance ** 0.5
+    state[symbol]["vwap_std_dev"] = std_dev
+    
+    # Calculate bands
+    multipliers = CONFIG["vwap_sd_multipliers"]
+    state[symbol]["vwap_bands"]["upper_1"] = vwap + (std_dev * multipliers["band_1"])
+    state[symbol]["vwap_bands"]["upper_2"] = vwap + (std_dev * multipliers["band_2"])
+    state[symbol]["vwap_bands"]["lower_1"] = vwap - (std_dev * multipliers["band_1"])
+    state[symbol]["vwap_bands"]["lower_2"] = vwap - (std_dev * multipliers["band_2"])
+    
+    logger.debug(f"VWAP: {vwap:.2f}, StdDev: {std_dev:.2f}")
+    logger.debug(f"Bands - U2: {state[symbol]['vwap_bands']['upper_2']:.2f}, "
+                f"U1: {state[symbol]['vwap_bands']['upper_1']:.2f}, "
+                f"L1: {state[symbol]['vwap_bands']['lower_1']:.2f}, "
+                f"L2: {state[symbol]['vwap_bands']['lower_2']:.2f}")
+
+
+# ============================================================================
+# UTILITY FUNCTIONS
+# ============================================================================
+
+def is_trading_hours(dt: datetime = None) -> bool:
+    """
+    Check if current time is within trading window.
+    
+    Args:
+        dt: Datetime to check (defaults to now)
+    
+    Returns:
+        True if within trading hours
+    """
+    if dt is None:
+        dt = datetime.now(pytz.timezone(CONFIG["timezone"]))
+    
+    current_time = dt.time()
+    return CONFIG["trading_window"]["start"] <= current_time <= CONFIG["trading_window"]["end"]
+
+
+def round_to_tick(price: float) -> float:
+    """
+    Round price to nearest tick size.
+    
+    Args:
+        price: Price to round
+    
+    Returns:
+        Rounded price
+    """
+    tick_size = CONFIG["tick_size"]
+    return round(price / tick_size) * tick_size
+
+
+# ============================================================================
+# MAIN EXECUTION
+# ============================================================================
+
+def main():
+    """Main bot execution"""
+    logger.info("="*60)
+    logger.info("VWAP Bounce Bot Starting")
+    logger.info("="*60)
+    logger.info(f"Mode: {'DRY RUN' if CONFIG['dry_run'] else 'LIVE TRADING'}")
+    logger.info(f"Instrument: {CONFIG['instrument']}")
+    logger.info(f"Trading Window: {CONFIG['trading_window']['start']} - {CONFIG['trading_window']['end']} ET")
+    logger.info(f"Max Trades/Day: {CONFIG['max_trades_per_day']}")
+    logger.info(f"Daily Loss Limit: ${CONFIG['daily_loss_limit']}")
+    logger.info("="*60)
+    
+    # Initialize SDK
+    initialize_sdk()
+    
+    # Initialize state for instrument
+    symbol = CONFIG["instrument"]
+    initialize_state(symbol)
+    
+    # Fetch historical bars for trend filter initialization
+    historical_bars = fetch_historical_bars(
+        symbol=symbol,
+        timeframe=CONFIG["trend_timeframe"],
+        count=CONFIG["trend_filter_period"]
+    )
+    
+    if historical_bars:
+        state[symbol]["bars_15min"].extend(historical_bars)
+        update_trend_filter(symbol)
+    
+    # Subscribe to market data
+    subscribe_market_data(symbol, on_tick)
+    
+    logger.info("Bot initialization complete")
+    logger.info("Waiting for market data...")
+    
+    # In a real implementation, this would run indefinitely
+    # For now, we just show the structure is ready
+    logger.info("Bot is ready to process ticks through on_tick() callback")
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,10 @@
+# VWAP Bounce Bot Dependencies
+
+# Time zone support
+pytz>=2023.3
+
+# TopStep SDK (uncomment and install according to TopStep documentation)
+# topstep-sdk>=1.0.0
+
+# Optional: For enhanced logging and monitoring
+# python-dotenv>=1.0.0

@@ -1,2 +1,222 @@
-# simple-bot
-quick funded
+# VWAP Bounce Bot
+
+An event-driven mean reversion trading bot for futures trading (MES) that executes trades based on VWAP (Volume Weighted Average Price) standard deviation bands and trend alignment.
+
+## Overview
+
+The VWAP Bounce Bot subscribes to real-time tick data, aggregates it into bars, calculates VWAP with standard deviation bands, determines trend direction, and executes mean reversion trades when price touches extreme bands while aligned with the trend.
+
+## Architecture
+
+### Five-Phase Implementation
+
+1. **Project Setup** - Configuration and risk management parameters
+2. **SDK Integration** - TopStep SDK wrapper functions for trading operations
+3. **State Management** - Data structures for ticks, bars, positions, and P&L tracking
+4. **Data Processing Pipeline** - Real-time tick handling and bar aggregation
+5. **VWAP Calculation** - Volume-weighted average price with standard deviation bands
+
+## Features
+
+- **Event-Driven Architecture**: Processes real-time tick data efficiently
+- **Risk Management**: Conservative 0.1% risk per trade with daily loss limits
+- **Trend Filter**: 50-period EMA on 15-minute bars
+- **VWAP Bands**: Two standard deviation bands for entry signals
+- **Trading Hours**: 10:00 AM - 3:30 PM ET (avoiding open/close chaos)
+- **Dry Run Mode**: Test strategies without risking capital
+
+## Configuration
+
+The bot is configured for **MES (Micro E-mini S&P 500)** with the following parameters:
+
+### Trading Parameters
+- **Instrument**: MES only (to start)
+- **Trading Window**: 10:00 AM - 3:30 PM Eastern Time
+- **Risk Per Trade**: 0.1% of account equity
+- **Max Contracts**: 1
+- **Max Trades Per Day**: 5
+- **Daily Loss Limit**: $400 (conservative before TopStep's $1,000 limit)
+
+### Instrument Specifications (MES)
+- **Tick Size**: 0.25
+- **Tick Value**: $1.25
+
+### Strategy Parameters
+- **Trend Filter**: 50-period EMA on 15-minute bars
+- **VWAP Timeframe**: 1-minute bars
+- **Standard Deviation Bands**: 1σ and 2σ multipliers
+- **Risk/Reward Ratio**: 1.5:1
+- **Max Bars Storage**: 200 bars for stability
+
+## Installation
+
+### Prerequisites
+- Python 3.8 or higher
+- TopStep trading account and API credentials
+
+### Setup
+
+1. Clone the repository:
+```bash
+git clone https://github.com/Quotraders/simple-bot.git
+cd simple-bot
+```
+
+2. Install dependencies:
+```bash
+pip install -r requirements.txt
+```
+
+3. Set up your TopStep API token:
+```bash
+cp .env.example .env
+# Edit .env and add your TOPSTEP_API_TOKEN
+```
+
+4. Install TopStep SDK (follow TopStep documentation):
+```bash
+# Follow TopStep's official SDK installation instructions
+# pip install topstep-sdk
+```
+
+## Usage
+
+### Running in Dry Run Mode (Default)
+
+Test the bot without executing real trades:
+
+```bash
+export TOPSTEP_API_TOKEN='your_token_here'
+python vwap_bounce_bot.py
+```
+
+### Running in Live Mode
+
+⚠️ **WARNING**: Only use live mode after thorough testing in dry run mode!
+
+Edit `vwap_bounce_bot.py` and set:
+```python
+CONFIG = {
+    ...
+    "dry_run": False,
+    ...
+}
+```
+
+Then run:
+```bash
+python vwap_bounce_bot.py
+```
+
+## How It Works
+
+### Data Flow
+
+1. **Tick Reception**: SDK sends real-time tick data (price, volume, timestamp)
+2. **Bar Aggregation**: 
+   - 1-minute bars for VWAP calculation
+   - 15-minute bars for trend filter
+3. **VWAP Calculation**: Volume-weighted price with standard deviation bands
+4. **Trend Detection**: 50-period EMA determines market direction
+5. **Signal Generation**: Price touching extreme bands while trend-aligned
+6. **Order Execution**: Market orders with stop loss and target placement
+
+### VWAP Calculation
+
+VWAP resets daily and is calculated as:
+```
+VWAP = Σ(Price × Volume) / Σ(Volume)
+```
+
+Standard deviation bands:
+- **Upper Band 1**: VWAP + 1σ
+- **Upper Band 2**: VWAP + 2σ  
+- **Lower Band 1**: VWAP - 1σ
+- **Lower Band 2**: VWAP - 2σ
+
+### State Management
+
+The bot maintains state for:
+- **Tick Storage**: Deque with 10,000 tick capacity
+- **Bar Storage**: 200 1-minute bars, 100 15-minute bars
+- **Position Tracking**: Entry price, stops, targets
+- **Daily Metrics**: Trade count, P&L, day identification
+
+## Project Structure
+
+```
+simple-bot/
+├── vwap_bounce_bot.py    # Main bot implementation
+├── requirements.txt       # Python dependencies
+├── .env.example          # Environment variable template
+├── .gitignore           # Git ignore patterns
+└── README.md            # This file
+```
+
+## SDK Integration Points
+
+The bot includes wrapper functions for TopStep SDK integration:
+
+- `initialize_sdk()` - Initialize SDK client with API token
+- `get_account_equity()` - Fetch current account balance
+- `place_market_order()` - Execute market orders
+- `place_stop_order()` - Place stop loss orders
+- `subscribe_market_data()` - Subscribe to real-time ticks
+- `fetch_historical_bars()` - Get historical data for initialization
+
+## Risk Management
+
+The bot implements multiple layers of risk control:
+
+1. **Position Sizing**: 0.1% of equity per trade
+2. **Max Contracts**: Limited to 1 contract
+3. **Daily Trade Limit**: Maximum 5 trades per day
+4. **Daily Loss Limit**: $400 stop out threshold
+5. **Trading Hours**: Restricted to liquid market hours
+6. **Stop Losses**: Automatic stop placement on every trade
+
+## Logging
+
+All bot activity is logged to:
+- **Console**: Real-time monitoring
+- **Log File**: `vwap_bounce_bot.log` for historical review
+
+Log levels:
+- INFO: General operations
+- WARNING: Important notices
+- ERROR: Failures and issues
+- DEBUG: Detailed calculation data
+
+## Development Status
+
+**Current Phase**: Complete implementation of Phases 1-5
+
+✅ **Completed**:
+- Phase 1: Project setup and configuration
+- Phase 2: SDK integration wrapper functions
+- Phase 3: State management structures
+- Phase 4: Data processing pipeline
+- Phase 5: VWAP calculation with bands
+
+🔄 **Pending**:
+- Strategy logic for trade entry/exit signals
+- Position management and P&L tracking
+- TopStep SDK actual integration (requires SDK package)
+- Backtesting and optimization
+- Live testing in dry run mode
+
+## Safety Notes
+
+- Always start with **dry run mode** enabled
+- Test thoroughly with paper trading before going live
+- Monitor daily loss limits closely
+- Keep API tokens secure (never commit to git)
+- Review logs regularly for unexpected behavior
+
+## License
+
+MIT License - See LICENSE file for details
+
+## Disclaimer
+
+This software is for educational purposes only. Trading futures involves substantial risk of loss. Use at your own risk. The authors are not responsible for any financial losses incurred through use of this software.
