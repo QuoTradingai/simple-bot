@@ -110,6 +110,32 @@ The bot will:
 **Backtesting runs completely independently of the broker API.**  
 No API token needed - it replays historical data bar-by-bar (1-minute bars by default).
 
+**Parameter Optimization:**
+
+Find optimal strategy parameters using grid search and walk-forward analysis:
+
+```python
+from parameter_optimization import ParameterOptimizer
+
+# Define parameter ranges to optimize
+param_ranges = {
+    'vwap_period': [20, 30, 40, 50, 60],
+    'band_multiplier': [0.5, 1.0, 1.5, 2.0],
+    'stop_loss_ticks': [5, 8, 10, 12, 15],
+    'target_ticks': [10, 15, 20, 25, 30]
+}
+
+# Run grid search
+optimizer = ParameterOptimizer(config, bot_config, param_ranges)
+results = optimizer.grid_search(vwap_strategy, metric='sharpe_ratio', n_jobs=4)
+print(f"Best parameters: {results.best_params}")
+
+# Run walk-forward analysis (prevents overfitting)
+wf_results = optimizer.walk_forward_analysis(vwap_strategy, window_size_days=30)
+```
+
+**Basic Backtesting:**
+
 Run backtest on last 7 days:
 ```bash
 # No API token required for backtesting!

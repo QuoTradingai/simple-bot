@@ -13,6 +13,12 @@ from dataclasses import dataclass, field
 import pytz
 import os
 
+# Export parameter optimization classes
+__all__ = [
+    'BacktestConfig', 'BacktestEngine', 'HistoricalDataLoader', 
+    'PerformanceMetrics', 'ReportGenerator', 'Trade'
+]
+
 
 @dataclass
 class Trade:
