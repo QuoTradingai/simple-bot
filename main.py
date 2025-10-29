@@ -9,6 +9,7 @@ import sys
 import os
 import logging
 from datetime import datetime, timedelta
+from typing import List, Dict, Any
 import pytz
 
 # Import bot modules
@@ -182,27 +183,60 @@ def run_backtest(args, bot_config):
     bot_config_dict = bot_config.to_dict()
     engine = BacktestEngine(backtest_config, bot_config_dict)
     
-    # Import actual bot strategy for backtesting
-    # NOTE: The backtest engine will integrate with vwap_bounce_bot.py strategy
-    # For now, this is a placeholder that will be integrated with the actual
-    # trading logic from vwap_bounce_bot.py
-    from vwap_bounce_bot import on_tick, initialize_state, state
+    # Integrate actual VWAP bot strategy for backtesting
+    from vwap_bounce_bot import initialize_state, on_tick, check_for_signals, check_exit_conditions, state
     
-    def vwap_strategy():
+    # Initialize bot state for backtesting
+    symbol = bot_config_dict['instrument']
+    initialize_state(symbol)
+    
+    def vwap_strategy_backtest(bars_1min: List[Dict[str, Any]], bars_15min: List[Dict[str, Any]]) -> None:
         """
-        Actual VWAP Bounce strategy from vwap_bounce_bot.py
-        This will be integrated with the backtest engine to execute
-        real trading logic on historical data.
+        Actual VWAP Bounce strategy integrated with backtest engine.
+        Processes historical data through the real bot logic.
         """
-        # TODO: Integrate vwap_bounce_bot.py strategy with backtest engine
-        # The strategy will:
-        # 1. Process historical ticks/bars
-        # 2. Calculate VWAP and bands
-        # 3. Check entry/exit signals
-        # 4. Execute simulated trades via engine
-        pass
+        for bar in bars_1min:
+            # Extract bar data
+            timestamp = bar['timestamp']
+            price = bar['close']
+            volume = bar['volume']
+            timestamp_ms = int(timestamp.timestamp() * 1000)
+            
+            # Process tick through actual bot logic
+            on_tick(symbol, price, volume, timestamp_ms)
+            
+            # Check for entry signals after each bar
+            check_for_signals(symbol)
+            
+            # Check for exit signals
+            check_exit_conditions(symbol)
+            
+            # Update backtest engine with current position from bot state
+            if symbol in state and 'position' in state[symbol] and state[symbol]['position'] is not None:
+                pos = state[symbol]['position']
+                
+                # If bot entered a position and backtest engine doesn't have it, record it
+                if engine.current_position is None:
+                    engine.current_position = {
+                        'symbol': symbol,
+                        'side': pos['side'],
+                        'quantity': pos['quantity'],
+                        'entry_price': pos['entry_price'],
+                        'entry_time': pos['entry_time'],
+                        'stop_price': pos.get('stop_loss'),
+                        'target_price': pos.get('target_price')
+                    }
+                    logger.info(f"Backtest: {pos['side'].upper()} position entered at {pos['entry_price']}")
+                    
+            # If bot closed position, close it in backtest engine too
+            elif engine.current_position is not None:
+                exit_price = price
+                exit_time = timestamp
+                exit_reason = 'bot_exit'
+                engine._close_position(exit_time, exit_price, exit_reason)
+                logger.info(f"Backtest: Position closed at {exit_price}, reason: {exit_reason}")
         
-    results = engine.run(vwap_strategy)
+    results = engine.run_with_strategy(vwap_strategy_backtest)
     
     # Generate report
     report_gen = ReportGenerator(engine.metrics)

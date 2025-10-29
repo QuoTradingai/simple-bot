@@ -488,10 +488,24 @@ class BacktestEngine:
         
     def run(self, strategy_func: Any) -> Dict[str, Any]:
         """
-        Run the backtest using the provided strategy function.
+        LEGACY METHOD - Kept for backward compatibility.
+        Use run_with_strategy() for integrated bot strategy.
         
         Args:
             strategy_func: Function that implements trading strategy logic
+            
+        Returns:
+            Performance metrics dictionary
+        """
+        return self.run_with_strategy(strategy_func)
+    
+    def run_with_strategy(self, strategy_func: Any) -> Dict[str, Any]:
+        """
+        Run the backtest with integrated bot strategy.
+        
+        Args:
+            strategy_func: Function that receives bars and executes strategy logic.
+                          Should be: func(bars_1min: List[Dict], bars_15min: List[Dict]) -> None
             
         Returns:
             Performance metrics dictionary
@@ -504,7 +518,7 @@ class BacktestEngine:
         self.logger.info(f"Symbols: {', '.join(self.config.symbols)}")
         
         for symbol in self.config.symbols:
-            self._run_symbol_backtest(symbol, strategy_func)
+            self._run_symbol_backtest_integrated(symbol, strategy_func)
             
         # Calculate and return metrics
         results = self.metrics.get_summary()
@@ -518,9 +532,21 @@ class BacktestEngine:
     
     def _run_symbol_backtest(self, symbol: str, strategy_func: Any) -> None:
         """
-        Run backtest for a single symbol.
+        LEGACY METHOD - Kept for backward compatibility.
+        Use _run_symbol_backtest_integrated() for integrated bot strategy.
+        """
+        return self._run_symbol_backtest_integrated(symbol, strategy_func)
+    
+    def _run_symbol_backtest_integrated(self, symbol: str, strategy_func: Any) -> None:
+        """
+        Run backtest for a single symbol with integrated bot strategy.
         By default uses bar-by-bar replay with 1-minute bars.
         Can optionally use tick-by-tick replay if enabled.
+        
+        Args:
+            symbol: Symbol to backtest
+            strategy_func: Function that receives bars and executes strategy.
+                          Signature: func(bars_1min: List[Dict], bars_15min: List[Dict]) -> None
         """
         self.logger.info(f"\nBacktesting {symbol}...")
         
@@ -539,122 +565,18 @@ class BacktestEngine:
             for issue in issues:
                 self.logger.warning(f"  - {issue}")
         
-        # Choose replay mode based on configuration
-        if self.config.use_tick_data:
-            # Optional: tick-by-tick replay for more accurate simulation
-            ticks = self.data_loader.load_tick_data(symbol)
-            if len(ticks) > 0:
-                self.logger.info(f"Running tick-by-tick replay with {len(ticks)} ticks")
-                self._replay_ticks(symbol, ticks, bars_1min, bars_15min, strategy_func)
-            else:
-                self.logger.warning(f"Tick data requested but not available, falling back to bar-by-bar")
-                self.logger.info(f"Running bar-by-bar replay with {len(bars_1min)} 1-minute bars")
-                self._replay_bars(symbol, bars_1min, bars_15min, strategy_func)
-        else:
-            # Default: bar-by-bar replay with 1-minute bars
-            self.logger.info(f"Running bar-by-bar replay with {len(bars_1min)} 1-minute bars")
-            self._replay_bars(symbol, bars_1min, bars_15min, strategy_func)
-    
-    def _replay_ticks(self, symbol: str, ticks: List[Dict[str, Any]], 
-                      bars_1min: List[Dict[str, Any]], bars_15min: List[Dict[str, Any]],
-                      strategy_func: Any) -> None:
-        """
-        Replay ticks one by one as if it's live trading.
-        This simulates the actual bot behavior with historical data.
-        """
-        for i, tick in enumerate(ticks):
-            # Check pending orders on each tick
-            if self.current_position is not None:
-                self._check_tick_exits(tick)
-            
-            # Run strategy logic (placeholder - would integrate with actual bot)
-            # In full integration, this would call the bot's on_tick handler
-            # which processes the tick, updates bars, checks signals, etc.
-            
-            if i % 1000 == 0:
-                self.logger.debug(f"Processed {i}/{len(ticks)} ticks")
+        # Execute strategy with historical bars
+        # The strategy function will process bars and update bot state/positions
+        # The backtest engine monitors bot state to track trades
+        self.logger.info(f"Running bar-by-bar replay with {len(bars_1min)} 1-minute bars")
         
-        self.logger.info(f"Processed {len(ticks)} ticks for {symbol}")
-    
-    def _replay_bars(self, symbol: str, bars_1min: List[Dict[str, Any]], 
-                     bars_15min: List[Dict[str, Any]], strategy_func: Any) -> None:
-        """
-        Replay bars when tick data is not available.
-        Each bar is treated as a single event.
-        """
-        for i, bar in enumerate(bars_1min):
-            # Check pending orders (stops, limits)
-            self._process_pending_orders(bar)
-            
-            # Run strategy logic (placeholder - actual integration would call bot's signal logic)
-            
-        self.logger.info(f"Processed {len(bars_1min)} bars for {symbol}")
-    
-    def _check_tick_exits(self, tick: Dict[str, Any]) -> None:
-        """
-        Check if any exit conditions are met on a tick.
-        This provides more accurate simulation than bar-based exits.
-        """
-        if self.current_position is None:
-            return
-        
-        price = tick['price']
-        timestamp = tick['timestamp']
-        
-        # Check stop loss
-        if 'stop_price' in self.current_position:
-            stop_price = self.current_position['stop_price']
-            side = self.current_position['side']
-            
-            if side == 'long' and price <= stop_price:
-                self._close_position(timestamp, stop_price, 'stop_loss')
-                return
-            elif side == 'short' and price >= stop_price:
-                self._close_position(timestamp, stop_price, 'stop_loss')
-                return
-        
-        # Check target
-        if 'target_price' in self.current_position:
-            target_price = self.current_position['target_price']
-            side = self.current_position['side']
-            
-            if side == 'long' and price >= target_price:
-                self._close_position(timestamp, target_price, 'target_reached')
-                return
-            elif side == 'short' and price <= target_price:
-                self._close_position(timestamp, target_price, 'target_reached')
-                return
-    
-    def _process_pending_orders(self, bar: Dict[str, Any]) -> None:
-        """Process any pending stop or limit orders"""
-        if self.current_position is None:
-            return
-            
-        # Check if stop loss hit
-        if 'stop_price' in self.current_position:
-            stop_side = 'SELL' if self.current_position['side'] == 'long' else 'BUY'
-            fill_price = self.order_simulator.simulate_stop_order(
-                stop_side,
-                self.current_position['stop_price'],
-                bar
-            )
-            
-            if fill_price is not None:
-                self._close_position(bar['timestamp'], fill_price, 'stop_loss')
-                return
-                
-        # Check if target hit
-        if 'target_price' in self.current_position:
-            target_side = 'SELL' if self.current_position['side'] == 'long' else 'BUY'
-            fill_price = self.order_simulator.simulate_limit_order(
-                target_side,
-                self.current_position['target_price'],
-                bar
-            )
-            
-            if fill_price is not None:
-                self._close_position(bar['timestamp'], fill_price, 'target_reached')
-                return
+        try:
+            # Call the integrated strategy function with historical data
+            strategy_func(bars_1min, bars_15min)
+        except Exception as e:
+            self.logger.error(f"Error running strategy: {e}", exc_info=True)
+            raise
+
     
     def _close_position(self, exit_time: datetime, exit_price: float, reason: str) -> None:
         """Close the current position and record the trade"""
