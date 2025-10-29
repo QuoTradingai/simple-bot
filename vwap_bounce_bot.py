@@ -493,6 +493,9 @@ def on_tick(symbol: str, price: float, volume: int, timestamp_ms: int):
     # Phase 11: Check for daily reset
     check_daily_reset(symbol, dt)
     
+    # Phase Eleven: Critical safety check - NO positions past 5 PM
+    check_no_overnight_positions(symbol)
+    
     # Update 1-minute bars
     update_1min_bar(symbol, price, volume, dt)
     
