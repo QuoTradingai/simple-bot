@@ -63,6 +63,9 @@ class BotConfiguration:
     # Broker Configuration
     api_token: Optional[str] = None
     
+    # Operational mode
+    backtest_mode: bool = False  # When True, API token not required
+    
     # Environment
     environment: str = "production"  # "development", "staging", "production"
     
@@ -116,9 +119,9 @@ class BotConfiguration:
         if not 0 < self.max_drawdown_percent <= 100:
             errors.append(f"max_drawdown_percent must be between 0 and 100, got {self.max_drawdown_percent}")
         
-        # Validate broker configuration - API token is required
-        if not self.api_token:
-            errors.append("api_token is required for TopStep broker")
+        # Validate broker configuration - API token is required unless in backtest mode
+        if not self.backtest_mode and not self.api_token:
+            errors.append("api_token is required for TopStep broker (not required in backtest_mode)")
         
         # Validate environment
         if self.environment not in ["development", "staging", "production"]:
@@ -240,7 +243,7 @@ def get_production_config() -> BotConfiguration:
     return config
 
 
-def load_config(environment: Optional[str] = None) -> BotConfiguration:
+def load_config(environment: Optional[str] = None, backtest_mode: bool = False) -> BotConfiguration:
     """
     Load configuration based on environment.
     
@@ -252,6 +255,7 @@ def load_config(environment: Optional[str] = None) -> BotConfiguration:
     Args:
         environment: Environment name ("development", "staging", "production")
                     If None, uses BOT_ENVIRONMENT env var or defaults to "development"
+        backtest_mode: If True, API token is not required (for backtesting)
     
     Returns:
         Validated BotConfiguration instance
@@ -270,6 +274,9 @@ def load_config(environment: Optional[str] = None) -> BotConfiguration:
         config = get_staging_config()
     else:
         config = get_development_config()
+    
+    # Set backtest mode
+    config.backtest_mode = backtest_mode
     
     # Override with environment variables
     env_config = load_from_env()

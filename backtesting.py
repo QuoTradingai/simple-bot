@@ -51,6 +51,42 @@ class HistoricalDataLoader:
     def __init__(self, config: BacktestConfig):
         self.config = config
         self.logger = logging.getLogger(__name__)
+    
+    def _normalize_timestamp(self, timestamp: datetime) -> datetime:
+        """
+        Normalize timestamp to be timezone-aware in UTC.
+        
+        Args:
+            timestamp: Datetime to normalize
+            
+        Returns:
+            Timezone-aware datetime in UTC
+        """
+        if timestamp.tzinfo is None:
+            return pytz.UTC.localize(timestamp)
+        return timestamp.astimezone(pytz.UTC)
+    
+    def _normalize_date_range(self) -> Tuple[datetime, datetime]:
+        """
+        Normalize config date range to be timezone-aware.
+        
+        Returns:
+            Tuple of (start_date, end_date) in UTC
+        """
+        start_date = self.config.start_date
+        end_date = self.config.end_date
+        
+        if start_date.tzinfo is None:
+            start_date = pytz.UTC.localize(start_date)
+        else:
+            start_date = start_date.astimezone(pytz.UTC)
+            
+        if end_date.tzinfo is None:
+            end_date = pytz.UTC.localize(end_date)
+        else:
+            end_date = end_date.astimezone(pytz.UTC)
+            
+        return start_date, end_date
         
     def load_tick_data(self, symbol: str) -> List[Dict[str, Any]]:
         """
@@ -71,22 +107,13 @@ class HistoricalDataLoader:
             return ticks
             
         try:
+            start_date, end_date = self._normalize_date_range()
+            
             with open(filepath, 'r') as f:
                 reader = csv.DictReader(f)
                 for row in reader:
                     timestamp = datetime.fromisoformat(row['timestamp'])
-                    
-                    # Make timestamps timezone-aware if they aren't
-                    if timestamp.tzinfo is None:
-                        timestamp = pytz.UTC.localize(timestamp)
-                    
-                    # Convert config dates to timezone-aware if needed
-                    start_date = self.config.start_date
-                    end_date = self.config.end_date
-                    if start_date.tzinfo is None:
-                        start_date = pytz.UTC.localize(start_date)
-                    if end_date.tzinfo is None:
-                        end_date = pytz.UTC.localize(end_date)
+                    timestamp = self._normalize_timestamp(timestamp)
                     
                     # Filter by date range
                     if start_date <= timestamp <= end_date:
@@ -123,22 +150,13 @@ class HistoricalDataLoader:
             return bars
             
         try:
+            start_date, end_date = self._normalize_date_range()
+            
             with open(filepath, 'r') as f:
                 reader = csv.DictReader(f)
                 for row in reader:
                     timestamp = datetime.fromisoformat(row['timestamp'])
-                    
-                    # Make timestamps timezone-aware if they aren't
-                    if timestamp.tzinfo is None:
-                        timestamp = pytz.UTC.localize(timestamp)
-                    
-                    # Convert config dates to timezone-aware if needed
-                    start_date = self.config.start_date
-                    end_date = self.config.end_date
-                    if start_date.tzinfo is None:
-                        start_date = pytz.UTC.localize(start_date)
-                    if end_date.tzinfo is None:
-                        end_date = pytz.UTC.localize(end_date)
+                    timestamp = self._normalize_timestamp(timestamp)
                     
                     # Filter by date range
                     if start_date <= timestamp <= end_date:
