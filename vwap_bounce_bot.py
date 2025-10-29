@@ -993,12 +993,240 @@ def execute_entry(symbol: str, side: str, entry_price: float) -> None:
 # PHASE TEN: Exit Management
 # ============================================================================
 
+def check_stop_hit(symbol: str, current_bar: Dict[str, Any], position: Dict[str, Any]) -> Tuple[bool, Optional[float]]:
+    """
+    Check if stop loss has been hit.
+    
+    Args:
+        symbol: Instrument symbol
+        current_bar: Current 1-minute bar
+        position: Position dictionary
+    
+    Returns:
+        Tuple of (stop_hit, stop_price)
+    """
+    side = position["side"]
+    stop_price = position["stop_price"]
+    
+    if side == "long":
+        if current_bar["low"] <= stop_price:
+            return True, stop_price
+    else:  # short
+        if current_bar["high"] >= stop_price:
+            return True, stop_price
+    
+    return False, None
+
+
+def check_target_reached(symbol: str, current_bar: Dict[str, Any], position: Dict[str, Any], 
+                        bar_time: datetime) -> Tuple[bool, Optional[float]]:
+    """
+    Check if profit target has been reached, including time-based adjustments.
+    
+    Args:
+        symbol: Instrument symbol
+        current_bar: Current 1-minute bar
+        position: Position dictionary
+        bar_time: Current bar timestamp
+    
+    Returns:
+        Tuple of (target_reached, target_price)
+    """
+    side = position["side"]
+    target_price = position["target_price"]
+    entry_price = position["entry_price"]
+    stop_price = position["stop_price"]
+    
+    # Check regular target
+    if side == "long":
+        if current_bar["high"] >= target_price:
+            return True, target_price
+    else:  # short
+        if current_bar["low"] <= target_price:
+            return True, target_price
+    
+    # Phase Five: Time-based exit tightening after 3 PM
+    if bar_time.time() >= time(15, 0) and not bot_status["flatten_mode"]:
+        # After 3 PM - tighten profit taking to 1:1 R/R
+        stop_distance = abs(entry_price - stop_price)
+        tightened_target_distance = stop_distance  # 1:1 instead of 1.5:1
+        
+        if side == "long":
+            tightened_target = entry_price + tightened_target_distance
+            if current_bar["high"] >= tightened_target:
+                return True, tightened_target
+        else:  # short
+            tightened_target = entry_price - tightened_target_distance
+            if current_bar["low"] <= tightened_target:
+                return True, tightened_target
+    
+    return False, None
+
+
+def check_reversal_signal(symbol: str, current_bar: Dict[str, Any], position: Dict[str, Any]) -> Tuple[bool, Optional[float]]:
+    """
+    Check for signal reversal (price crossing back to opposite band).
+    
+    Args:
+        symbol: Instrument symbol
+        current_bar: Current 1-minute bar
+        position: Position dictionary
+    
+    Returns:
+        Tuple of (reversal_detected, exit_price)
+    """
+    if bot_status["flatten_mode"]:
+        return False, None
+    
+    vwap_bands = state[symbol]["vwap_bands"]
+    trend = state[symbol]["trend_direction"]
+    side = position["side"]
+    
+    if side == "long" and trend == "up":
+        # If price crosses back above upper band 2, bounce is complete
+        if current_bar["close"] > vwap_bands["upper_2"]:
+            return True, current_bar["close"]
+    
+    if side == "short" and trend == "down":
+        # If price crosses back below lower band 1, bounce is complete
+        if current_bar["close"] < vwap_bands["lower_1"]:
+            return True, current_bar["close"]
+    
+    return False, None
+
+
+def check_proactive_stop(symbol: str, current_bar: Dict[str, Any], position: Dict[str, Any]) -> Tuple[bool, Optional[float]]:
+    """
+    Check if position is within 2 ticks of stop during flatten mode.
+    Prevents last-moment stop hunting.
+    
+    Args:
+        symbol: Instrument symbol
+        current_bar: Current 1-minute bar
+        position: Position dictionary
+    
+    Returns:
+        Tuple of (should_close, flatten_price)
+    """
+    if not bot_status["flatten_mode"]:
+        return False, None
+    
+    side = position["side"]
+    stop_price = position["stop_price"]
+    tick_size = CONFIG["tick_size"]
+    proactive_buffer = CONFIG["proactive_stop_buffer_ticks"] * tick_size
+    
+    if side == "long":
+        # Check if within 2 ticks of stop price
+        if current_bar["close"] <= stop_price + proactive_buffer:
+            return True, get_flatten_price(symbol, side, current_bar["close"])
+    else:  # short
+        # Check if within 2 ticks of stop price
+        if current_bar["close"] >= stop_price - proactive_buffer:
+            return True, get_flatten_price(symbol, side, current_bar["close"])
+    
+    return False, None
+
+
+def check_time_based_exits(symbol: str, current_bar: Dict[str, Any], position: Dict[str, Any], 
+                           bar_time: datetime) -> Tuple[Optional[str], Optional[float]]:
+    """
+    Check all time-based exit conditions.
+    
+    Args:
+        symbol: Instrument symbol
+        current_bar: Current 1-minute bar
+        position: Position dictionary
+        bar_time: Current bar timestamp
+    
+    Returns:
+        Tuple of (exit_reason, exit_price) or (None, None)
+    """
+    side = position["side"]
+    entry_price = position["entry_price"]
+    stop_price = position["stop_price"]
+    tick_size = CONFIG["tick_size"]
+    tick_value = CONFIG["tick_value"]
+    
+    # Calculate unrealized P&L (used in multiple checks)
+    if side == "long":
+        price_change = current_bar["close"] - entry_price
+    else:
+        price_change = entry_price - current_bar["close"]
+    ticks = price_change / tick_size
+    unrealized_pnl = ticks * tick_value * position["quantity"]
+    
+    # Force close at forced_flatten_time (4:45 PM)
+    trading_state = get_trading_state(bar_time)
+    if trading_state == "closed":
+        return "emergency_forced_flatten", get_flatten_price(symbol, side, current_bar["close"])
+    
+    # Flatten mode: specific time-based exits
+    if bot_status["flatten_mode"]:
+        tz = pytz.timezone(CONFIG["timezone"])
+        current_time = datetime.now(tz)
+        
+        # 4:40 PM - close profitable positions immediately
+        if current_time.time() >= time(16, 40) and unrealized_pnl > 0:
+            return "time_based_profit_take", get_flatten_price(symbol, side, current_bar["close"])
+        
+        # 4:42 PM - close small losses
+        if current_time.time() >= time(16, 42):
+            stop_distance = abs(entry_price - stop_price)
+            if unrealized_pnl < 0 and abs(unrealized_pnl) < (stop_distance * tick_value * position["quantity"] / 2):
+                return "time_based_loss_cut", get_flatten_price(symbol, side, current_bar["close"])
+        
+        # Phase 10: Early profit lock after 4:40 PM
+        if current_time.time() >= time(16, 40) and unrealized_pnl > 0:
+            bot_status["early_close_saves"] += 1
+            return "early_profit_lock", get_flatten_price(symbol, side, current_bar["close"])
+        
+        # Flatten mode: aggressive profit/loss management
+        if side == "long":
+            profit_ticks = (current_bar["close"] - entry_price) / tick_size
+            midpoint = entry_price - (entry_price - stop_price) / 2
+            if profit_ticks > 1 or current_bar["close"] < midpoint:
+                return "flatten_mode_exit", get_flatten_price(symbol, side, current_bar["close"])
+        else:  # short
+            profit_ticks = (entry_price - current_bar["close"]) / tick_size
+            midpoint = entry_price + (stop_price - entry_price) / 2
+            if profit_ticks > 1 or current_bar["close"] > midpoint:
+                return "flatten_mode_exit", get_flatten_price(symbol, side, current_bar["close"])
+    
+    # Friday-specific exits
+    if bar_time.weekday() == 4:  # Friday
+        # Target close by 3 PM to avoid weekend gap risk
+        if bar_time.time() >= CONFIG["friday_close_target"]:
+            return "friday_weekend_protection", get_flatten_price(symbol, side, current_bar["close"])
+        
+        # After 2 PM on Friday, take any profit
+        if bar_time.time() >= time(14, 0) and unrealized_pnl > 0:
+            return "friday_profit_protection", get_flatten_price(symbol, side, current_bar["close"])
+    
+    # After 3:30 PM - cut losses early if less than 75% of stop distance
+    if bar_time.time() >= time(15, 30) and not bot_status["flatten_mode"]:
+        if side == "long":
+            current_loss_distance = entry_price - current_bar["close"]
+            stop_distance = entry_price - stop_price
+            if current_loss_distance > 0:  # In a loss
+                loss_percent = current_loss_distance / stop_distance
+                if loss_percent < 0.75:  # Less than 75% of stop distance
+                    return "early_loss_cut", current_bar["close"]
+        else:  # short
+            current_loss_distance = current_bar["close"] - entry_price
+            stop_distance = stop_price - entry_price
+            if current_loss_distance > 0:  # In a loss
+                loss_percent = current_loss_distance / stop_distance
+                if loss_percent < 0.75:  # Less than 75% of stop distance
+                    return "early_loss_cut", current_bar["close"]
+    
+    return None, None
+
+
 def check_exit_conditions(symbol: str) -> None:
     """
     Check exit conditions for open position on each bar.
-    Implements flatten mode for aggressive position closing.
-    Phase Five: Time-based exit tightening after 3 PM.
-    Phase Six: Enhanced flatten mode with minute-by-minute monitoring.
+    Coordinates various exit checks through helper functions.
     
     Args:
         symbol: Instrument symbol
@@ -1016,24 +1244,15 @@ def check_exit_conditions(symbol: str) -> None:
     side = position["side"]
     entry_price = position["entry_price"]
     stop_price = position["stop_price"]
-    target_price = position["target_price"]
     
     # Phase Two: Check trading state
     trading_state = get_trading_state(bar_time)
     
-    # Phase Six: Enhanced flatten mode with critical warnings
+    # Phase Six: Enhanced flatten mode activation
     if trading_state == "flatten_mode" and not bot_status["flatten_mode"]:
         bot_status["flatten_mode"] = True
         
-        # Phase Sixteen: Log flatten mode activation with position details
-        position_details = {
-            "side": position["side"],
-            "quantity": position["quantity"],
-            "entry_price": f"${position['entry_price']:.2f}",
-            "current_time": bar_time.strftime('%H:%M:%S %Z')
-        }
-        
-        # Calculate unrealized P&L for logging
+        # Log flatten mode activation with position details
         tick_size = CONFIG["tick_size"]
         tick_value = CONFIG["tick_value"]
         if side == "long":
@@ -1042,7 +1261,14 @@ def check_exit_conditions(symbol: str) -> None:
             price_change = entry_price - current_bar["close"]
         ticks = price_change / tick_size
         unrealized_pnl = ticks * tick_value * position["quantity"]
-        position_details["unrealized_pnl"] = f"${unrealized_pnl:+.2f}"
+        
+        position_details = {
+            "side": position["side"],
+            "quantity": position["quantity"],
+            "entry_price": f"${position['entry_price']:.2f}",
+            "current_time": bar_time.strftime('%H:%M:%S %Z'),
+            "unrealized_pnl": f"${unrealized_pnl:+.2f}"
+        }
         
         log_time_based_action(
             "flatten_mode_activated",
@@ -1054,7 +1280,7 @@ def check_exit_conditions(symbol: str) -> None:
         logger.critical("FLATTEN MODE ACTIVATED - POSITION MUST CLOSE IN 15 MINUTES")
         logger.critical(SEPARATOR_LINE)
     
-    # Phase Six: Minute-by-minute status logging during flatten mode
+    # Minute-by-minute status logging during flatten mode
     if bot_status["flatten_mode"]:
         tz = pytz.timezone(CONFIG["timezone"])
         current_time = datetime.now(tz)
@@ -1062,7 +1288,6 @@ def check_exit_conditions(symbol: str) -> None:
         forced_flatten_time = tz.localize(forced_flatten_time)
         minutes_remaining = (forced_flatten_time - current_time).total_seconds() / 60.0
         
-        # Calculate unrealized P&L
         tick_size = CONFIG["tick_size"]
         tick_value = CONFIG["tick_value"]
         if side == "long":
@@ -1074,136 +1299,53 @@ def check_exit_conditions(symbol: str) -> None:
         
         logger.warning(f"Flatten Mode Status: {minutes_remaining:.1f} min remaining, "
                       f"P&L: ${unrealized_pnl:+.2f}, Side: {side}, Qty: {position['quantity']}")
-        
-        # Phase Six: Time-based forced exits at specific times
-        if current_time.time() >= time(16, 40) and unrealized_pnl > 0:
-            # 4:40 PM - close profitable positions immediately
-            logger.critical("4:40 PM - Closing profitable position immediately")
-            flatten_price = get_flatten_price(symbol, side, current_bar["close"])
-            execute_exit(symbol, flatten_price, "time_based_profit_take")
-            return
-        
-        if current_time.time() >= time(16, 42):
-            # 4:42 PM - close small losses
-            stop_distance = abs(entry_price - stop_price)
-            if unrealized_pnl < 0 and abs(unrealized_pnl) < (stop_distance * tick_value * position["quantity"] / 2):
-                logger.critical("4:42 PM - Cutting small loss before settlement")
-                flatten_price = get_flatten_price(symbol, side, current_bar["close"])
-                execute_exit(symbol, flatten_price, "time_based_loss_cut")
-                return
     
-    # Force close at forced_flatten_time (4:45 PM)
-    if trading_state == "closed":
-        logger.critical(SEPARATOR_LINE)
-        logger.critical("EMERGENCY FORCED FLATTEN - 4:45 PM DEADLINE REACHED")
-        logger.critical(SEPARATOR_LINE)
-        # Phase Seven: Use aggressive limit order for forced flatten
-        flatten_price = get_flatten_price(symbol, side, current_bar["close"])
-        execute_exit(symbol, flatten_price, "emergency_forced_flatten")
+    # Check stop loss
+    stop_hit, price = check_stop_hit(symbol, current_bar, position)
+    if stop_hit:
+        execute_exit(symbol, price, "stop_loss")
         return
     
-    # Check for stop hit
-    if side == "long":
-        if current_bar["low"] <= stop_price:
-            execute_exit(symbol, stop_price, "stop_loss")
-            return
-    else:  # short
-        if current_bar["high"] >= stop_price:
-            execute_exit(symbol, stop_price, "stop_loss")
-            return
+    # Check proactive stop (during flatten mode)
+    should_close, price = check_proactive_stop(symbol, current_bar, position)
+    if should_close:
+        logger.warning(f"Proactive stop close: within {CONFIG['proactive_stop_buffer_ticks']} ticks of stop")
+        execute_exit(symbol, price, "proactive_stop")
+        return
     
-    # Phase Nine: Proactive stop handling during flatten mode
-    if bot_status["flatten_mode"]:
-        tick_size = CONFIG["tick_size"]
-        proactive_buffer = CONFIG["proactive_stop_buffer_ticks"] * tick_size
-        
-        if side == "long":
-            # Check if within 2 ticks of stop price
-            if current_bar["close"] <= stop_price + proactive_buffer:
-                logger.warning(f"Proactive stop close: within {CONFIG['proactive_stop_buffer_ticks']} ticks of stop")
-                flatten_price = get_flatten_price(symbol, side, current_bar["close"])
-                execute_exit(symbol, flatten_price, "proactive_stop")
-                return
-        else:  # short
-            # Check if within 2 ticks of stop price
-            if current_bar["close"] >= stop_price - proactive_buffer:
-                logger.warning(f"Proactive stop close: within {CONFIG['proactive_stop_buffer_ticks']} ticks of stop")
-                flatten_price = get_flatten_price(symbol, side, current_bar["close"])
-                execute_exit(symbol, flatten_price, "proactive_stop")
-                return
-    
-    # Check for target reached
-    if side == "long":
-        if current_bar["high"] >= target_price:
-            execute_exit(symbol, target_price, "target_reached")
-            # Phase 10: Track successful target wait
+    # Check target reached
+    target_hit, price = check_target_reached(symbol, current_bar, position, bar_time)
+    if target_hit:
+        if price == position["target_price"]:
+            execute_exit(symbol, price, "target_reached")
+            # Track successful target wait
             if bot_status["flatten_mode"]:
                 bot_status["target_wait_wins"] += 1
-            return
-    else:  # short
-        if current_bar["low"] <= target_price:
-            execute_exit(symbol, target_price, "target_reached")
-            # Phase 10: Track successful target wait
-            if bot_status["flatten_mode"]:
-                bot_status["target_wait_wins"] += 1
-            return
+        else:
+            # Tightened target
+            logger.info("Time-based tightened profit target reached (1:1 R/R after 3 PM)")
+            execute_exit(symbol, price, "tightened_target")
+        return
     
-    # Phase Ten: Profit target handling during flatten mode after 4:40 PM
-    if bot_status["flatten_mode"]:
-        tz = pytz.timezone(CONFIG["timezone"])
-        current_time = datetime.now(tz)
-        
-        if current_time.time() >= time(16, 40):
-            # Calculate current P&L
-            tick_size = CONFIG["tick_size"]
-            tick_value = CONFIG["tick_value"]
-            if side == "long":
-                price_change = current_bar["close"] - entry_price
-            else:
-                price_change = entry_price - current_bar["close"]
-            ticks = price_change / tick_size
-            unrealized_pnl = ticks * tick_value * position["quantity"]
-            
-            # If showing any profit past 4:40 PM, close immediately
-            if unrealized_pnl > 0:
-                logger.warning(f"Phase 10: Closing early at ${unrealized_pnl:+.2f} profit instead of waiting for target")
-                flatten_price = get_flatten_price(symbol, side, current_bar["close"])
-                bot_status["early_close_saves"] += 1
-                execute_exit(symbol, flatten_price, "early_profit_lock")
-                return
-    
-    # Phase Five: Time-based exit tightening after 3 PM
-    if bar_time.time() >= time(15, 0) and not bot_status["flatten_mode"]:
-        # After 3 PM - tighten profit taking to 1:1 R/R
-        stop_distance = abs(entry_price - stop_price)
-        tightened_target_distance = stop_distance  # 1:1 instead of 1.5:1
-        
-        if side == "long":
-            tightened_target = entry_price + tightened_target_distance
-            if current_bar["high"] >= tightened_target:
-                logger.info("Time-based tightened profit target reached (1:1 R/R after 3 PM)")
-                execute_exit(symbol, tightened_target, "tightened_target")
-                return
-        else:  # short
-            tightened_target = entry_price - tightened_target_distance
-            if current_bar["low"] <= tightened_target:
-                logger.info("Time-based tightened profit target reached (1:1 R/R after 3 PM)")
-                execute_exit(symbol, tightened_target, "tightened_target")
-                return
-    
-    # Phase Fourteen: Friday aggressive position management
-    if bar_time.weekday() == 4:  # Friday
-        # Target close by 3 PM to avoid weekend gap risk
-        if bar_time.time() >= CONFIG["friday_close_target"]:
+    # Check time-based exits
+    reason, price = check_time_based_exits(symbol, current_bar, position, bar_time)
+    if reason:
+        # Log specific messages for certain exit types
+        if reason == "emergency_forced_flatten":
+            logger.critical(SEPARATOR_LINE)
+            logger.critical("EMERGENCY FORCED FLATTEN - 4:45 PM DEADLINE REACHED")
+            logger.critical(SEPARATOR_LINE)
+        elif reason == "time_based_profit_take":
+            logger.critical("4:40 PM - Closing profitable position immediately")
+        elif reason == "time_based_loss_cut":
+            logger.critical("4:42 PM - Cutting small loss before settlement")
+        elif reason == "early_profit_lock":
+            logger.warning(f"Phase 10: Closing early profit instead of waiting for target")
+        elif reason == "friday_weekend_protection":
             logger.critical(SEPARATOR_LINE)
             logger.critical("FRIDAY 3 PM - CLOSING POSITION TO AVOID WEEKEND GAP RISK")
             logger.critical(SEPARATOR_LINE)
-            flatten_price = get_flatten_price(symbol, side, current_bar["close"])
-            execute_exit(symbol, flatten_price, "friday_weekend_protection")
-            return
-        
-        # After 2 PM on Friday, be more aggressive about taking profits
-        if bar_time.time() >= time(14, 0):
+        elif reason == "friday_profit_protection":
             tick_size = CONFIG["tick_size"]
             tick_value = CONFIG["tick_value"]
             if side == "long":
@@ -1212,78 +1354,30 @@ def check_exit_conditions(symbol: str) -> None:
                 price_change = entry_price - current_bar["close"]
             ticks = price_change / tick_size
             unrealized_pnl = ticks * tick_value * position["quantity"]
-            
-            # Take any profit after 2 PM Friday
-            if unrealized_pnl > 0:
-                logger.warning(f"Friday 2 PM+ - Taking ${unrealized_pnl:+.2f} profit to avoid weekend risk")
-                flatten_price = get_flatten_price(symbol, side, current_bar["close"])
-                execute_exit(symbol, flatten_price, "friday_profit_protection")
-                return
-    
-    # Phase Five: After 3:30 PM - cut losses early if less than 75% of stop distance
-    if bar_time.time() >= time(15, 30) and not bot_status["flatten_mode"]:
-        tick_size = CONFIG["tick_size"]
-        tick_value = CONFIG["tick_value"]
-        
-        if side == "long":
-            current_loss_distance = entry_price - current_bar["close"]
-            stop_distance = entry_price - stop_price
-            
-            if current_loss_distance > 0:  # In a loss
+            logger.warning(f"Friday 2 PM+ - Taking ${unrealized_pnl:+.2f} profit to avoid weekend risk")
+        elif reason == "early_loss_cut":
+            tick_size = CONFIG["tick_size"]
+            if side == "long":
+                current_loss_distance = entry_price - current_bar["close"]
+                stop_distance = entry_price - stop_price
                 loss_percent = current_loss_distance / stop_distance
-                if loss_percent < 0.75:  # Less than 75% of stop distance
-                    logger.warning(f"Time-based early loss cut (3:30 PM+): {loss_percent*100:.1f}% of stop distance")
-                    execute_exit(symbol, current_bar["close"], "early_loss_cut")
-                    return
-        else:  # short
-            current_loss_distance = current_bar["close"] - entry_price
-            stop_distance = stop_price - entry_price
-            
-            if current_loss_distance > 0:  # In a loss
+            else:
+                current_loss_distance = current_bar["close"] - entry_price
+                stop_distance = stop_price - entry_price
                 loss_percent = current_loss_distance / stop_distance
-                if loss_percent < 0.75:  # Less than 75% of stop distance
-                    logger.warning(f"Time-based early loss cut (3:30 PM+): {loss_percent*100:.1f}% of stop distance")
-                    execute_exit(symbol, current_bar["close"], "early_loss_cut")
-                    return
-    
-    # Flatten mode: More aggressive profit taking and loss cutting
-    if bot_status["flatten_mode"]:
-        # In flatten mode, take any profit or cut losses quickly
-        if side == "long":
-            profit_ticks = (current_bar["close"] - entry_price) / CONFIG["tick_size"]
-            # Take profit if we're up even 1 tick, or cut loss if down more than half the stop distance
-            midpoint = entry_price - (entry_price - stop_price) / 2
-            if profit_ticks > 1 or current_bar["close"] < midpoint:
-                logger.info(f"Flatten mode exit: profit_ticks={profit_ticks:.1f}")
-                flatten_price = get_flatten_price(symbol, side, current_bar["close"])
-                execute_exit(symbol, flatten_price, "flatten_mode_exit")
-                return
-        else:  # short
-            profit_ticks = (entry_price - current_bar["close"]) / CONFIG["tick_size"]
-            # Take profit if we're up even 1 tick, or cut loss if down more than half the stop distance
-            midpoint = entry_price + (stop_price - entry_price) / 2
-            if profit_ticks > 1 or current_bar["close"] > midpoint:
-                logger.info(f"Flatten mode exit: profit_ticks={profit_ticks:.1f}")
-                flatten_price = get_flatten_price(symbol, side, current_bar["close"])
-                execute_exit(symbol, flatten_price, "flatten_mode_exit")
-                return
-    
-    # Check for signal reversal (only when not in flatten mode)
-    if not bot_status["flatten_mode"]:
-        vwap_bands = state[symbol]["vwap_bands"]
-        trend = state[symbol]["trend_direction"]
+            logger.warning(f"Time-based early loss cut (3:30 PM+): {loss_percent*100:.1f}% of stop distance")
+        elif reason == "flatten_mode_exit":
+            profit_ticks = abs((current_bar["close"] - entry_price) / CONFIG["tick_size"]) if side == "long" else abs((entry_price - current_bar["close"]) / CONFIG["tick_size"])
+            logger.info(f"Flatten mode exit: profit_ticks={profit_ticks:.1f}")
         
-        if side == "long" and trend == "up":
-            # If price crosses back above upper band 2, bounce is complete
-            if current_bar["close"] > vwap_bands["upper_2"]:
-                execute_exit(symbol, current_bar["close"], "signal_reversal")
-                return
-        
-        if side == "short" and trend == "down":
-            # If price crosses back below lower band 1, bounce is complete
-            if current_bar["close"] < vwap_bands["lower_1"]:
-                execute_exit(symbol, current_bar["close"], "signal_reversal")
-                return
+        execute_exit(symbol, price, reason)
+        return
+    
+    # Check for signal reversal
+    reversal, price = check_reversal_signal(symbol, current_bar, position)
+    if reversal:
+        execute_exit(symbol, price, "signal_reversal")
+        return
 
 
 def get_flatten_price(symbol: str, side: str, current_price: float) -> float:
