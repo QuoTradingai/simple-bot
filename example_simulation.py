@@ -1,11 +1,14 @@
 """
-Example: Running VWAP Bounce Bot with Simulated Data
+Example: Running VWAP Bounce Bot with Real Market Data
 
 This example demonstrates how to:
 1. Initialize the bot
-2. Feed it with simulated tick data
+2. Connect to TopStep API for real-time data
 3. Monitor VWAP calculations
 4. View the bot's state
+
+NOTE: This uses REAL market data from TopStep, not simulated data.
+Ensure you have a valid TOPSTEP_API_TOKEN before running.
 """
 
 import os
@@ -15,7 +18,11 @@ import time
 import pytz
 
 # Set API token before importing bot
-os.environ['TOPSTEP_API_TOKEN'] = 'your_test_token_here'
+# IMPORTANT: Use your REAL TopStep API token
+if 'TOPSTEP_API_TOKEN' not in os.environ:
+    print("ERROR: TOPSTEP_API_TOKEN environment variable not set!")
+    print("Set it with: export TOPSTEP_API_TOKEN='your_real_token'")
+    sys.exit(1)
 
 from vwap_bounce_bot import (
     initialize_sdk, initialize_state, on_tick, 
@@ -23,10 +30,11 @@ from vwap_bounce_bot import (
 )
 
 
-def simulate_market_data():
-    """Simulate realistic market tick data for MES"""
+def run_bot_with_real_data():
+    """Run bot with REAL market data from TopStep"""
     print("\n" + "="*70)
-    print("VWAP Bounce Bot - Live Simulation Example")
+    print("VWAP Bounce Bot - Real Market Data Example")
+    print("Using REAL data from TopStep API (NO SIMULATION)")
     print("="*70)
     
     # Initialize the bot

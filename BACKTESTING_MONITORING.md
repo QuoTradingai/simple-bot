@@ -15,12 +15,19 @@ The VWAP Bounce Bot now includes a comprehensive backtesting framework and enhan
 
 ### Quick Start
 
-Generate sample data (for testing):
+**Fetch Real Historical Data:**
+
+**IMPORTANT: Use REAL market data, not mock/simulated data**
+
 ```bash
-python generate_sample_data.py
+# Set your TopStep API token
+export TOPSTEP_API_TOKEN='your_real_token_here'
+
+# Fetch real historical data from TopStep API
+python fetch_historical_data.py --symbol MES --days 30
 ```
 
-Run a basic backtest:
+Run a basic backtest (uses REAL data):
 ```bash
 python main.py --mode backtest --days 7
 ```

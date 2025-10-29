@@ -182,12 +182,27 @@ def run_backtest(args, bot_config):
     bot_config_dict = bot_config.to_dict()
     engine = BacktestEngine(backtest_config, bot_config_dict)
     
-    # Run backtest (placeholder strategy function)
-    # In full integration, this would use the actual bot strategy
-    def dummy_strategy():
+    # Import actual bot strategy for backtesting
+    # NOTE: The backtest engine will integrate with vwap_bounce_bot.py strategy
+    # For now, this is a placeholder that will be integrated with the actual
+    # trading logic from vwap_bounce_bot.py
+    from vwap_bounce_bot import on_tick, initialize_state, state
+    
+    def vwap_strategy():
+        """
+        Actual VWAP Bounce strategy from vwap_bounce_bot.py
+        This will be integrated with the backtest engine to execute
+        real trading logic on historical data.
+        """
+        # TODO: Integrate vwap_bounce_bot.py strategy with backtest engine
+        # The strategy will:
+        # 1. Process historical ticks/bars
+        # 2. Calculate VWAP and bands
+        # 3. Check entry/exit signals
+        # 4. Execute simulated trades via engine
         pass
         
-    results = engine.run(dummy_strategy)
+    results = engine.run(vwap_strategy)
     
     # Generate report
     report_gen = ReportGenerator(engine.metrics)

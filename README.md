@@ -141,17 +141,25 @@ python main.py --mode backtest --days 7 --use-tick-data
 5. Simulates realistic order fills with slippage
 6. 100% offline simulation - no API needed
 
-### Generate Sample Data
+### Fetch Real Historical Data
 
-For testing the backtesting framework:
+**IMPORTANT: Use REAL data from TopStep, not mock/simulated data**
+
+Fetch real market data from TopStep API:
 ```bash
-python generate_sample_data.py
+# Set your TopStep API token
+export TOPSTEP_API_TOKEN='your_real_token_here'
+
+# Fetch real historical data
+python fetch_historical_data.py --symbol MES --days 30
 ```
 
-This creates sample historical data in `./historical_data/`:
-- MES_ticks.csv - Tick-level data
-- MES_1min.csv - 1-minute bars
-- MES_15min.csv - 15-minute bars
+This fetches REAL market data from TopStep and saves to `./historical_data/`:
+- MES_ticks.csv - Real tick-level data (or finest granularity available)
+- MES_1min.csv - Real 1-minute bars
+- MES_15min.csv - Real 15-minute bars
+
+**NO MOCK OR SIMULATED DATA** - All data comes from actual TopStep market feeds.
 
 ### Command-Line Options
 
