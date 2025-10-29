@@ -31,6 +31,11 @@ CONFIG = {
     # This allows overnight VWAP to carry into early trading (9:00-9:30 AM), then resets
     # at market open for proper equity index alignment.
     
+    # Phase 9-14: Advanced Safety Parameters
+    "proactive_stop_buffer_ticks": 2,      # Close proactively when within N ticks of stop
+    "friday_entry_cutoff": time(13, 0),    # 1:00 PM ET - no new trades on Friday
+    "friday_close_target": time(15, 0),    # 3:00 PM ET - target close time on Friday
+    
     # Risk Management
     "risk_per_trade": 0.001,  # 0.1% of account equity
     "max_contracts": 1,
@@ -79,7 +84,11 @@ bot_status = {
     "last_tick_time": None,
     "emergency_stop": False,
     "stop_reason": None,
-    "flatten_mode": False  # Phase One: Aggressive exit mode flag
+    "flatten_mode": False,  # Phase One: Aggressive exit mode flag
+    # Phase 10: Track target vs early close decisions
+    "target_wait_wins": 0,  # Times waiting for target paid off
+    "target_wait_losses": 0,  # Times waiting for target caused reversal
+    "early_close_saves": 0,  # Times early close prevented loss
 }
 
 
@@ -722,6 +731,12 @@ def check_for_signals(symbol: str):
         logger.debug(f"Not in entry window (state: {trading_state}), skipping signal check")
         return
     
+    # Phase Fourteen: Friday position management - no new trades after 1 PM
+    if bar_time.weekday() == 4:  # Friday
+        if bar_time.time() >= CONFIG["friday_entry_cutoff"]:
+            logger.info(f"Friday after {CONFIG['friday_entry_cutoff']} - no new trades (weekend gap risk)")
+            return
+    
     # Check if already have a position
     if state[symbol]["position"]["active"]:
         logger.debug("Position already active, skipping signal generation")
@@ -1052,15 +1067,65 @@ def check_exit_conditions(symbol: str):
             execute_exit(symbol, stop_price, "stop_loss")
             return
     
+    # Phase Nine: Proactive stop handling during flatten mode
+    if bot_status["flatten_mode"]:
+        tick_size = CONFIG["tick_size"]
+        proactive_buffer = CONFIG["proactive_stop_buffer_ticks"] * tick_size
+        
+        if side == "long":
+            # Check if within 2 ticks of stop price
+            if current_bar["close"] <= stop_price + proactive_buffer:
+                logger.warning(f"Proactive stop close: within {CONFIG['proactive_stop_buffer_ticks']} ticks of stop")
+                flatten_price = get_flatten_price(symbol, side, current_bar["close"])
+                execute_exit(symbol, flatten_price, "proactive_stop")
+                return
+        else:  # short
+            # Check if within 2 ticks of stop price
+            if current_bar["close"] >= stop_price - proactive_buffer:
+                logger.warning(f"Proactive stop close: within {CONFIG['proactive_stop_buffer_ticks']} ticks of stop")
+                flatten_price = get_flatten_price(symbol, side, current_bar["close"])
+                execute_exit(symbol, flatten_price, "proactive_stop")
+                return
+    
     # Check for target reached
     if side == "long":
         if current_bar["high"] >= target_price:
             execute_exit(symbol, target_price, "target_reached")
+            # Phase 10: Track successful target wait
+            if bot_status["flatten_mode"]:
+                bot_status["target_wait_wins"] += 1
             return
     else:  # short
         if current_bar["low"] <= target_price:
             execute_exit(symbol, target_price, "target_reached")
+            # Phase 10: Track successful target wait
+            if bot_status["flatten_mode"]:
+                bot_status["target_wait_wins"] += 1
             return
+    
+    # Phase Ten: Profit target handling during flatten mode after 4:40 PM
+    if bot_status["flatten_mode"]:
+        tz = pytz.timezone(CONFIG["timezone"])
+        current_time = datetime.now(tz)
+        
+        if current_time.time() >= time(16, 40):
+            # Calculate current P&L
+            tick_size = CONFIG["tick_size"]
+            tick_value = CONFIG["tick_value"]
+            if side == "long":
+                price_change = current_bar["close"] - entry_price
+            else:
+                price_change = entry_price - current_bar["close"]
+            ticks = price_change / tick_size
+            unrealized_pnl = ticks * tick_value * position["quantity"]
+            
+            # If showing any profit past 4:40 PM, close immediately
+            if unrealized_pnl > 0:
+                logger.warning(f"Phase 10: Closing early at ${unrealized_pnl:+.2f} profit instead of waiting for target")
+                flatten_price = get_flatten_price(symbol, side, current_bar["close"])
+                bot_status["early_close_saves"] += 1
+                execute_exit(symbol, flatten_price, "early_profit_lock")
+                return
     
     # Phase Five: Time-based exit tightening after 3 PM
     if bar_time.time() >= time(15, 0) and not bot_status["flatten_mode"]:
@@ -1079,6 +1144,35 @@ def check_exit_conditions(symbol: str):
             if current_bar["low"] <= tightened_target:
                 logger.info("Time-based tightened profit target reached (1:1 R/R after 3 PM)")
                 execute_exit(symbol, tightened_target, "tightened_target")
+                return
+    
+    # Phase Fourteen: Friday aggressive position management
+    if bar_time.weekday() == 4:  # Friday
+        # Target close by 3 PM to avoid weekend gap risk
+        if bar_time.time() >= CONFIG["friday_close_target"]:
+            logger.critical("=" * 60)
+            logger.critical("FRIDAY 3 PM - CLOSING POSITION TO AVOID WEEKEND GAP RISK")
+            logger.critical("=" * 60)
+            flatten_price = get_flatten_price(symbol, side, current_bar["close"])
+            execute_exit(symbol, flatten_price, "friday_weekend_protection")
+            return
+        
+        # After 2 PM on Friday, be more aggressive about taking profits
+        if bar_time.time() >= time(14, 0):
+            tick_size = CONFIG["tick_size"]
+            tick_value = CONFIG["tick_value"]
+            if side == "long":
+                price_change = current_bar["close"] - entry_price
+            else:
+                price_change = entry_price - current_bar["close"]
+            ticks = price_change / tick_size
+            unrealized_pnl = ticks * tick_value * position["quantity"]
+            
+            # Take any profit after 2 PM Friday
+            if unrealized_pnl > 0:
+                logger.warning(f"Friday 2 PM+ - Taking ${unrealized_pnl:+.2f} profit to avoid weekend risk")
+                flatten_price = get_flatten_price(symbol, side, current_bar["close"])
+                execute_exit(symbol, flatten_price, "friday_profit_protection")
                 return
     
     # Phase Five: After 3:30 PM - cut losses early if less than 75% of stop distance
@@ -1535,6 +1629,44 @@ def check_safety_conditions(symbol: str) -> Tuple[bool, Optional[str]]:
     return True, None
 
 
+def check_no_overnight_positions(symbol: str):
+    """
+    Phase Eleven: Critical safety check - ensure NO positions past 5 PM.
+    This prevents gap risk and TopStep evaluation issues.
+    
+    Args:
+        symbol: Instrument symbol
+    """
+    if not state[symbol]["position"]["active"]:
+        return  # No position, all good
+    
+    tz = pytz.timezone(CONFIG["timezone"])
+    current_time = datetime.now(tz)
+    
+    # Critical: If it's past 5 PM and we still have a position, this is a SERIOUS ERROR
+    if current_time.time() >= CONFIG["shutdown_time"]:
+        logger.critical("=" * 70)
+        logger.critical("CRITICAL ERROR: POSITION DETECTED PAST 5 PM ET")
+        logger.critical("OVERNIGHT POSITION RISK - IMMEDIATE EMERGENCY CLOSE REQUIRED")
+        logger.critical("=" * 70)
+        logger.critical(f"Position: {state[symbol]['position']['side']} "
+                       f"{state[symbol]['position']['quantity']} contracts")
+        logger.critical(f"Entry: ${state[symbol]['position']['entry_price']:.2f}")
+        logger.critical("This should NEVER happen - flatten logic failed")
+        logger.critical("Manual intervention required")
+        logger.critical("=" * 70)
+        
+        # Emergency flatten at market
+        position = state[symbol]["position"]
+        order_side = "SELL" if position["side"] == "long" else "BUY"
+        place_market_order(symbol, order_side, position["quantity"])
+        
+        # Force close the position in tracking
+        state[symbol]["position"]["active"] = False
+        bot_status["emergency_stop"] = True
+        bot_status["stop_reason"] = "overnight_position_detected"
+
+
 def validate_order(symbol: str, side: str, quantity: int, entry_price: float, 
                    stop_price: float) -> Tuple[bool, Optional[str]]:
     """
@@ -1614,6 +1746,21 @@ def log_session_summary(symbol: str):
         if std_dev > 0:
             sharpe_ratio = avg_pnl / std_dev
             logger.info(f"Sharpe Ratio: {sharpe_ratio:.2f}")
+    
+    # Phase Ten: Log target vs early close statistics
+    total_decisions = (bot_status["target_wait_wins"] + bot_status["target_wait_losses"] + 
+                       bot_status["early_close_saves"])
+    if total_decisions > 0:
+        logger.info("="*60)
+        logger.info("FLATTEN MODE EXIT ANALYSIS (Phase 10)")
+        logger.info(f"Target Wait Wins: {bot_status['target_wait_wins']}")
+        logger.info(f"Target Wait Losses: {bot_status['target_wait_losses']}")
+        logger.info(f"Early Close Saves: {bot_status['early_close_saves']}")
+        if bot_status["target_wait_wins"] > 0:
+            target_success_rate = (bot_status["target_wait_wins"] / 
+                                   (bot_status["target_wait_wins"] + bot_status["target_wait_losses"]) * 100)
+            logger.info(f"Target Wait Success Rate: {target_success_rate:.1f}%")
+        logger.info("="*60)
     
     logger.info("="*60)
 
