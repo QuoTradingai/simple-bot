@@ -56,20 +56,15 @@ class BotConfiguration:
     tick_value: float = 1.25
     
     # Operational Parameters
-    dry_run: bool = True
+    dry_run: bool = False
     log_file: str = "vwap_bounce_bot.log"
     max_bars_storage: int = 200
     
     # Broker Configuration
-    broker_type: str = "mock"  # "mock" or "topstep"
     api_token: Optional[str] = None
     
-    # Mock Broker Settings
-    mock_starting_equity: float = 10000.0
-    mock_fill_delay_seconds: float = 0.1
-    
     # Environment
-    environment: str = "development"  # "development", "staging", "production"
+    environment: str = "production"  # "development", "staging", "production"
     
     def validate(self) -> None:
         """Validate configuration values."""
@@ -121,12 +116,9 @@ class BotConfiguration:
         if not 0 < self.max_drawdown_percent <= 100:
             errors.append(f"max_drawdown_percent must be between 0 and 100, got {self.max_drawdown_percent}")
         
-        # Validate broker configuration
-        if self.broker_type not in ["mock", "topstep"]:
-            errors.append(f"broker_type must be 'mock' or 'topstep', got {self.broker_type}")
-        
-        if self.broker_type == "topstep" and not self.api_token:
-            errors.append("api_token is required when broker_type is 'topstep'")
+        # Validate broker configuration - API token is required
+        if not self.api_token:
+            errors.append("api_token is required for TopStep broker")
         
         # Validate environment
         if self.environment not in ["development", "staging", "production"]:
@@ -210,14 +202,8 @@ def load_from_env() -> BotConfiguration:
     if os.getenv("BOT_DRY_RUN"):
         config.dry_run = os.getenv("BOT_DRY_RUN").lower() in ("true", "1", "yes")
     
-    if os.getenv("BOT_BROKER_TYPE"):
-        config.broker_type = os.getenv("BOT_BROKER_TYPE")
-    
     if os.getenv("BOT_ENVIRONMENT"):
         config.environment = os.getenv("BOT_ENVIRONMENT")
-    
-    if os.getenv("BOT_MOCK_STARTING_EQUITY"):
-        config.mock_starting_equity = float(os.getenv("BOT_MOCK_STARTING_EQUITY"))
     
     # API Token (without logging)
     if os.getenv("TOPSTEP_API_TOKEN"):
@@ -231,8 +217,7 @@ def get_development_config() -> BotConfiguration:
     config = BotConfiguration()
     config.environment = "development"
     config.dry_run = True
-    config.broker_type = "mock"
-    config.mock_starting_equity = 10000.0
+    # API token must be set via environment variable
     return config
 
 
@@ -241,9 +226,8 @@ def get_staging_config() -> BotConfiguration:
     config = BotConfiguration()
     config.environment = "staging"
     config.dry_run = True
-    config.broker_type = "mock"
-    config.mock_starting_equity = 50000.0
     config.max_trades_per_day = 5
+    # API token must be set via environment variable
     return config
 
 
@@ -252,7 +236,6 @@ def get_production_config() -> BotConfiguration:
     config = BotConfiguration()
     config.environment = "production"
     config.dry_run = False
-    config.broker_type = "topstep"
     # API token must be set via environment variable
     return config
 
@@ -318,7 +301,7 @@ def log_config(config: BotConfiguration, logger) -> None:
     logger.info("CONFIGURATION")
     logger.info("=" * 60)
     logger.info(f"Environment: {config.environment}")
-    logger.info(f"Broker Type: {config.broker_type}")
+    logger.info(f"Broker: TopStep")
     logger.info(f"Dry Run: {config.dry_run}")
     logger.info(f"Instrument: {config.instrument}")
     logger.info(f"Timezone: {config.timezone}")

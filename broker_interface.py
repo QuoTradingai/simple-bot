@@ -8,7 +8,6 @@ from typing import Dict, Any, Optional, Callable
 from datetime import datetime
 import logging
 import time
-import random
 
 
 logger = logging.getLogger(__name__)
@@ -142,194 +141,6 @@ class BrokerInterface(ABC):
             True if connected
         """
         pass
-
-
-class MockBroker(BrokerInterface):
-    """
-    Mock broker implementation for testing.
-    Simulates order fills with realistic delays.
-    """
-    
-    def __init__(self, starting_equity: float = 10000.0, fill_delay: float = 0.1):
-        """
-        Initialize mock broker.
-        
-        Args:
-            starting_equity: Starting account equity
-            fill_delay: Simulated order fill delay in seconds
-        """
-        self.starting_equity = starting_equity
-        self.current_equity = starting_equity
-        self.fill_delay = fill_delay
-        self.positions: Dict[str, int] = {}
-        self.connected = False
-        self.order_counter = 0
-        
-        # Configurable scenarios
-        self.simulate_failures = False
-        self.failure_rate = 0.1  # 10% failure rate when enabled
-    
-    def connect(self) -> bool:
-        """Connect to mock broker."""
-        logger.info("Connecting to mock broker...")
-        time.sleep(0.1)  # Simulate connection delay
-        self.connected = True
-        logger.info(f"Mock broker connected. Starting equity: ${self.starting_equity:.2f}")
-        return True
-    
-    def disconnect(self) -> None:
-        """Disconnect from mock broker."""
-        logger.info("Disconnecting from mock broker...")
-        self.connected = False
-        logger.info("Mock broker disconnected")
-    
-    def get_account_equity(self) -> float:
-        """Get current account equity."""
-        return self.current_equity
-    
-    def get_position_quantity(self, symbol: str) -> int:
-        """Get current position quantity."""
-        return self.positions.get(symbol, 0)
-    
-    def place_market_order(self, symbol: str, side: str, quantity: int) -> Optional[Dict[str, Any]]:
-        """Place a market order."""
-        if not self.connected:
-            logger.error("Cannot place order: not connected")
-            return None
-        
-        # Simulate failures if enabled
-        if self.simulate_failures and random.random() < self.failure_rate:
-            logger.error("Mock order failed (simulated failure)")
-            return None
-        
-        # Simulate fill delay
-        time.sleep(self.fill_delay)
-        
-        # Update position
-        current_pos = self.positions.get(symbol, 0)
-        if side == "BUY":
-            self.positions[symbol] = current_pos + quantity
-        else:  # SELL
-            self.positions[symbol] = current_pos - quantity
-        
-        self.order_counter += 1
-        order = {
-            "order_id": f"MOCK{self.order_counter:06d}",
-            "symbol": symbol,
-            "side": side,
-            "quantity": quantity,
-            "order_type": "MARKET",
-            "status": "FILLED",
-            "filled_quantity": quantity,
-            "timestamp": datetime.now().isoformat()
-        }
-        
-        logger.info(f"Mock market order filled: {side} {quantity} {symbol}")
-        return order
-    
-    def place_limit_order(self, symbol: str, side: str, quantity: int, 
-                         limit_price: float) -> Optional[Dict[str, Any]]:
-        """Place a limit order."""
-        if not self.connected:
-            logger.error("Cannot place order: not connected")
-            return None
-        
-        # Simulate failures if enabled
-        if self.simulate_failures and random.random() < self.failure_rate:
-            logger.error("Mock order failed (simulated failure)")
-            return None
-        
-        # Simulate fill delay (slightly longer for limit orders)
-        time.sleep(self.fill_delay * 1.5)
-        
-        # Update position
-        current_pos = self.positions.get(symbol, 0)
-        if side == "BUY":
-            self.positions[symbol] = current_pos + quantity
-        else:  # SELL
-            self.positions[symbol] = current_pos - quantity
-        
-        self.order_counter += 1
-        order = {
-            "order_id": f"MOCK{self.order_counter:06d}",
-            "symbol": symbol,
-            "side": side,
-            "quantity": quantity,
-            "order_type": "LIMIT",
-            "limit_price": limit_price,
-            "status": "FILLED",
-            "filled_quantity": quantity,
-            "timestamp": datetime.now().isoformat()
-        }
-        
-        logger.info(f"Mock limit order filled: {side} {quantity} {symbol} @ {limit_price:.2f}")
-        return order
-    
-    def place_stop_order(self, symbol: str, side: str, quantity: int, 
-                        stop_price: float) -> Optional[Dict[str, Any]]:
-        """Place a stop order."""
-        if not self.connected:
-            logger.error("Cannot place order: not connected")
-            return None
-        
-        # Simulate failures if enabled
-        if self.simulate_failures and random.random() < self.failure_rate:
-            logger.error("Mock order failed (simulated failure)")
-            return None
-        
-        # Simulate fill delay
-        time.sleep(self.fill_delay)
-        
-        # Update position
-        current_pos = self.positions.get(symbol, 0)
-        if side == "BUY":
-            self.positions[symbol] = current_pos + quantity
-        else:  # SELL
-            self.positions[symbol] = current_pos - quantity
-        
-        self.order_counter += 1
-        order = {
-            "order_id": f"MOCK{self.order_counter:06d}",
-            "symbol": symbol,
-            "side": side,
-            "quantity": quantity,
-            "order_type": "STOP",
-            "stop_price": stop_price,
-            "status": "FILLED",
-            "filled_quantity": quantity,
-            "timestamp": datetime.now().isoformat()
-        }
-        
-        logger.info(f"Mock stop order filled: {side} {quantity} {symbol} @ {stop_price:.2f}")
-        return order
-    
-    def subscribe_market_data(self, symbol: str, callback: Callable[[str, float, int, int], None]) -> None:
-        """Subscribe to market data (mock implementation)."""
-        logger.info(f"Mock market data subscription for {symbol} - callback registered")
-        # In a real implementation, this would start a data feed
-        # For mock, we just log the subscription
-    
-    def fetch_historical_bars(self, symbol: str, timeframe: int, count: int) -> list:
-        """Fetch historical bars (mock implementation)."""
-        logger.info(f"Fetching {count} mock historical bars for {symbol} ({timeframe}min)")
-        # Return empty list - mock broker doesn't provide historical data
-        return []
-    
-    def is_connected(self) -> bool:
-        """Check if connected."""
-        return self.connected
-    
-    def set_failure_simulation(self, enabled: bool, rate: float = 0.1) -> None:
-        """
-        Enable/disable failure simulation for testing.
-        
-        Args:
-            enabled: Whether to simulate failures
-            rate: Failure rate (0.0 to 1.0)
-        """
-        self.simulate_failures = enabled
-        self.failure_rate = rate
-        logger.info(f"Mock broker failure simulation: {'enabled' if enabled else 'disabled'} (rate={rate})")
 
 
 class TopStepBroker(BrokerInterface):
@@ -545,27 +356,19 @@ class TopStepBroker(BrokerInterface):
         logger.info("Circuit breaker reset")
 
 
-def create_broker(broker_type: str, api_token: Optional[str] = None, 
-                 starting_equity: float = 10000.0) -> BrokerInterface:
+def create_broker(api_token: str) -> BrokerInterface:
     """
-    Factory function to create broker instance.
+    Factory function to create TopStep broker instance.
     
     Args:
-        broker_type: Type of broker ("mock" or "topstep")
-        api_token: API token for TopStep (required if broker_type is "topstep")
-        starting_equity: Starting equity for mock broker
+        api_token: API token for TopStep (required)
     
     Returns:
-        Broker instance
+        TopStepBroker instance
     
     Raises:
-        ValueError: If invalid broker type or missing API token
+        ValueError: If API token is missing
     """
-    if broker_type == "mock":
-        return MockBroker(starting_equity=starting_equity)
-    elif broker_type == "topstep":
-        if not api_token:
-            raise ValueError("API token is required for TopStep broker")
-        return TopStepBroker(api_token=api_token)
-    else:
-        raise ValueError(f"Unknown broker type: {broker_type}")
+    if not api_token:
+        raise ValueError("API token is required for TopStep broker")
+    return TopStepBroker(api_token=api_token)
