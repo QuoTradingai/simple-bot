@@ -1612,6 +1612,9 @@ def execute_entry(symbol: str, side: str, entry_price: float) -> None:
         except Exception as e:
             logger.warning(f"  Could not record trade execution: {e}")
     
+    # Calculate initial risk in ticks
+    stop_distance_ticks = abs(actual_fill_price - stop_price) / CONFIG["tick_size"]
+    
     # Update position tracking
     state[symbol]["position"] = {
         "active": True,
@@ -1622,7 +1625,32 @@ def execute_entry(symbol: str, side: str, entry_price: float) -> None:
         "target_price": target_price,
         "entry_time": entry_time,
         "order_id": order.get("order_id"),
-        "order_type_used": order_type_used  # Track for exit optimization
+        "order_type_used": order_type_used,  # Track for exit optimization
+        # Advanced Exit Management - Breakeven State
+        "breakeven_active": False,
+        "original_stop_price": stop_price,
+        "breakeven_activated_time": None,
+        # Advanced Exit Management - Trailing Stop State
+        "trailing_stop_active": False,
+        "trailing_stop_price": None,
+        "highest_price_reached": actual_fill_price if side == "long" else None,
+        "lowest_price_reached": actual_fill_price if side == "short" else None,
+        "trailing_activated_time": None,
+        # Advanced Exit Management - Time-Decay State
+        "time_decay_50_triggered": False,
+        "time_decay_75_triggered": False,
+        "time_decay_90_triggered": False,
+        "original_stop_distance_ticks": stop_distance_ticks,
+        "current_stop_distance_ticks": stop_distance_ticks,
+        # Advanced Exit Management - Partial Exit State
+        "partial_exit_1_completed": False,
+        "partial_exit_2_completed": False,
+        "partial_exit_3_completed": False,
+        "original_quantity": contracts,
+        "remaining_quantity": contracts,
+        "partial_exit_history": [],
+        # Advanced Exit Management - General
+        "initial_risk_ticks": stop_distance_ticks,
     }
     
     # Place stop loss order
@@ -1874,6 +1902,94 @@ def check_time_based_exits(symbol: str, current_bar: Dict[str, Any], position: D
     return None, None
 
 
+# ============================================================================
+# PHASE THREE: Breakeven Protection Logic
+# ============================================================================
+
+def check_breakeven_protection(symbol: str, current_price: float) -> None:
+    """
+    Check if breakeven protection should be activated and move stop to breakeven.
+    
+    This function runs every bar (or every 5 seconds in live mode) to monitor
+    position profit and activate breakeven protection when threshold is met.
+    
+    Args:
+        symbol: Instrument symbol
+        current_price: Current market price
+    """
+    # Only process if breakeven is enabled in config
+    if not CONFIG.get("breakeven_enabled", True):
+        return
+    
+    position = state[symbol]["position"]
+    
+    # Step 1 - Check eligibility: Only process positions that haven't activated breakeven yet
+    if not position["active"] or position["breakeven_active"]:
+        return
+    
+    side = position["side"]
+    entry_price = position["entry_price"]
+    tick_size = CONFIG["tick_size"]
+    breakeven_threshold_ticks = CONFIG.get("breakeven_profit_threshold_ticks", 8)
+    breakeven_offset_ticks = CONFIG.get("breakeven_stop_offset_ticks", 1)
+    
+    # Step 2 - Calculate current profit in ticks
+    if side == "long":
+        profit_ticks = (current_price - entry_price) / tick_size
+    else:  # short
+        profit_ticks = (entry_price - current_price) / tick_size
+    
+    # Step 3 - Compare to threshold
+    if profit_ticks < breakeven_threshold_ticks:
+        return  # Not enough profit yet
+    
+    # Step 4 - Calculate new breakeven stop price
+    if side == "long":
+        new_stop_price = entry_price + (breakeven_offset_ticks * tick_size)
+    else:  # short
+        new_stop_price = entry_price - (breakeven_offset_ticks * tick_size)
+    
+    new_stop_price = round_to_tick(new_stop_price)
+    
+    # Step 5 - Update stop loss
+    # Cancel existing stop order if it exists
+    if position.get("stop_order_id"):
+        # In production, would cancel the old stop order here
+        logger.info(f"Breakeven: Would cancel old stop order {position['stop_order_id']}")
+    
+    # Place new stop at breakeven level
+    stop_side = "SELL" if side == "long" else "BUY"
+    contracts = position["quantity"]
+    new_stop_order = place_stop_order(symbol, stop_side, contracts, new_stop_price)
+    
+    if new_stop_order:
+        # Update position tracking
+        position["breakeven_active"] = True
+        position["breakeven_activated_time"] = get_current_time()
+        original_stop = position["original_stop_price"]
+        position["stop_price"] = new_stop_price
+        if new_stop_order.get("order_id"):
+            position["stop_order_id"] = new_stop_order.get("order_id")
+        
+        # Calculate profit locked in
+        profit_locked_ticks = (new_stop_price - entry_price) / tick_size if side == "long" else (entry_price - new_stop_price) / tick_size
+        profit_locked_dollars = profit_locked_ticks * CONFIG["tick_value"] * contracts
+        
+        # Step 6 - Log activation
+        logger.info("=" * 60)
+        logger.info("BREAKEVEN PROTECTION ACTIVATED")
+        logger.info("=" * 60)
+        logger.info(f"  Current Profit: {profit_ticks:.1f} ticks (threshold: {breakeven_threshold_ticks} ticks)")
+        logger.info(f"  Original Stop: ${original_stop:.2f}")
+        logger.info(f"  New Breakeven Stop: ${new_stop_price:.2f}")
+        logger.info(f"  Profit Locked In: {profit_locked_ticks:.1f} ticks (${profit_locked_dollars:+.2f})")
+        logger.info(f"  Entry Price: ${entry_price:.2f}")
+        logger.info(f"  Current Price: ${current_price:.2f}")
+        logger.info("=" * 60)
+    else:
+        logger.error("Failed to place breakeven stop order")
+
+
 def check_exit_conditions(symbol: str) -> None:
     """
     Check exit conditions for open position on each bar.
@@ -1950,6 +2066,9 @@ def check_exit_conditions(symbol: str) -> None:
         
         logger.warning(f"Flatten Mode Status: {minutes_remaining:.1f} min remaining, "
                       f"P&L: ${unrealized_pnl:+.2f}, Side: {side}, Qty: {position['quantity']}")
+    
+    # Advanced Exit Management: Check breakeven protection
+    check_breakeven_protection(symbol, current_bar["close"])
     
     # Check stop loss
     stop_hit, price = check_stop_hit(symbol, current_bar, position)
