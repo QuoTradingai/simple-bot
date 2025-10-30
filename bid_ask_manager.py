@@ -277,7 +277,7 @@ class QueuePositionMonitor:
             config: Bot configuration dictionary
         """
         self.config = config
-        self.tick_size = config["tick_size"]
+        self.tick_size = config.get("tick_size", 0.25)
         self.max_queue_size = config.get("max_queue_size", 100)  # Cancel if queue too large
         self.queue_jump_threshold = config.get("queue_jump_threshold", 50)  # Jump ahead threshold
     
@@ -403,7 +403,7 @@ class OrderPlacementStrategy:
             config: Bot configuration dictionary
         """
         self.config = config
-        self.tick_size = config["tick_size"]
+        self.tick_size = config.get("tick_size", 0.25)
         
         # Passive order timeout settings
         self.passive_timeout_seconds = config.get("passive_order_timeout", 10)
@@ -500,7 +500,7 @@ class AdaptiveSlippageModel:
             config: Bot configuration dictionary
         """
         self.config = config
-        self.tick_size = config["tick_size"]
+        self.tick_size = config.get("tick_size", 0.25)
         
         # Base slippage ticks for different conditions
         self.normal_hours_slippage = config.get("normal_hours_slippage_ticks", 1.0)
@@ -646,6 +646,433 @@ class DynamicFillStrategy:
         }
 
 
+class MarketConditionClassifier:
+    """
+    Classifies current market conditions for optimal order routing.
+    Requirement 11: Market Condition Classification
+    """
+    
+    def __init__(self, config: Dict[str, Any]):
+        """
+        Initialize market condition classifier.
+        
+        Args:
+            config: Bot configuration dictionary
+        """
+        self.config = config
+        
+        # Thresholds for classification
+        self.tight_spread_multiplier = config.get("tight_spread_multiplier", 1.2)
+        self.wide_spread_multiplier = config.get("wide_spread_multiplier", 2.0)
+        self.extreme_spread_multiplier = config.get("extreme_spread_multiplier", 3.0)
+        self.low_volume_threshold = config.get("low_volume_threshold", 0.5)
+    
+    def classify_market(self, quote: BidAskQuote, spread_analyzer: SpreadAnalyzer) -> Tuple[str, str]:
+        """
+        Classify current market condition.
+        
+        Args:
+            quote: Current bid/ask quote
+            spread_analyzer: Spread analyzer instance
+        
+        Returns:
+            Tuple of (condition, reason)
+            Conditions: "normal", "volatile", "illiquid", "stressed"
+        """
+        spread_stats = spread_analyzer.get_spread_stats()
+        avg_spread = spread_stats.get("average_spread")
+        
+        if avg_spread is None or avg_spread == 0:
+            return "normal", "Building baseline"
+        
+        current_spread = quote.spread
+        spread_ratio = current_spread / avg_spread
+        
+        # Stressed: Extremely wide spreads
+        if spread_ratio >= self.extreme_spread_multiplier:
+            return "stressed", f"Extreme spread: {spread_ratio:.1f}x average - skip trading"
+        
+        # Illiquid: Wide spreads + low size
+        if spread_ratio >= self.wide_spread_multiplier:
+            if quote.bid_size < 10 or quote.ask_size < 10:
+                return "illiquid", f"Wide spread ({spread_ratio:.1f}x) + low volume - reduce size or avoid"
+            else:
+                return "volatile", f"Wide spread ({spread_ratio:.1f}x) + fast movement - use aggressive"
+        
+        # Volatile: Spread widening
+        is_widening, _ = spread_analyzer.is_spread_widening()
+        if is_widening:
+            return "volatile", "Spread widening - use aggressive orders"
+        
+        # Normal: Tight spreads, good liquidity
+        if spread_ratio <= self.tight_spread_multiplier:
+            return "normal", f"Tight spread ({spread_ratio:.1f}x) + good liquidity - use passive"
+        
+        return "normal", "Normal market conditions"
+
+
+class FillProbabilityEstimator:
+    """
+    Estimates probability of passive order fill.
+    Requirement 12: Fill Probability Estimation
+    """
+    
+    def __init__(self, config: Dict[str, Any]):
+        """
+        Initialize fill probability estimator.
+        
+        Args:
+            config: Bot configuration dictionary
+        """
+        self.config = config
+        self.tick_size = config.get("tick_size", 0.25)
+    
+    def estimate_fill_probability(self, quote: BidAskQuote, side: str, 
+                                   price_momentum: Optional[float] = None) -> Tuple[float, float, str]:
+        """
+        Estimate likelihood of passive fill.
+        
+        Args:
+            quote: Current bid/ask quote
+            side: Trade side ('long' or 'short')
+            price_momentum: Recent price change (optional)
+        
+        Returns:
+            Tuple of (fill_probability, expected_wait_seconds, reason)
+        """
+        # Base probability from spread and sizes
+        if side == "long":
+            # Joining bid - need sellers to come
+            depth_ratio = quote.ask_size / max(quote.bid_size, 1)
+            base_prob = 0.7  # 70% base probability
+        else:
+            # Joining ask - need buyers to come
+            depth_ratio = quote.bid_size / max(quote.ask_size, 1)
+            base_prob = 0.7
+        
+        # Adjust for depth imbalance
+        if depth_ratio > 2.0:
+            # Lots of pressure on opposite side - higher fill probability
+            fill_prob = min(base_prob * 1.3, 0.95)
+            expected_wait = 3.0
+            reason = "High fill probability - strong opposite-side pressure"
+        elif depth_ratio < 0.5:
+            # Pressure on our side - lower fill probability
+            fill_prob = base_prob * 0.6
+            expected_wait = 15.0
+            reason = "Lower fill probability - pressure on our side"
+        else:
+            fill_prob = base_prob
+            expected_wait = 7.0
+            reason = "Normal fill probability"
+        
+        # Adjust for momentum if available
+        if price_momentum is not None:
+            if side == "long" and price_momentum > 0:
+                # Price moving up, less likely to fill at bid
+                fill_prob *= 0.7
+                expected_wait *= 1.5
+                reason += " - price moving away"
+            elif side == "short" and price_momentum < 0:
+                # Price moving down, less likely to fill at ask
+                fill_prob *= 0.7
+                expected_wait *= 1.5
+                reason += " - price moving away"
+            elif side == "long" and price_momentum < 0:
+                # Price moving down toward our bid
+                fill_prob *= 1.2
+                expected_wait *= 0.7
+                reason += " - price moving toward us"
+            elif side == "short" and price_momentum > 0:
+                # Price moving up toward our ask
+                fill_prob *= 1.2
+                expected_wait *= 0.7
+                reason += " - price moving toward us"
+        
+        return min(fill_prob, 1.0), expected_wait, reason
+    
+    def should_wait_for_passive(self, fill_probability: float, expected_wait: float) -> Tuple[bool, str]:
+        """
+        Decide if worth waiting for passive fill.
+        
+        Args:
+            fill_probability: Estimated fill probability (0-1)
+            expected_wait: Expected wait time in seconds
+        
+        Returns:
+            Tuple of (should_wait, reason)
+        """
+        max_wait = self.config.get("passive_order_timeout", 10)
+        min_probability = self.config.get("min_fill_probability", 0.5)
+        
+        if fill_probability < min_probability:
+            return False, f"Fill probability too low ({fill_probability:.1%} < {min_probability:.1%})"
+        
+        if expected_wait > max_wait:
+            return False, f"Expected wait too long ({expected_wait:.1f}s > {max_wait}s)"
+        
+        return True, f"Good odds: {fill_probability:.1%} probability in {expected_wait:.1f}s"
+
+
+class PostTradeAnalyzer:
+    """
+    Analyzes trade execution quality for continuous improvement.
+    Requirement 13: Post-Trade Analysis
+    """
+    
+    def __init__(self):
+        """Initialize post-trade analyzer."""
+        self.trade_records: List[Dict[str, Any]] = []
+    
+    def record_trade(self, signal_price: float, fill_price: float, side: str,
+                     order_type: str, spread_at_order: float, fill_time_seconds: float,
+                     estimated_costs: Dict[str, float], actual_costs: Dict[str, float]) -> None:
+        """
+        Record trade execution details.
+        
+        Args:
+            signal_price: Original signal price
+            fill_price: Actual fill price
+            side: Trade side ('long' or 'short')
+            order_type: 'passive' or 'aggressive'
+            spread_at_order: Spread at time of order
+            fill_time_seconds: Time from signal to fill
+            estimated_costs: Estimated transaction costs
+            actual_costs: Actual transaction costs
+        """
+        variance = fill_price - signal_price
+        
+        record = {
+            "timestamp": datetime.now(),
+            "signal_price": signal_price,
+            "fill_price": fill_price,
+            "side": side,
+            "variance": variance,
+            "order_type": order_type,
+            "spread_at_order": spread_at_order,
+            "spread_saved": spread_at_order if order_type == "passive" else -spread_at_order,
+            "fill_time_seconds": fill_time_seconds,
+            "estimated_costs": estimated_costs,
+            "actual_costs": actual_costs,
+            "cost_variance": actual_costs.get("total", 0) - estimated_costs.get("total", 0)
+        }
+        
+        self.trade_records.append(record)
+    
+    def get_learning_insights(self, market_condition: str) -> Dict[str, Any]:
+        """
+        Analyze which conditions favor passive vs aggressive.
+        
+        Args:
+            market_condition: Current market condition
+        
+        Returns:
+            Learning insights dictionary
+        """
+        if not self.trade_records:
+            return {}
+        
+        # Recent trades (last 20)
+        recent_trades = self.trade_records[-20:]
+        
+        passive_trades = [t for t in recent_trades if t["order_type"] == "passive"]
+        aggressive_trades = [t for t in recent_trades if t["order_type"] == "aggressive"]
+        
+        insights = {
+            "total_trades": len(recent_trades),
+            "passive_count": len(passive_trades),
+            "aggressive_count": len(aggressive_trades),
+            "passive_avg_fill_time": statistics.mean([t["fill_time_seconds"] for t in passive_trades]) if passive_trades else 0,
+            "aggressive_avg_fill_time": statistics.mean([t["fill_time_seconds"] for t in aggressive_trades]) if aggressive_trades else 0,
+            "passive_avg_savings": statistics.mean([t["spread_saved"] for t in passive_trades]) if passive_trades else 0,
+            "aggressive_avg_cost": statistics.mean([abs(t["spread_saved"]) for t in aggressive_trades]) if aggressive_trades else 0,
+        }
+        
+        return insights
+
+
+class SpreadAwarePositionSizer:
+    """
+    Adjusts position size based on spread costs.
+    Requirement 10: Spread-Aware Position Sizing
+    """
+    
+    def __init__(self, config: Dict[str, Any]):
+        """
+        Initialize spread-aware position sizer.
+        
+        Args:
+            config: Bot configuration dictionary
+        """
+        self.config = config
+        self.tick_size = config.get("tick_size", 0.25)
+        self.tick_value = config.get("tick_value", 12.50)
+        self.max_transaction_cost_pct = config.get("max_transaction_cost_pct", 0.15)  # 15% of expected profit
+    
+    def calculate_position_size(self, quote: BidAskQuote, base_contracts: int,
+                                 expected_profit_ticks: float, slippage_ticks: float,
+                                 commission_per_contract: float) -> Tuple[int, Dict[str, float]]:
+        """
+        Calculate position size accounting for spread costs.
+        
+        Args:
+            quote: Current bid/ask quote
+            base_contracts: Initial position size calculation
+            expected_profit_ticks: Expected profit in ticks
+            slippage_ticks: Expected slippage
+            commission_per_contract: Commission cost
+        
+        Returns:
+            Tuple of (adjusted_contracts, cost_breakdown)
+        """
+        # Calculate total transaction costs
+        spread_ticks = quote.spread / self.tick_size
+        total_cost_ticks = spread_ticks + slippage_ticks
+        total_cost_dollars = (total_cost_ticks * self.tick_value) + commission_per_contract
+        
+        expected_profit_dollars = expected_profit_ticks * self.tick_value
+        
+        # Check if cost is acceptable percentage of profit
+        cost_pct = (total_cost_dollars / expected_profit_dollars) if expected_profit_dollars > 0 else 1.0
+        
+        cost_breakdown = {
+            "spread_ticks": spread_ticks,
+            "slippage_ticks": slippage_ticks,
+            "total_cost_ticks": total_cost_ticks,
+            "total_cost_dollars": total_cost_dollars,
+            "commission": commission_per_contract,
+            "expected_profit_dollars": expected_profit_dollars,
+            "cost_percentage": cost_pct * 100
+        }
+        
+        # Reduce size if spread is wide
+        if cost_pct > self.max_transaction_cost_pct:
+            # Calculate how many contracts we can afford
+            max_affordable = int(base_contracts * (self.max_transaction_cost_pct / cost_pct))
+            adjusted_contracts = max(1, max_affordable)  # At least 1 contract
+            
+            logger.warning(f"Reducing position size due to high transaction costs: "
+                          f"{base_contracts} -> {adjusted_contracts} contracts "
+                          f"(cost {cost_pct*100:.1f}% > max {self.max_transaction_cost_pct*100:.1f}%)")
+            
+            return adjusted_contracts, cost_breakdown
+        
+        return base_contracts, cost_breakdown
+
+
+class ExitOrderOptimizer:
+    """
+    Optimizes exit orders using bid/ask logic.
+    Requirement 9: Exit Order Optimization
+    """
+    
+    def __init__(self, config: Dict[str, Any]):
+        """
+        Initialize exit order optimizer.
+        
+        Args:
+            config: Bot configuration dictionary
+        """
+        self.config = config
+        self.tick_size = config.get("tick_size", 0.25)
+    
+    def get_exit_strategy(self, exit_type: str, quote: BidAskQuote, side: str,
+                          urgency: str = "normal") -> Dict[str, Any]:
+        """
+        Determine optimal exit order strategy.
+        
+        Args:
+            exit_type: Type of exit ("target", "stop", "time_flatten", "partial")
+            quote: Current bid/ask quote
+            side: Current position side ('long' or 'short')
+            urgency: Urgency level ("low", "normal", "high")
+        
+        Returns:
+            Exit strategy parameters
+        """
+        if exit_type == "target":
+            # Taking profit at target - use passive to collect spread
+            if side == "long":
+                # Selling at target - place at ask to collect spread
+                return {
+                    "order_type": "passive",
+                    "limit_price": quote.ask_price,
+                    "timeout": self.config.get("passive_order_timeout", 10),
+                    "reason": "Profit target - passive limit at ask to collect spread"
+                }
+            else:  # short
+                # Buying to close short - place at bid to collect spread
+                return {
+                    "order_type": "passive",
+                    "limit_price": quote.bid_price,
+                    "timeout": self.config.get("passive_order_timeout", 10),
+                    "reason": "Profit target - passive limit at bid to collect spread"
+                }
+        
+        elif exit_type == "stop":
+            # Stop loss hit - use aggressive for fast exit
+            if side == "long":
+                # Selling to stop - hit the bid
+                return {
+                    "order_type": "aggressive",
+                    "limit_price": quote.bid_price,
+                    "timeout": 0,
+                    "reason": "Stop loss - aggressive market order for fast exit"
+                }
+            else:  # short
+                # Buying to close short - pay the ask
+                return {
+                    "order_type": "aggressive",
+                    "limit_price": quote.ask_price,
+                    "timeout": 0,
+                    "reason": "Stop loss - aggressive market order for fast exit"
+                }
+        
+        elif exit_type == "time_flatten":
+            # Time-based flatten - priority is closing before cutoff
+            if side == "long":
+                return {
+                    "order_type": "aggressive",
+                    "limit_price": quote.bid_price,
+                    "timeout": 0,
+                    "reason": "Time flatten - aggressive to ensure close before cutoff"
+                }
+            else:
+                return {
+                    "order_type": "aggressive",
+                    "limit_price": quote.ask_price,
+                    "timeout": 0,
+                    "reason": "Time flatten - aggressive to ensure close before cutoff"
+                }
+        
+        elif exit_type == "partial":
+            # Partial exit - try passive first, aggressive if not filled
+            if side == "long":
+                return {
+                    "order_type": "passive",
+                    "limit_price": quote.ask_price,
+                    "timeout": 5,  # Shorter timeout for partials
+                    "fallback_price": quote.bid_price,
+                    "reason": "Partial exit - passive first, aggressive if not filled in 5s"
+                }
+            else:
+                return {
+                    "order_type": "passive",
+                    "limit_price": quote.bid_price,
+                    "timeout": 5,
+                    "fallback_price": quote.ask_price,
+                    "reason": "Partial exit - passive first, aggressive if not filled in 5s"
+                }
+        
+        # Default to aggressive
+        return {
+            "order_type": "aggressive",
+            "limit_price": quote.bid_price if side == "long" else quote.ask_price,
+            "timeout": 0,
+            "reason": "Default aggressive exit"
+        }
+
+
 class BidAskManager:
     """
     Complete bid/ask trading manager that coordinates quote tracking, spread analysis,
@@ -665,11 +1092,18 @@ class BidAskManager:
         self.order_strategy = OrderPlacementStrategy(config)
         self.fill_strategy = DynamicFillStrategy(config)
         
-        # New components
+        # New components (Requirements 5-8)
         self.spread_cost_tracker = SpreadCostTracker()
         self.queue_monitor = QueuePositionMonitor(config)
         self.rejection_validator = OrderRejectionValidator(config)
         self.slippage_model = AdaptiveSlippageModel(config)
+        
+        # Advanced components (Requirements 9-13)
+        self.market_classifier = MarketConditionClassifier(config)
+        self.fill_estimator = FillProbabilityEstimator(config)
+        self.post_trade_analyzer = PostTradeAnalyzer()
+        self.position_sizer = SpreadAwarePositionSizer(config)
+        self.exit_optimizer = ExitOrderOptimizer(config)
         
         logger.info("Bid/Ask Manager initialized")
         logger.info(f"  Passive order timeout: {config.get('passive_order_timeout', 10)}s")
@@ -677,6 +1111,9 @@ class BidAskManager:
         logger.info(f"  Mixed order strategy: {config.get('use_mixed_order_strategy', False)}")
         logger.info(f"  Max queue size: {config.get('max_queue_size', 100)}")
         logger.info(f"  Min bid/ask size: {config.get('min_bid_ask_size', 1)}")
+        logger.info(f"  Market condition classification: Enabled")
+        logger.info(f"  Fill probability estimation: Enabled")
+        logger.info(f"  Spread-aware position sizing: Enabled")
     
     def update_quote(self, symbol: str, bid_price: float, ask_price: float,
                      bid_size: int, ask_size: int, last_price: float, timestamp: int) -> None:
@@ -898,3 +1335,130 @@ class BidAskManager:
             return False, 0.0, "No quote available"
         
         return self.queue_monitor.should_jump_queue(quote, side, queue_position)
+    
+    def classify_market_condition(self, symbol: str) -> Tuple[str, str]:
+        """
+        Classify current market condition.
+        Requirement 11: Market Condition Classification
+        
+        Args:
+            symbol: Instrument symbol
+        
+        Returns:
+            Tuple of (condition, reason)
+            Conditions: "normal", "volatile", "illiquid", "stressed"
+        """
+        quote = self.quotes.get(symbol)
+        analyzer = self.spread_analyzers.get(symbol)
+        
+        if quote is None or analyzer is None:
+            return "normal", "No data available"
+        
+        return self.market_classifier.classify_market(quote, analyzer)
+    
+    def estimate_fill_probability(self, symbol: str, side: str, 
+                                   price_momentum: Optional[float] = None) -> Tuple[float, float, str]:
+        """
+        Estimate probability of passive order fill.
+        Requirement 12: Fill Probability Estimation
+        
+        Args:
+            symbol: Instrument symbol
+            side: Trade side ('long' or 'short')
+            price_momentum: Recent price change (optional)
+        
+        Returns:
+            Tuple of (fill_probability, expected_wait_seconds, reason)
+        """
+        quote = self.quotes.get(symbol)
+        if quote is None:
+            return 0.0, 0.0, "No quote available"
+        
+        return self.fill_estimator.estimate_fill_probability(quote, side, price_momentum)
+    
+    def record_post_trade_analysis(self, signal_price: float, fill_price: float, side: str,
+                                    order_type: str, spread_at_order: float, fill_time_seconds: float,
+                                    estimated_costs: Dict[str, float], actual_costs: Dict[str, float]) -> None:
+        """
+        Record trade for post-trade analysis.
+        Requirement 13: Post-Trade Analysis
+        
+        Args:
+            signal_price: Original signal price
+            fill_price: Actual fill price
+            side: Trade side
+            order_type: 'passive' or 'aggressive'
+            spread_at_order: Spread at time of order
+            fill_time_seconds: Time from signal to fill
+            estimated_costs: Estimated transaction costs
+            actual_costs: Actual transaction costs
+        """
+        self.post_trade_analyzer.record_trade(
+            signal_price, fill_price, side, order_type, spread_at_order,
+            fill_time_seconds, estimated_costs, actual_costs
+        )
+    
+    def get_learning_insights(self, market_condition: str) -> Dict[str, Any]:
+        """
+        Get learning insights from post-trade analysis.
+        Requirement 13: Post-Trade Analysis
+        
+        Args:
+            market_condition: Current market condition
+        
+        Returns:
+            Learning insights dictionary
+        """
+        return self.post_trade_analyzer.get_learning_insights(market_condition)
+    
+    def calculate_spread_aware_position_size(self, symbol: str, base_contracts: int,
+                                              expected_profit_ticks: float) -> Tuple[int, Dict[str, float]]:
+        """
+        Calculate position size accounting for spread costs.
+        Requirement 10: Spread-Aware Position Sizing
+        
+        Args:
+            symbol: Instrument symbol
+            base_contracts: Initial position size calculation
+            expected_profit_ticks: Expected profit in ticks
+        
+        Returns:
+            Tuple of (adjusted_contracts, cost_breakdown)
+        """
+        quote = self.quotes.get(symbol)
+        if quote is None:
+            return base_contracts, {}
+        
+        # Get expected slippage
+        slippage_ticks = self.get_expected_slippage(symbol, datetime.now()) or 1.0
+        commission = self.config.get("commission_per_contract", 2.50)
+        
+        return self.position_sizer.calculate_position_size(
+            quote, base_contracts, expected_profit_ticks, slippage_ticks, commission
+        )
+    
+    def get_exit_order_strategy(self, exit_type: str, symbol: str, side: str,
+                                 urgency: str = "normal") -> Dict[str, Any]:
+        """
+        Get optimal exit order strategy.
+        Requirement 9: Exit Order Optimization
+        
+        Args:
+            exit_type: Type of exit ("target", "stop", "time_flatten", "partial")
+            symbol: Instrument symbol
+            side: Current position side ('long' or 'short')
+            urgency: Urgency level ("low", "normal", "high")
+        
+        Returns:
+            Exit strategy parameters
+        """
+        quote = self.quotes.get(symbol)
+        if quote is None:
+            return {
+                "order_type": "aggressive",
+                "limit_price": 0.0,
+                "timeout": 0,
+                "reason": "No quote available - default aggressive"
+            }
+        
+        return self.exit_optimizer.get_exit_strategy(exit_type, quote, side, urgency)

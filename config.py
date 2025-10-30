@@ -107,6 +107,15 @@ class BotConfiguration:
     illiquid_hours_start: time = field(default_factory=lambda: time(0, 0))  # Start of illiquid period
     illiquid_hours_end: time = field(default_factory=lambda: time(9, 30))  # End of illiquid period
     
+    # Advanced Bid/Ask Parameters (Requirements 9-15)
+    tight_spread_multiplier: float = 1.2  # Threshold for normal/tight spread
+    wide_spread_multiplier: float = 2.0  # Threshold for volatile/wide spread
+    extreme_spread_multiplier: float = 3.0  # Threshold for stressed market
+    low_volume_threshold: float = 0.5  # Threshold for low volume detection
+    min_fill_probability: float = 0.5  # Minimum fill probability for passive orders
+    max_transaction_cost_pct: float = 0.15  # Max transaction cost as % of expected profit (15%)
+    commission_per_contract: float = 2.50  # Commission per contract round-turn
+    
     # Broker Configuration (only for live trading)
     api_token: Optional[str] = None
     
