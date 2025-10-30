@@ -19,8 +19,8 @@ class BotConfiguration:
     timezone: str = "America/New_York"
     
     # Trading Parameters
-    risk_per_trade: float = 0.01  # 1% of account per trade
-    max_contracts: int = 2
+    risk_per_trade: float = 0.012  # 1.2% of account per trade (increased for more profit)
+    max_contracts: int = 3
     max_trades_per_day: int = 3  # Limit to best quality setups
     risk_reward_ratio: float = 2.0  # Realistic 2:1 for mean reversion with tight stops
     
@@ -29,10 +29,10 @@ class BotConfiguration:
     commission_per_contract: float = 2.50  # Round-turn commission (adjust to your broker)
     # Total cost per round-trip: ~3 ticks slippage + $2.50 commission = ~$42.50/contract
     
-    # VWAP Parameters - BALANCED FOR REAL TRADING
+    # VWAP Parameters - Back to 2.0σ (proven best)
     vwap_std_dev_1: float = 1.5  # Warning zone
-    vwap_std_dev_2: float = 2.0  # Entry zone (OPTIMAL - proven best)
-    vwap_std_dev_3: float = 3.0  # Stop zone
+    vwap_std_dev_2: float = 2.0  # Entry zone
+    vwap_std_dev_3: float = 3.5  # Stop zone
     
     # Trend Filter Parameters
     trend_ema_period: int = 20
@@ -45,10 +45,10 @@ class BotConfiguration:
     use_vwap_direction_filter: bool = True  # ✅ Price moving toward VWAP
     use_volume_filter: bool = False  # ❌ OFF - blocks overnight trades
     
-        # RSI Settings - Balanced for quality
+        # RSI Settings - Back to BEST: 25/75
     rsi_period: int = 14
-    rsi_oversold: int = 28  # Slightly tighter than 30 for better extremes
-    rsi_overbought: int = 72  # Slightly tighter than 70
+    rsi_oversold: int = 25
+    rsi_overbought: int = 75
     
     # MACD - Keep for reference but disabled
     macd_fast: int = 12

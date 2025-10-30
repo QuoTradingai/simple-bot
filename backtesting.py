@@ -46,7 +46,10 @@ class BacktestConfig:
     """
     start_date: datetime
     end_date: datetime
-    initial_equity: float = 25000.0
+    """Enhanced backtesting engine with realistic slippage and costs."""
+    
+    initial_equity: float = 50000.0
+    max_drawdown: float = 0.0
     symbols: List[str] = field(default_factory=lambda: ["MES"])
     slippage_ticks: float = 0.5  # Average slippage in ticks
     commission_per_contract: float = 2.50  # Round-trip commission

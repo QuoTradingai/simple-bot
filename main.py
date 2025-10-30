@@ -84,8 +84,8 @@ Examples:
     parser.add_argument(
         '--initial-equity',
         type=float,
-        default=25000.0,
-        help='Initial equity for backtesting (default: 25000)'
+        default=50000.0,
+        help='Initial equity for backtesting (default: 50000)'
     )
     
     parser.add_argument(

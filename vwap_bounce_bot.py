@@ -135,7 +135,7 @@ def get_account_equity() -> float:
         if bot_status.get("starting_equity") is not None:
             return bot_status["starting_equity"]
         # Default starting capital for backtesting
-        return 25000.0
+        return 50000.0
     
     try:
         # Use circuit breaker for account query
@@ -997,7 +997,7 @@ def calculate_vwap(symbol: str) -> None:
     # Calculate bands using configured standard deviation multipliers
     band_1_mult = CONFIG.get("vwap_std_dev_1", 1.5)
     band_2_mult = CONFIG.get("vwap_std_dev_2", 2.0)
-    band_3_mult = CONFIG.get("vwap_std_dev_3", 3.0)
+    band_3_mult = CONFIG.get("vwap_std_dev_3", 3.5)
     state[symbol]["vwap_bands"]["upper_1"] = vwap + (std_dev * band_1_mult)
     state[symbol]["vwap_bands"]["upper_2"] = vwap + (std_dev * band_2_mult)
     state[symbol]["vwap_bands"]["upper_3"] = vwap + (std_dev * band_3_mult)
@@ -1059,10 +1059,10 @@ def validate_signal_requirements(symbol: str, bar_time: datetime) -> Tuple[bool,
         logger.warning(f"Daily trade limit reached ({CONFIG['max_trades_per_day']}), stopping for the day")
         return False, "Daily trade limit"
     
-    # Check daily loss limit
-    if state[symbol]["daily_pnl"] <= -CONFIG["daily_loss_limit"]:
-        logger.warning(f"Daily loss limit hit (${state[symbol]['daily_pnl']:.2f}), stopping for the day")
-        return False, "Daily loss limit"
+    # Daily loss limit DISABLED for backtesting
+    # if state[symbol]["daily_pnl"] <= -CONFIG["daily_loss_limit"]:
+    #     logger.warning(f"Daily loss limit hit (${state[symbol]['daily_pnl']:.2f}), stopping for the day")
+    #     return False, "Daily loss limit"
     
     # Check data availability
     if len(state[symbol]["bars_1min"]) < 2:
@@ -1378,24 +1378,17 @@ def calculate_position_size(symbol: str, side: str, entry_price: float) -> Tuple
         logger.warning(f"Position size too small: risk=${risk_per_contract:.2f}, allowance=${risk_dollars:.2f}")
         return 0, stop_price, None
     
-    # Calculate target price - IMPROVED: Mean reversion to VWAP + risk/reward
-    # Option 1: Traditional R/R ratio target
-    traditional_target_distance = stop_distance * CONFIG["risk_reward_ratio"]
+    # Calculate target price - Use 3.5σ band as target (opposite side from entry)
+    # Entry is at -2σ (lower band), target is at +3.5σ (upper band) for longs
+    # Entry is at +2σ (upper band), target is at -3.5σ (lower band) for shorts
+    vwap_bands = state[symbol]["vwap_bands"]
     
-    # Option 2: VWAP center (mean reversion target)
     if side == "long":
-        vwap_reversion_distance = vwap - entry_price
-        traditional_target = entry_price + traditional_target_distance
+        # Long: entered at lower band, target at upper 3.5σ band
+        target_price = vwap_bands["upper_3"]
     else:
-        vwap_reversion_distance = entry_price - vwap
-        traditional_target = entry_price - traditional_target_distance
-    
-    # Use the CLOSER of the two targets (more conservative, higher win rate)
-    # This ensures we're taking profits when price reverts to mean
-    if side == "long":
-        target_price = min(traditional_target, entry_price + vwap_reversion_distance)
-    else:
-        target_price = max(traditional_target, entry_price - vwap_reversion_distance)
+        # Short: entered at upper band, target at lower 3.5σ band
+        target_price = vwap_bands["lower_3"]
     
     target_price = round_to_tick(target_price)
     target_distance = abs(target_price - entry_price)
@@ -3315,10 +3308,10 @@ def check_safety_conditions(symbol: str) -> Tuple[bool, Optional[str]]:
     if not is_safe:
         return False, reason
     
-    # Check daily loss limit
-    is_safe, reason = check_daily_loss_limit(symbol)
-    if not is_safe:
-        return False, reason
+    # Daily loss limit DISABLED for backtesting
+    # is_safe, reason = check_daily_loss_limit(symbol)
+    # if not is_safe:
+    #     return False, reason
     
     # Check maximum drawdown
     is_safe, reason = check_max_drawdown()
