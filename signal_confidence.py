@@ -72,6 +72,12 @@ class SignalConfidenceRL:
         
         self.load_experience()
         logger.info(f" Signal Confidence RL initialized: {len(self.experiences)} past experiences")
+        
+        # Log exploration mode
+        if self.backtest_mode:
+            logger.info(f" BACKTEST MODE: 5% exploration enabled (learning mode)")
+        else:
+            logger.info(f" LIVE MODE: 0% exploration (pure exploitation - NO RANDOM TRADES!)")
     
     def capture_signal_state(self, rsi: float, vwap_distance: float, 
                             atr: float, volume_ratio: float,
@@ -113,8 +119,10 @@ class SignalConfidenceRL:
         """
         self.total_signals += 1
         
-        # SMART EXPLORATION: 5% keeps learning without hurting performance
-        effective_exploration = 0.05  # 5% exploration - mostly exploit
+        # SMART EXPLORATION: Only in backtest mode!
+        # LIVE MODE: 0% exploration (pure exploitation of learned intelligence)
+        # BACKTEST MODE: 5% exploration (keeps learning without hurting performance)
+        effective_exploration = 0.05 if self.backtest_mode else 0.0
         
         # ALWAYS calculate confidence from experiences
         confidence, reason = self.calculate_confidence(state)
@@ -417,7 +425,8 @@ class SignalConfidenceRL:
         return multiplier
     
     def record_outcome(self, state: Dict, took_trade: bool, 
-                      pnl: float, duration_minutes: int):
+                      pnl: float, duration_minutes: int, 
+                      execution_data: Optional[Dict] = None):
         """
         Record the outcome of this signal for learning.
         
@@ -426,6 +435,13 @@ class SignalConfidenceRL:
             took_trade: Whether we took the trade
             pnl: Profit/loss (0 if skipped)
             duration_minutes: How long trade lasted
+            execution_data: Optional execution quality metrics (for live trading learning)
+                - order_type_used: "passive", "aggressive", "mixed"
+                - entry_slippage_ticks: Actual slippage in ticks
+                - partial_fill: Whether partial fill occurred
+                - fill_ratio: Percentage filled (0.66 = 2 of 3)
+                - exit_reason: How trade closed
+                - held_full_duration: Whether hit target/stop vs time exit
         """
         experience = {
             'timestamp': datetime.now().isoformat(),
@@ -435,7 +451,8 @@ class SignalConfidenceRL:
                 'exploration_rate': self.exploration_rate
             },
             'reward': pnl,
-            'duration': duration_minutes
+            'duration': duration_minutes,
+            'execution': execution_data or {}  # Store execution quality data
         }
         
         # Add to memory (learning enabled)
@@ -455,10 +472,25 @@ class SignalConfidenceRL:
         if len(self.experiences) % 5 == 0:
             self.save_experience()
         
-        # Log learning progress
+        # Log learning progress with execution details
         if took_trade:
             outcome = "WIN" if pnl > 0 else "LOSS"
-            logger.info(f"Recorded {outcome}: ${pnl:.2f} in {duration_minutes}min | Streak: W{self.current_win_streak}/L{self.current_loss_streak}")
+            log_msg = f"Recorded {outcome}: ${pnl:.2f} in {duration_minutes}min | Streak: W{self.current_win_streak}/L{self.current_loss_streak}"
+            
+            # Add execution quality info if available
+            if execution_data:
+                exec_notes = []
+                if execution_data.get("order_type_used"):
+                    exec_notes.append(f"Order: {execution_data['order_type_used']}")
+                if execution_data.get("entry_slippage_ticks", 0) > 0:
+                    exec_notes.append(f"Slippage: {execution_data['entry_slippage_ticks']:.1f}t")
+                if execution_data.get("partial_fill"):
+                    exec_notes.append(f"Partial: {execution_data.get('fill_ratio', 0):.0%}")
+                
+                if exec_notes:
+                    log_msg += f" | Exec: {', '.join(exec_notes)}"
+            
+            logger.info(log_msg)
     
     def get_stats(self) -> Dict:
         """Get current performance statistics."""

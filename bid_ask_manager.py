@@ -33,6 +33,44 @@ class BidAskQuote:
         """Calculate mid-point between bid and ask."""
         return (self.bid_price + self.ask_price) / 2.0
     
+    @property
+    def imbalance_ratio(self) -> float:
+        """
+        Calculate bid/ask size imbalance ratio.
+        Gap #3: Bid/ask size imbalance detection
+        
+        Returns:
+            Ratio of bid_size to ask_size. 
+            >1.0 means more bids (bullish pressure)
+            <1.0 means more asks (bearish pressure)
+            Large imbalances (>3:1 or <1:3) indicate one-sided markets
+        """
+        if self.ask_size == 0:
+            return float('inf')  # All bid, no ask - extreme bullish
+        return self.bid_size / self.ask_size
+    
+    def get_imbalance_signal(self, threshold: float = 3.0) -> str:
+        """
+        Get market imbalance signal for urgency decisions.
+        Gap #3: Bid/ask size imbalance detection
+        
+        Args:
+            threshold: Ratio threshold for strong imbalance (default 3.0)
+        
+        Returns:
+            "strong_bid" - More aggressive on long entries (>3:1 bid/ask)
+            "strong_ask" - More aggressive on short entries (<1:3 bid/ask)
+            "balanced" - Normal routing
+        """
+        ratio = self.imbalance_ratio
+        
+        if ratio > threshold:
+            return "strong_bid"  # Heavy buying pressure
+        elif ratio < (1 / threshold):
+            return "strong_ask"  # Heavy selling pressure
+        else:
+            return "balanced"
+    
     def is_valid(self) -> Tuple[bool, str]:
         """
         Validate quote for data integrity.
@@ -309,6 +347,92 @@ class QueuePositionMonitor:
                 return True, new_price, f"Queue too large ({current_position}), jumping to {new_price}"
         
         return False, 0.0, f"Queue position acceptable ({current_position})"
+    
+    def monitor_limit_order_queue(self, symbol: str, order_id: Any, limit_price: float, 
+                                   side: str, get_quote_func, is_filled_func, 
+                                   cancel_order_func) -> Tuple[bool, str]:
+        """
+        Monitor passive limit order queue position and timeout.
+        Gap #2: Limit order queue monitoring
+        
+        This monitors a live limit order and:
+        - Waits for fill up to passive_order_timeout
+        - Cancels if price moves away (queue jumping not worth it)
+        - Checks if filled every 500ms
+        - Returns status for decision to go aggressive
+        
+        Args:
+            symbol: Instrument symbol
+            order_id: Broker order ID
+            limit_price: Limit price of order
+            side: "long" or "short"
+            get_quote_func: Function to get current quote
+            is_filled_func: Function to check if order filled (returns bool)
+            cancel_order_func: Function to cancel order
+        
+        Returns:
+            Tuple of (was_filled, reason)
+            - (True, "filled") - Order filled successfully
+            - (False, "price_moved_away") - Price moved, cancelled
+            - (False, "timeout") - Timeout, cancelled, go aggressive
+        """
+        import time
+        
+        max_wait = self.config.get("passive_order_timeout", 10)
+        queue_check_interval = 0.5  # Check every 500ms
+        start_time = time.time()
+        tick_size = self.config.get("tick_size", 0.25)
+        price_move_threshold = 2  # Cancel if price moves 2+ ticks away
+        
+        logger.info(f"📊 Queue Monitor: Watching {side} limit @ ${limit_price:.2f}")
+        logger.info(f"  Max wait: {max_wait}s, check interval: {queue_check_interval}s")
+        
+        check_count = 0
+        while time.time() - start_time < max_wait:
+            check_count += 1
+            
+            # Check if filled
+            try:
+                if is_filled_func(order_id):
+                    elapsed = time.time() - start_time
+                    logger.info(f"  ✅ Passive fill after {elapsed:.1f}s ({check_count} checks)")
+                    return True, "filled"
+            except Exception as e:
+                logger.debug(f"  Error checking fill status: {e}")
+            
+            # Check if price moving away
+            try:
+                current_quote = get_quote_func(symbol)
+                if current_quote:
+                    if side == "long":
+                        # For long, we're bidding. If ask price rises too much, cancel
+                        price_distance = (current_quote.ask_price - limit_price) / tick_size
+                    else:
+                        # For short, we're asking. If bid price falls too much, cancel
+                        price_distance = (limit_price - current_quote.bid_price) / tick_size
+                    
+                    if price_distance > price_move_threshold:
+                        logger.warning(f"  ⚠️ Price moved away {price_distance:.1f} ticks - cancelling")
+                        try:
+                            cancel_order_func(order_id)
+                        except Exception as e:
+                            logger.error(f"  Failed to cancel order: {e}")
+                        return False, "price_moved_away"
+            except Exception as e:
+                logger.debug(f"  Error checking price movement: {e}")
+            
+            # Wait before next check
+            time.sleep(queue_check_interval)
+        
+        # Timeout - cancel and go aggressive
+        elapsed = time.time() - start_time
+        logger.warning(f"  ⏱️ Queue timeout after {elapsed:.1f}s ({check_count} checks)")
+        try:
+            cancel_order_func(order_id)
+        except Exception as e:
+            logger.error(f"  Failed to cancel order: {e}")
+        
+        return False, "timeout"
     
     def should_cancel_and_reroute(self, quote: BidAskQuote, side: str, 
                                    queue_size: int, time_in_queue: float) -> Tuple[bool, str]:
@@ -1204,6 +1328,37 @@ class BidAskManager:
         if analyzer is None:
             raise ValueError(f"No spread analyzer for {symbol}")
         
+        # ===== Gap #3: Bid/Ask Imbalance Detection =====
+        imbalance_enabled = self.config.get("imbalance_detection_enabled", True)
+        imbalance_signal = "balanced"
+        imbalance_ratio = 1.0
+        
+        if imbalance_enabled:
+            imbalance_threshold = self.config.get("imbalance_threshold_ratio", 3.0)
+            imbalance_signal = quote.get_imbalance_signal(imbalance_threshold)
+            imbalance_ratio = quote.imbalance_ratio
+            
+            if imbalance_signal != "balanced":
+                logger.info(f"  📊 Imbalance detected: {imbalance_signal} (ratio: {imbalance_ratio:.2f})")
+                
+                # Adjust urgency based on imbalance and side
+                if side == "long" and imbalance_signal == "strong_bid":
+                    # Heavy buying pressure - be more aggressive on long entries
+                    logger.info(f"  ⚡ Strong buying pressure - increasing long entry urgency")
+                    signal_strength = "strong"  # Override to force aggressive
+                elif side == "short" and imbalance_signal == "strong_ask":
+                    # Heavy selling pressure - be more aggressive on short entries
+                    logger.info(f"  ⚡ Strong selling pressure - increasing short entry urgency")
+                    signal_strength = "strong"  # Override to force aggressive
+                elif side == "long" and imbalance_signal == "strong_ask":
+                    # Heavy selling against our long - be more patient
+                    logger.info(f"  ⏸️ Strong selling pressure - reducing long entry urgency")
+                    signal_strength = "weak"  # Try passive first
+                elif side == "short" and imbalance_signal == "strong_bid":
+                    # Heavy buying against our short - be more patient
+                    logger.info(f"  ⏸️ Strong buying pressure - reducing short entry urgency")
+                    signal_strength = "weak"  # Try passive first
+        
         # Determine passive vs aggressive strategy
         use_passive, passive_reason = self.order_strategy.should_use_passive_entry(
             quote, analyzer, signal_strength
@@ -1225,7 +1380,9 @@ class BidAskManager:
                 "aggressive_price": aggressive_price,
                 "timeout": self.fill_strategy.passive_timeout,
                 "reason": f"Mixed strategy: {passive_qty} passive + {aggressive_qty} aggressive",
-                "quote": quote
+                "quote": quote,
+                "imbalance_signal": imbalance_signal,
+                "imbalance_ratio": imbalance_ratio
             }
         elif use_passive:
             # Pure passive strategy
@@ -1238,7 +1395,9 @@ class BidAskManager:
                 "timeout": self.fill_strategy.passive_timeout,
                 "reason": passive_reason,
                 "quote": quote,
-                "fallback_price": self.order_strategy.calculate_aggressive_entry_price(side, quote)
+                "fallback_price": self.order_strategy.calculate_aggressive_entry_price(side, quote),
+                "imbalance_signal": imbalance_signal,
+                "imbalance_ratio": imbalance_ratio
             }
         else:
             # Pure aggressive strategy
@@ -1250,7 +1409,9 @@ class BidAskManager:
                 "limit_price": aggressive_price,
                 "timeout": 0,  # No timeout for aggressive
                 "reason": passive_reason,  # Reason explains why not passive
-                "quote": quote
+                "quote": quote,
+                "imbalance_signal": imbalance_signal,
+                "imbalance_ratio": imbalance_ratio
             }
     
     def get_spread_statistics(self, symbol: str) -> Dict[str, Any]:

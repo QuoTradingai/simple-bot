@@ -556,3 +556,241 @@ def apply_learned_parameters(config: BotConfiguration, learning_file: str = "lea
         log.error(f"Failed to load learned parameters: {e}")
         log.info("Using default configuration parameters")
         return False
+
+
+# ========================================
+# EXECUTION RISK CONTROLS (Production-Ready)
+# ========================================
+# These parameters protect against real-world execution failures:
+# - Price deterioration (signal price vs current bid/ask)
+# - Partial fills (1 of 3 contracts filled)
+# - Order rejections (broker/exchange failures)
+# - Fast markets (spread widening, volatility spikes)
+
+# Fix #1: Price Deterioration Protection (ADAPTIVE)
+MAX_ENTRY_PRICE_DETERIORATION_TICKS = 3
+"""Maximum ticks price can move away from signal before aborting entry.
+Example: Long signal at $6,934, current ask at $6,937 (3 ticks) = OK
+         Long signal at $6,934, current ask at $6,945 (11 ticks) = ABORT
+Prevents chasing bad entries in fast markets or during news events."""
+
+ENTRY_PRICE_WAIT_ENABLED = True
+"""Enable adaptive waiting for price to come back before aborting.
+If True: Will wait up to ENTRY_PRICE_WAIT_MAX_SECONDS for price to improve
+If False: Abort immediately if price > max ticks away (old rigid behavior)
+Example: Price jumps 8 ticks but comes back to 2 ticks in 1 second → ENTER ✅"""
+
+ENTRY_PRICE_WAIT_MAX_SECONDS = 5
+"""Maximum seconds to wait for price to come back into acceptable range.
+During wait, checks price every ENTRY_PRICE_CHECK_INTERVAL (200ms default).
+Prevents giving up on good setups due to temporary price oscillations."""
+
+ENTRY_PRICE_CHECK_INTERVAL = 0.2
+"""Seconds between price re-checks during adaptive wait.
+0.2s = checks 5x per second (fast enough to catch quick reversions)
+Lower = more CPU/API calls but catches faster movements"""
+
+ENTRY_ABORT_IF_WORSE_THAN_TICKS = 10
+"""HARD ABORT if price deteriorates beyond this (prevents chasing disasters).
+Example: Signal at $6,934, price jumps to $6,936.50 (10+ ticks) = IMMEDIATE ABORT
+This is a safety net - bot won't wait for price this far gone to come back.
+Should be 2-3x MAX_ENTRY_PRICE_DETERIORATION_TICKS for safety."""
+
+# Fix #2: Partial Fill Handling
+MIN_ACCEPTABLE_FILL_RATIO = 0.5
+"""Minimum fill ratio to accept partial fills (0.5 = 50%).
+Example: Want 3 contracts, get 2 filled (66.7%) = ACCEPT PARTIAL
+         Want 3 contracts, get 1 filled (33.3%) = CLOSE POSITION, SKIP TRADE
+Prevents over-positioning from re-ordering after partial fills."""
+
+PASSIVE_ORDER_TIMEOUT = 10
+"""Seconds to wait for passive order fill before checking for partial fills.
+Longer timeout = more chances for passive fill (save spread)
+Shorter timeout = faster fallback to aggressive (guaranteed fill)"""
+
+# Fix #3: Order Rejection Recovery (Retry Logic)
+MAX_ENTRY_RETRIES = 3
+"""Maximum retry attempts for failed order placements.
+Each retry uses better price (jumps queue by 1 tick).
+Exponential backoff between attempts: 0.5s, 1.0s, 1.5s"""
+
+ENTRY_RETRY_BACKOFF = 0.5
+"""Base seconds for exponential backoff between retries.
+Retry 1: 0.5s wait, Retry 2: 1.0s wait, Retry 3: 1.5s wait"""
+
+# Fix #4: Fast Market Detection
+FAST_MARKET_SKIP_ENABLED = True
+"""Skip entries when market moving too fast (dangerous conditions).
+Checks: 1) Spread widening detection
+        2) Current bar volatility > 2x average
+Prevents terrible fills during flash crashes, NFP releases, etc."""
+
+FAST_MARKET_VOLATILITY_MULTIPLIER = 2.0
+"""Current bar range must be > this multiplier of average range to trigger fast market skip.
+Example: Average 5-bar range = 10 points, current bar = 25 points (2.5x) = SKIP ENTRY"""
+
+# ============================================================================
+# EXIT EXECUTION PROTECTION (Critical for Protecting Winning Trades)
+# ============================================================================
+
+# Fix #5: Target Order Validation
+TARGET_FILL_VALIDATION_TICKS = 2
+"""Maximum ticks between target price and current price to trust limit fill.
+When price hits target, we check if it's still near target:
+- If current price within 2 ticks of target → Likely filled at target
+- If current price >2 ticks away → Price reversed, use current price instead
+
+Example (LONG):
+  Target: $6,940, High: $6,940.25 (hit!), Close: $6,940.50 (1 tick away) → Use $6,940 ✅
+  Target: $6,940, High: $6,940.50 (hit!), Close: $6,936.00 (16 ticks away) → Use $6,936 ⚠️
+
+⚠️ WARNING: Don't set this too high or you'll assume fills that didn't happen!
+Recommended: 2 ticks for ES, adjust for other instruments based on tick size."""
+
+# Fix #6: Exit Slippage Alert Threshold  
+EXIT_SLIPPAGE_ALERT_TICKS = 2
+"""Alert threshold for high exit slippage (especially on stop losses).
+Normal slippage: 0-1 tick. High slippage: 2+ ticks.
+
+When slippage exceeds this on a stop loss, bot will log critical warning:
+- Expected: ${stop_price}
+- Actual: ${fill_price}  
+- Slippage: X ticks ($Y cost)
+- Recommendation: Consider tighter stops or avoid fast markets
+
+⚠️ This is for ALERTING only - doesn't prevent exits.
+Use alerts to optimize entry timing and avoid high-slippage conditions."""
+
+# Fix #7a: Entry Slippage Alert Threshold (Live Trading)
+ENTRY_SLIPPAGE_ALERT_TICKS = 2
+"""Alert threshold for high entry slippage (live trading only).
+Normal entry slippage: 0-1 tick. High slippage: 2+ ticks.
+
+In backtesting: Entry slippage is simulated via slippage_ticks parameter.
+In live trading: Bot validates actual fill price vs expected ask/bid.
+
+When entry slippage exceeds this threshold:
+- Expected: ${ask/bid_price}
+- Actual: ${fill_price}
+- Slippage: X ticks ($Y cost)
+- Recommendation: Tighten price validation or avoid volatile entry conditions
+
+⚠️ This is for ALERTING only - doesn't prevent entries.
+Use to identify when market conditions cause excessive entry costs."""
+
+# Gap #2: Queue Monitoring Configuration
+QUEUE_MONITORING_ENABLED = True
+"""Enable passive limit order queue monitoring (Gap #2 fix).
+
+When enabled, bot will:
+- Monitor passive limit orders for up to passive_order_timeout seconds
+- Check fill status every 500ms
+- Cancel if price moves 2+ ticks away
+- Cancel on timeout and switch to aggressive (market) order
+
+This prevents orders sitting in queue when price moves away.
+Improves fill rates by adapting to market conditions.
+
+⚠️ Only works in live trading with broker queue position support."""
+
+PASSIVE_ORDER_TIMEOUT = 10
+"""Maximum seconds to wait for passive limit order fill.
+Default: 10 seconds
+
+After timeout, order is cancelled and bot switches to aggressive (market) execution.
+
+Tuning:
+- Lower (5s): More aggressive, fewer passive fills, higher spread costs
+- Higher (15s): More patient, more passive fills, but risk missing entries
+- Default (10s): Balanced approach for most market conditions
+
+Related to MAX_ENTRY_PRICE_WAIT_SECONDS but applies to queue monitoring."""
+
+QUEUE_PRICE_MOVE_CANCEL_TICKS = 2
+"""Cancel passive order if price moves this many ticks away.
+Default: 2 ticks
+
+Example (ES futures, tick=$12.50):
+- Enter long limit at bid $5000.00
+- If ask moves to $5000.75+ (2 ticks), cancel and reassess
+- Prevents chasing a moving market with stale limit orders
+
+Tuning:
+- Lower (1 tick): Very sensitive, cancels quickly
+- Higher (3+ ticks): More patient, but risk not filling at all"""
+
+# Gap #3: Bid/Ask Imbalance Detection
+IMBALANCE_DETECTION_ENABLED = True
+"""Enable bid/ask size imbalance detection (Gap #3 fix).
+
+When enabled, bot will:
+- Calculate bid_size / ask_size ratio
+- Detect strong buying pressure (>3:1 ratio)
+- Detect strong selling pressure (<1:3 ratio)
+- Adjust entry urgency based on imbalance
+
+Example:
+- Bid: 1000 contracts, Ask: 100 contracts = 10:1 ratio (strong buying)
+- Long entry: Use more aggressive routing (strong demand)
+- Short entry: Use passive routing (weak demand)
+
+This optimizes fill quality by reading market pressure."""
+
+IMBALANCE_THRESHOLD_RATIO = 3.0
+"""Bid/ask size imbalance threshold for urgency adjustment.
+Default: 3.0 (3:1 ratio)
+
+Imbalance signals:
+- Ratio > 3.0: "strong_bid" (heavy buying, aggressive on longs)
+- Ratio < 0.33: "strong_ask" (heavy selling, aggressive on shorts)
+- 0.33 ≤ ratio ≤ 3.0: "balanced" (normal routing)
+
+Examples (ES futures):
+- Bid: 500, Ask: 100 → Ratio 5.0 → Strong bid (go aggressive on longs)
+- Bid: 100, Ask: 500 → Ratio 0.2 → Strong ask (go aggressive on shorts)
+- Bid: 300, Ask: 250 → Ratio 1.2 → Balanced (normal routing)
+
+Tuning:
+- Lower (2.0): More sensitive, triggers more aggressive routing
+- Higher (5.0): Less sensitive, requires extreme imbalance"""
+
+# Fix #7: Forced Flatten Retry Configuration
+# NOTE: These are SAFETY-CRITICAL - don't change unless you understand the risk!
+
+FORCED_FLATTEN_MAX_RETRIES = 5
+"""Maximum retry attempts for forced flatten at market close.
+⚠️ SAFETY CRITICAL - DO NOT REDUCE BELOW 5!
+
+Retry sequence with 5 attempts:
+- Attempt 1: Immediate (0s)
+- Attempt 2: After 1s  
+- Attempt 3: After 2s (total 3s elapsed)
+- Attempt 4: After 3s (total 6s elapsed)
+- Attempt 5: After 4s (total 10s elapsed)
+
+Total time: 10 seconds before giving up and alerting for manual intervention.
+
+Why 5 attempts?
+- Market closes at 4:45 PM ET (forced flatten time)
+- Need aggressive retries but can't wait forever
+- 5 attempts with 10s total is maximum safe retry window
+- More attempts = risk missing market close entirely
+
+⚠️ CRITICAL: If all 5 attempts fail, position will be held overnight (CATASTROPHIC RISK!)"""
+
+FORCED_FLATTEN_RETRY_BACKOFF_BASE = 1
+"""Base seconds for retry delays (1s, 2s, 3s, 4s).
+⚠️ SAFETY CRITICAL - Don't increase unless you understand the risk!
+
+With base = 1:
+- Retry 1→2: 1 second wait
+- Retry 2→3: 2 seconds wait  
+- Retry 3→4: 3 seconds wait
+- Retry 4→5: 4 seconds wait
+
+Increasing this means slower retries = more risk of missing market close.
+Decreasing means faster retries but might hit rate limits.
+
+Keep at 1 second unless you have specific broker requirements."""
+
+

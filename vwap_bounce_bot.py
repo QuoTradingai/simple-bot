@@ -689,6 +689,11 @@ def update_1min_bar(symbol: str, price: float, volume: int, dt: datetime) -> Non
         current_bar["low"] = min(current_bar["low"], price)
         current_bar["close"] = price
         current_bar["volume"] += volume
+        
+        # CRITICAL FOR LIVE TRADING: Check exits on EVERY TICK (intrabar)
+        # Don't wait for bar close - exit immediately if stop/target hit
+        if not _bot_config.backtest_mode and state[symbol]["position"]["active"]:
+            check_exit_conditions(symbol)
 
 
 def update_15min_bar(symbol: str, price: float, volume: int, dt: datetime) -> None:
@@ -1667,16 +1672,486 @@ def calculate_position_size(symbol: str, side: str, entry_price: float, rl_confi
 # PHASE NINE: Entry Execution
 # ============================================================================
 
+def validate_entry_price_still_valid(symbol: str, signal_price: float, side: str) -> Tuple[bool, str, float]:
+    """
+    Validate that current market price hasn't moved too far from signal.
+    NOW ADAPTIVE: Will wait for price to come back if it moved away temporarily!
+    
+    CRITICAL FIX: Execution Risk #1 - Price Deterioration Protection (ADAPTIVE)
+    
+    SAFEGUARDS PREVENT "DUMB" BEHAVIOR:
+    - Max 5 second wait (prevents stale signals)
+    - Trending price detection (abort if getting worse)
+    - Max checks limit (prevents infinite loops)
+    - Fast deterioration abort (exit if price running away)
+    - Worst price tracking (abort if deteriorating too far)
+    
+    Args:
+        symbol: Instrument symbol
+        signal_price: Original signal price
+        side: 'long' or 'short'
+    
+    Returns:
+        Tuple of (is_valid, reason, current_market_price)
+    """
+    import time
+    
+    max_deterioration_ticks = CONFIG.get("max_entry_price_deterioration_ticks", 3)
+    wait_for_improvement = CONFIG.get("entry_price_wait_enabled", True)
+    max_wait_seconds = CONFIG.get("entry_price_wait_max_seconds", 5)
+    check_interval = CONFIG.get("entry_price_check_interval", 0.2)
+    
+    # SAFETY LIMITS (prevent "dumb" behavior)
+    max_checks = int(max_wait_seconds / check_interval) + 5  # ~30 checks max
+    abort_if_worse_than_ticks = CONFIG.get("entry_abort_if_worse_than_ticks", 10)  # Hard limit
+    trending_away_threshold = 3  # Abort if worse 3 checks in a row
+    
+    tick_size = CONFIG["tick_size"]
+    max_deterioration = max_deterioration_ticks * tick_size
+    abort_threshold = abort_if_worse_than_ticks * tick_size
+    
+    start_time = time.time()
+    best_price_seen = None
+    worst_price_seen = None
+    check_count = 0
+    consecutive_worse_count = 0
+    previous_price = None
+    
+    while True:
+        check_count += 1
+        elapsed = time.time() - start_time
+        
+        # SAFETY #1: Max checks limit (prevent infinite loops)
+        if check_count > max_checks:
+            reason = f"Max checks ({max_checks}) exceeded - signal too stale"
+            logger.warning(f"  ❌ ENTRY ABORTED - {reason}")
+            return False, reason, signal_price
+        
+        # Get current market price from bid/ask if available
+        current_price = signal_price  # Default to signal price
+        if bid_ask_manager is not None:
+            quote = bid_ask_manager.get_current_quote(symbol)
+            if quote:
+                # For longs, use ask (what we'd pay)
+                # For shorts, use bid (what we'd receive)
+                current_price = quote.ask_price if side == "long" else quote.bid_price
+        
+        # Track best/worst prices seen during wait
+        if best_price_seen is None:
+            best_price_seen = current_price
+            worst_price_seen = current_price
+        else:
+            # Update best price
+            if (side == "long" and current_price < best_price_seen) or \
+               (side == "short" and current_price > best_price_seen):
+                best_price_seen = current_price
+                consecutive_worse_count = 0  # Reset - price improving!
+            
+            # Update worst price
+            if (side == "long" and current_price > worst_price_seen) or \
+               (side == "short" and current_price < worst_price_seen):
+                worst_price_seen = current_price
+        
+        # Check price movement
+        price_move = current_price - signal_price
+        price_move_ticks = abs(price_move) / tick_size
+        
+        # SAFETY #2: Hard abort threshold (price running away)
+        if side == "long" and price_move > abort_threshold:
+            reason = f"Price running away UP {price_move_ticks:.1f} ticks (>{abort_if_worse_than_ticks}) - HARD ABORT"
+            logger.warning(f"  ❌ ENTRY ABORTED - {reason}")
+            logger.warning(f"     Signal: ${signal_price:.2f} → Current: ${current_price:.2f}")
+            return False, reason, current_price
+        
+        if side == "short" and price_move < -abort_threshold:
+            reason = f"Price running away DOWN {price_move_ticks:.1f} ticks (>{abort_if_worse_than_ticks}) - HARD ABORT"
+            logger.warning(f"  ❌ ENTRY ABORTED - {reason}")
+            logger.warning(f"     Signal: ${signal_price:.2f} → Current: ${current_price:.2f}")
+            return False, reason, current_price
+        
+        # SAFETY #3: Trending away detection (getting worse consistently)
+        if previous_price is not None:
+            if (side == "long" and current_price > previous_price) or \
+               (side == "short" and current_price < previous_price):
+                consecutive_worse_count += 1
+                
+                if consecutive_worse_count >= trending_away_threshold:
+                    reason = f"Price trending away ({consecutive_worse_count} worse checks) - aborting early"
+                    logger.warning(f"  ❌ ENTRY ABORTED - {reason}")
+                    logger.warning(f"     Signal: ${signal_price:.2f} → Current: ${current_price:.2f} (trend: worse)")
+                    return False, reason, current_price
+            else:
+                consecutive_worse_count = 0  # Reset if price improves
+        
+        previous_price = current_price
+        
+        # For longs: price moving UP is bad (paying more)
+        # For shorts: price moving DOWN is bad (receiving less)
+        is_acceptable = False
+        
+        if side == "long":
+            is_acceptable = price_move <= max_deterioration
+        else:  # short
+            is_acceptable = price_move >= -max_deterioration
+        
+        # PRICE IS GOOD - GO!
+        if is_acceptable:
+            if check_count > 1:
+                logger.info(f"  ✓ Price validation passed after {elapsed:.1f}s wait (checked {check_count}x)")
+                logger.info(f"    Signal: ${signal_price:.2f} → Current: ${current_price:.2f} ({price_move_ticks:+.1f} ticks)")
+            else:
+                logger.info(f"  ✓ Price validation passed: ${signal_price:.2f} → ${current_price:.2f} ({price_move_ticks:+.1f} ticks)")
+            return True, "Price acceptable", current_price
+        
+        # Price BAD - should we wait for it to come back?
+        if not wait_for_improvement or elapsed >= max_wait_seconds:
+            # SAFETY #4: Time's up or waiting disabled - ABORT
+            if side == "long":
+                reason = f"Price moved UP {price_move_ticks:.1f} ticks - too expensive"
+            else:
+                reason = f"Price moved DOWN {price_move_ticks:.1f} ticks - too cheap to short"
+            
+            logger.warning(f"  ❌ ENTRY ABORTED - {reason}")
+            logger.warning(f"     Signal: ${signal_price:.2f} → Current: ${current_price:.2f}")
+            if check_count > 1:
+                logger.warning(f"     Waited {elapsed:.1f}s, checked {check_count}x, best seen: ${best_price_seen:.2f}")
+            return False, reason, current_price
+        
+        # Price bad but we can still wait - log once and retry
+        if check_count == 1:
+            if side == "long":
+                logger.info(f"  ⏳ Price too high (${current_price:.2f}, +{price_move_ticks:.1f} ticks) - waiting for pullback...")
+            else:
+                logger.info(f"  ⏳ Price too low (${current_price:.2f}, -{price_move_ticks:.1f} ticks) - waiting for bounce...")
+        
+        time.sleep(check_interval)
+
+
+def handle_partial_fill(symbol: str, side: str, expected_qty: int, timeout_seconds: float = 10) -> Tuple[int, bool]:
+    """
+    Check if order was partially filled and handle appropriately.
+    
+    CRITICAL FIX: Execution Risk #2 - Partial Fill Handling
+    
+    Args:
+        symbol: Instrument symbol
+        side: 'long' or 'short'
+        expected_qty: Expected quantity to fill
+        timeout_seconds: How long to wait for fill
+    
+    Returns:
+        Tuple of (actual_filled_qty, is_complete_fill)
+    """
+    import time
+    time.sleep(timeout_seconds)
+    
+    # Get actual position
+    current_position = get_position_quantity(symbol)
+    actual_filled = abs(current_position)
+    is_complete = (abs(current_position) == expected_qty)
+    
+    if not is_complete and actual_filled > 0:
+        # PARTIAL FILL DETECTED
+        logger.warning(SEPARATOR_LINE)
+        logger.warning("⚠️  PARTIAL FILL DETECTED")
+        logger.warning(f"  Expected: {expected_qty} contracts")
+        logger.warning(f"  Filled: {actual_filled} contracts")
+        logger.warning(f"  Missing: {expected_qty - actual_filled} contracts")
+        logger.warning(SEPARATOR_LINE)
+        
+        # Options:
+        # 1. Accept partial fill and adjust stops/targets
+        # 2. Try to complete the fill
+        # 3. Close the partial and skip trade
+        
+        min_acceptable_fill_ratio = CONFIG.get("min_acceptable_fill_ratio", 0.5)
+        fill_ratio = actual_filled / expected_qty
+        
+        if fill_ratio >= min_acceptable_fill_ratio:
+            # Acceptable partial fill - work with it
+            logger.info(f"  ✓ Accepting partial fill ({fill_ratio:.0%})")
+            return actual_filled, False
+        else:
+            # Unacceptable partial fill - close it
+            logger.warning(f"  ✗ Partial fill too small ({fill_ratio:.0%}) - closing position")
+            # Close the partial position
+            close_side = "SELL" if side == "long" else "BUY"
+            place_market_order(symbol, close_side, actual_filled)
+            return 0, False
+    
+    return actual_filled, is_complete
+
+
+def place_entry_order_with_retry(symbol: str, side: str, contracts: int, 
+                                 order_params: Dict[str, Any], 
+                                 max_retries: int = 3) -> Tuple[Optional[Dict], float, str]:
+    """
+    Place entry order with retry logic for rejection/failure handling.
+    
+    CRITICAL FIX: Execution Risk #3 - Order Rejection Recovery
+    
+    Args:
+        symbol: Instrument symbol
+        side: 'long' or 'short'
+        contracts: Number of contracts
+        order_params: Order parameters from bid/ask manager
+        max_retries: Maximum retry attempts
+    
+    Returns:
+        Tuple of (order, fill_price, order_type_used)
+    """
+    import time
+    
+    order_side = "BUY" if side == "long" else "SELL"
+    tick_size = CONFIG["tick_size"]
+    
+    for attempt in range(1, max_retries + 1):
+        logger.info(f"  📋 Order attempt {attempt}/{max_retries}")
+        
+        try:
+            if order_params['strategy'] == 'passive':
+                limit_price = order_params['limit_price']
+                logger.info(f"  💰 Passive Entry: ${limit_price:.2f} (saving spread)")
+                
+                order = place_limit_order(symbol, order_side, contracts, limit_price)
+                
+                if order is not None:
+                    # ===== Gap #2: Queue Monitoring for Passive Orders =====
+                    queue_monitoring_enabled = CONFIG.get("queue_monitoring_enabled", True)
+                    
+                    if queue_monitoring_enabled and bid_ask_manager is not None and not _bot_config.backtest_mode:
+                        # Use queue monitor for live trading
+                        logger.info(f"  📊 Monitoring queue position...")
+                        
+                        try:
+                            was_filled, queue_reason = bid_ask_manager.queue_monitor.monitor_limit_order_queue(
+                                symbol=symbol,
+                                order_id=order,
+                                limit_price=limit_price,
+                                side=side,
+                                get_quote_func=bid_ask_manager.get_current_quote,
+                                is_filled_func=lambda oid: abs(get_position_quantity(symbol)) >= contracts,
+                                cancel_order_func=cancel_order
+                            )
+                            
+                            if was_filled:
+                                logger.info(f"  ✅ Queue monitor: {queue_reason}")
+                                return order, limit_price, "passive"
+                            else:
+                                logger.warning(f"  ⚠️ Queue monitor: {queue_reason}")
+                                
+                                if queue_reason == "timeout" and attempt < max_retries:
+                                    # Timeout - switch to aggressive
+                                    logger.info(f"  ⚡ Switching to aggressive (market) entry")
+                                    order_params['strategy'] = 'aggressive'
+                                    order_params['limit_price'] = order_params.get('fallback_price', limit_price)
+                                    continue
+                                elif queue_reason == "price_moved_away" and attempt < max_retries:
+                                    # Price moved - retry with new price
+                                    logger.info(f"  🔄 Reassessing entry with updated quote")
+                                    time.sleep(0.5)
+                                    continue
+                                
+                                # Failed - move to retry
+                                logger.warning(f"  ❌ Attempt {attempt}: Queue monitoring failed")
+                                
+                        except Exception as e:
+                            logger.error(f"  ❌ Queue monitoring error: {e}")
+                            # Fall through to regular passive fill handling
+                    
+                    else:
+                        # Backtesting or queue monitoring disabled - use standard fill handling
+                        actual_filled, is_complete = handle_partial_fill(
+                            symbol, side, contracts, order_params.get('timeout', 10)
+                        )
+                        
+                        if is_complete:
+                            logger.info(f"  ✅ Complete fill at ${limit_price:.2f}")
+                            return order, limit_price, "passive"
+                        elif actual_filled > 0:
+                            logger.warning(f"  ⚠️  Partial fill: {actual_filled}/{contracts} contracts")
+                            return order, limit_price, "passive_partial"
+                    
+                    # Check for fill (fallback)
+                    actual_filled, is_complete = handle_partial_fill(
+                        symbol, side, contracts, order_params.get('timeout', 10)
+                    )
+                    
+                    if is_complete:
+                        logger.info(f"  ✅ Complete fill at ${limit_price:.2f}")
+                        return order, limit_price, "passive"
+                    elif actual_filled > 0:
+                        logger.warning(f"  ⚠️  Partial fill: {actual_filled}/{contracts} contracts")
+                        return order, limit_price, "passive_partial"
+                    
+                    # Not filled - retry with better price if attempts remain
+                    logger.warning(f"  ❌ Attempt {attempt}: Passive not filled")
+                    
+                    if attempt < max_retries:
+                        # Jump queue by 1 tick
+                        if side == "long":
+                            order_params['limit_price'] += tick_size
+                        else:
+                            order_params['limit_price'] -= tick_size
+                        
+                        logger.info(f"  🔄 Retry with improved price: ${order_params['limit_price']:.2f}")
+                        time.sleep(0.5)  # Brief pause before retry
+                        continue
+                
+                # Order placement failed
+                logger.error(f"  ❌ Attempt {attempt}: Order placement failed")
+                
+            elif order_params['strategy'] == 'aggressive':
+                limit_price = order_params['limit_price']
+                logger.info(f"  ⚡ Aggressive Entry: ${limit_price:.2f} (guaranteed fill)")
+                
+                order = place_limit_order(symbol, order_side, contracts, limit_price)
+                
+                if order is not None:
+                    # Aggressive orders usually fill immediately
+                    time.sleep(1)  # Brief wait to confirm fill
+                    actual_filled = get_position_quantity(symbol)
+                    if abs(actual_filled) >= contracts:
+                        logger.info(f"  ✅ Aggressive fill at ${limit_price:.2f}")
+                        return order, limit_price, "aggressive"
+                    else:
+                        logger.warning(f"  ⚠️  Aggressive order placed but not filled yet")
+                        # Still return it, assume it will fill
+                        return order, limit_price, "aggressive"
+                
+                logger.error(f"  ❌ Attempt {attempt}: Aggressive order failed")
+            
+            elif order_params['strategy'] == 'mixed':
+                # Mixed strategy - split between passive and aggressive
+                passive_qty = order_params['passive_contracts']
+                aggressive_qty = order_params['aggressive_contracts']
+                passive_price = order_params['passive_price']
+                aggressive_price = order_params['aggressive_price']
+                
+                logger.info(f"  🔀 Mixed: {passive_qty}@${passive_price:.2f} (passive) + {aggressive_qty}@${aggressive_price:.2f} (aggressive)")
+                
+                # Place both portions
+                passive_order = place_limit_order(symbol, order_side, passive_qty, passive_price)
+                aggressive_order = place_limit_order(symbol, order_side, aggressive_qty, aggressive_price)
+                
+                if aggressive_order is not None:
+                    # Use weighted average fill price
+                    avg_fill_price = (passive_price * passive_qty + aggressive_price * aggressive_qty) / contracts
+                    return aggressive_order, avg_fill_price, "mixed"
+            
+            # Failed this attempt
+            if attempt < max_retries:
+                backoff_time = 0.5 * attempt  # Exponential backoff
+                logger.warning(f"  ⏳ Retrying in {backoff_time:.1f}s...")
+                time.sleep(backoff_time)
+            
+        except Exception as e:
+            logger.error(f"  ❌ Attempt {attempt} exception: {e}")
+            if attempt < max_retries:
+                time.sleep(0.5 * attempt)
+                continue
+    
+    # All retries exhausted
+    logger.error(f"  🚫 All {max_retries} attempts failed - ENTRY ABORTED")
+    return None, 0.0, "failed"
+
+
+def is_market_moving_too_fast(symbol: str) -> Tuple[bool, str]:
+    """
+    Detect if market is moving too fast for safe entry.
+    
+    CRITICAL FIX: Execution Risk #4 - Fast Market Detection
+    
+    Returns:
+        Tuple of (too_fast, reason)
+    """
+    if not CONFIG.get("fast_market_skip_enabled", True):
+        return False, "Fast market detection disabled"
+    
+    if bid_ask_manager is None:
+        return False, "No bid/ask data available"
+    
+    try:
+        # Check spread widening (sign of fast market)
+        spread_analyzer = bid_ask_manager.spread_analyzer
+        is_widening, widening_reason = spread_analyzer.is_spread_widening()
+        if is_widening:
+            return True, f"Fast market detected: {widening_reason}"
+    except Exception as e:
+        logger.debug(f"Could not check spread widening: {e}")
+    
+    # Check recent price volatility
+    bars = state[symbol]["bars_1min"]
+    if len(bars) < 5:
+        return False, "Not enough data"
+    
+    recent_bars = bars[-5:]
+    price_ranges = [(b["high"] - b["low"]) for b in recent_bars]
+    avg_range = statistics.mean(price_ranges)
+    current_range = recent_bars[-1]["high"] - recent_bars[-1]["low"]
+    
+    # If current bar range is > multiplier * average, market is moving fast
+    volatility_mult = CONFIG.get("fast_market_volatility_multiplier", 2.0)
+    if current_range > avg_range * volatility_mult:
+        return True, f"High volatility: {current_range:.2f} vs avg {avg_range:.2f} ({current_range/avg_range:.1f}x threshold)"
+    
+    return False, "Normal market conditions"
+
+
 def execute_entry(symbol: str, side: str, entry_price: float) -> None:
     """
     Execute entry order with stop loss and target.
-    Uses intelligent bid/ask order placement strategy.
+    Uses intelligent bid/ask order placement strategy with FULL EXECUTION RISK PROTECTION.
+    
+    NEW: Production-ready execution with:
+    - Position state validation (prevents double positioning)
+    - Price deterioration protection (max 3 ticks from signal)
+    - Partial fill handling (detects and manages)
+    - Order rejection recovery (3 retries with exponential backoff)
+    - Fast market detection (skips dangerous entries)
     
     Args:
         symbol: Instrument symbol
         side: 'long' or 'short'
         entry_price: Approximate entry price (mid or last)
     """
+    # ===== CRITICAL FIX #1: Position State Validation =====
+    # Prevent double positioning if signal fires while already in trade
+    current_position = get_position_quantity(symbol)
+    
+    if current_position != 0:
+        logger.warning(SEPARATOR_LINE)
+        logger.warning("🚨 ENTRY SKIPPED - Already In Position")
+        logger.warning(f"  Current Position: {current_position} contracts ({'LONG' if current_position > 0 else 'SHORT'})")
+        logger.warning(f"  New Signal: {side.upper()} @ ${entry_price:.2f}")
+        logger.warning(f"  Reason: Cannot enter conflicting or additional position")
+        logger.warning(SEPARATOR_LINE)
+        return
+    
+    # ===== EXECUTION RISK FIX #4: Fast Market Detection =====
+    too_fast, fast_reason = is_market_moving_too_fast(symbol)
+    if too_fast:
+        logger.warning(SEPARATOR_LINE)
+        logger.warning("🚨 ENTRY SKIPPED - Fast Market Detected")
+        logger.warning(f"  Reason: {fast_reason}")
+        logger.warning(f"  Signal: {side.upper()} @ ${entry_price:.2f}")
+        logger.warning(SEPARATOR_LINE)
+        return
+    
+    # ===== EXECUTION RISK FIX #1: Price Deterioration Protection =====
+    is_valid_price, price_reason, current_market_price = validate_entry_price_still_valid(symbol, entry_price, side)
+    if not is_valid_price:
+        logger.warning(SEPARATOR_LINE)
+        logger.warning("🚨 ENTRY ABORTED - Price Deteriorated")
+        logger.warning(f"  {price_reason}")
+        logger.warning(f"  Signal: {side.upper()} @ ${entry_price:.2f}")
+        logger.warning(SEPARATOR_LINE)
+        return
+    
+    # Use current market price instead of stale signal price
+    logger.info(f"  [OK] Price validation passed: ${entry_price:.2f} -> ${current_market_price:.2f}")
+    entry_price = current_market_price
+    
     # Get RL confidence if available
     rl_confidence = state[symbol].get("entry_rl_confidence")
     
@@ -1738,6 +2213,7 @@ def execute_entry(symbol: str, side: str, entry_price: float) -> None:
     actual_fill_price = entry_price
     order = None
     
+    # ===== FIX #2 & #3: Retry Logic + Partial Fill Handling =====
     if bid_ask_manager is not None:
         try:
             # Get order parameters from bid/ask manager
@@ -1746,68 +2222,16 @@ def execute_entry(symbol: str, side: str, entry_price: float) -> None:
             logger.info(f"  Order Strategy: {order_params['strategy']}")
             logger.info(f"  Reason: {order_params['reason']}")
             
-            if order_params['strategy'] == 'passive':
-                # Try passive entry first (at bid for long, at ask for short)
-                limit_price = order_params['limit_price']
-                logger.info(f"  Passive Entry: ${limit_price:.2f} (saving spread)")
-                logger.info(f"  Timeout: {order_params['timeout']}s")
-                
-                order = place_limit_order(symbol, order_side, contracts, limit_price)
-                if order:
-                    # Wait for fill or timeout
-                    import time
-                    time.sleep(order_params['timeout'])
-                    
-                    # Check if filled
-                    current_position = get_position_quantity(symbol)
-                    expected_qty = contracts if side == "long" else -contracts
-                    
-                    if abs(current_position) == abs(expected_qty):
-                        # Successfully filled at passive price
-                        actual_fill_price = limit_price
-                        order_type_used = "passive"
-                        logger.info(f"   Passive fill at ${limit_price:.2f}")
-                    else:
-                        # Not filled, fallback to aggressive
-                        logger.warning("   Passive order not filled, using aggressive fallback")
-                        aggressive_price = order_params['fallback_price']
-                        order = place_limit_order(symbol, order_side, contracts, aggressive_price)
-                        actual_fill_price = aggressive_price
-                        order_type_used = "aggressive"
-                        logger.info(f"  Aggressive Entry: ${aggressive_price:.2f}")
-                else:
-                    # Passive order failed, use aggressive
-                    logger.warning("  Passive order placement failed, using aggressive")
-                    aggressive_price = order_params['fallback_price']
-                    order = place_limit_order(symbol, order_side, contracts, aggressive_price)
-                    actual_fill_price = aggressive_price
-                    order_type_used = "aggressive"
-                    
-            elif order_params['strategy'] == 'aggressive':
-                # Use aggressive entry (cross the spread immediately)
-                limit_price = order_params['limit_price']
-                logger.info(f"  Aggressive Entry: ${limit_price:.2f} (guaranteed fill)")
-                order = place_limit_order(symbol, order_side, contracts, limit_price)
-                actual_fill_price = limit_price
-                order_type_used = "aggressive"
-                
-            elif order_params['strategy'] == 'mixed':
-                # Split order between passive and aggressive
-                passive_qty = order_params['passive_contracts']
-                aggressive_qty = order_params['aggressive_contracts']
-                passive_price = order_params['passive_price']
-                aggressive_price = order_params['aggressive_price']
-                
-                logger.info(f"  Mixed Strategy: {passive_qty} @ ${passive_price:.2f} (passive) + {aggressive_qty} @ ${aggressive_price:.2f} (aggressive)")
-                
-                # Place passive portion
-                passive_order = place_limit_order(symbol, order_side, passive_qty, passive_price)
-                # Place aggressive portion
-                aggressive_order = place_limit_order(symbol, order_side, aggressive_qty, aggressive_price)
-                
-                # Use weighted average fill price
-                actual_fill_price = (passive_price * passive_qty + aggressive_price * aggressive_qty) / contracts
-                order = aggressive_order  # Use aggressive order for tracking
+            # Use retry-enabled order placement with full execution protection
+            order, actual_fill_price, order_type_used = place_entry_order_with_retry(
+                symbol, side, contracts, order_params, max_retries=3
+            )
+            
+            if order is None:
+                logger.error("❌ Failed to place entry after retries - TRADE SKIPPED")
+                return
+            
+            logger.info(f"  ✓ Order placed successfully using {order_type_used} strategy")
             
         except Exception as e:
             logger.error(f"Error using bid/ask manager for entry: {e}")
@@ -1836,7 +2260,50 @@ def execute_entry(symbol: str, side: str, entry_price: float) -> None:
         logger.error("Failed to place entry order")
         return
     
-    logger.info(f"  Actual Entry Price: ${actual_fill_price:.2f}")
+    # ===== CRITICAL FIX #7: Entry Fill Validation (Live Trading) =====
+    # Validate actual entry fill price vs expected (critical for live trading)
+    if not _bot_config.backtest_mode:
+        # In live trading, get actual fill price from broker
+        try:
+            actual_fill_from_broker = get_last_fill_price(symbol)
+            if actual_fill_from_broker and actual_fill_from_broker != actual_fill_price:
+                # Calculate entry slippage
+                tick_size = CONFIG["tick_size"]
+                tick_value = CONFIG["tick_value"]
+                entry_slippage = abs(actual_fill_from_broker - actual_fill_price)
+                entry_slippage_ticks = entry_slippage / tick_size
+                entry_slippage_cost = entry_slippage_ticks * tick_value * contracts
+                
+                # Get alert threshold from config
+                entry_slippage_alert_threshold = CONFIG.get("entry_slippage_alert_ticks", 2)
+                
+                if entry_slippage_ticks > entry_slippage_alert_threshold:
+                    # HIGH ENTRY SLIPPAGE DETECTED
+                    logger.warning("=" * 80)
+                    logger.warning("⚠️ CRITICAL: HIGH ENTRY SLIPPAGE DETECTED!")
+                    logger.warning("=" * 80)
+                    logger.warning(f"  Expected Entry: ${actual_fill_price:.2f}")
+                    logger.warning(f"  Actual Fill: ${actual_fill_from_broker:.2f}")
+                    logger.warning(f"  Slippage: {entry_slippage_ticks:.1f} ticks (${entry_slippage_cost:.2f})")
+                    logger.warning(f"  Side: {side.upper()}, Contracts: {contracts}")
+                    logger.warning(f"  ⚠️ Entry slippage >{entry_slippage_alert_threshold} ticks - consider tighter price validation or avoid volatile periods")
+                    logger.warning("=" * 80)
+                    
+                    # Track for session statistics
+                    if "high_entry_slippage_count" not in bot_status:
+                        bot_status["high_entry_slippage_count"] = 0
+                    bot_status["high_entry_slippage_count"] += 1
+                elif entry_slippage_ticks > 0:
+                    # Normal slippage logging
+                    logger.info(f"  Entry Slippage: {entry_slippage_ticks:.1f} ticks (${entry_slippage_cost:.2f})")
+                
+                # Use actual fill price for position tracking
+                actual_fill_price = actual_fill_from_broker
+                logger.info(f"  Validated Fill Price: ${actual_fill_price:.2f}")
+        except Exception as e:
+            logger.debug(f"Could not validate entry fill price: {e}")
+    
+    logger.info(f"  Final Entry Price: ${actual_fill_price:.2f}")
     
     # Record trade execution for cost tracking (Requirement 5)
     if bid_ask_manager is not None:
@@ -1883,6 +2350,11 @@ def execute_entry(symbol: str, side: str, entry_price: float) -> None:
         "entry_time": entry_time,
         "order_id": order.get("order_id"),
         "order_type_used": order_type_used,  # Track for exit optimization
+        # Signal & RL Information - Preserved for partial fills and exits
+        "entry_rl_confidence": rl_confidence,  # RL confidence at entry
+        "entry_rl_state": state[symbol].get("entry_rl_state"),  # RL market state
+        "original_entry_price": entry_price,  # Original signal price (before validation)
+        "actual_entry_price": actual_fill_price,  # Actual fill price
         # Advanced Exit Management - Breakeven State
         "breakeven_active": False,
         "original_stop_price": stop_price,
@@ -1910,13 +2382,38 @@ def execute_entry(symbol: str, side: str, entry_price: float) -> None:
         "initial_risk_ticks": stop_distance_ticks,
     }
     
-    # Place stop loss order
+    # ===== CRITICAL FIX #2: Stop Loss Execution Validation =====
+    # Verify stop order accepted by broker - critical for capital protection
     stop_side = "SELL" if side == "long" else "BUY"
     stop_order = place_stop_order(symbol, stop_side, contracts, stop_price)
     
     if stop_order:
         state[symbol]["position"]["stop_order_id"] = stop_order.get("order_id")
-        logger.info(f"Stop loss order placed: {stop_order.get('order_id')}")
+        logger.info(f"  ✅ Stop loss placed and validated: ${stop_price:.2f}")
+        logger.info(f"     Stop Order ID: {stop_order.get('order_id')}")
+    else:
+        # CRITICAL: Stop order rejected - this is DANGEROUS!
+        logger.error(SEPARATOR_LINE)
+        logger.error("🚨 CRITICAL: STOP ORDER REJECTED BY BROKER!")
+        logger.error(f"  Entry filled at ${actual_fill_price:.2f} with {contracts} contracts")
+        logger.error(f"  Stop order at ${stop_price:.2f} FAILED to place")
+        logger.error(f"  Position is NOW UNPROTECTED - emergency exit required!")
+        logger.error(SEPARATOR_LINE)
+        
+        # EMERGENCY: Close position immediately with market order
+        logger.error("  🆘 Executing emergency market close to protect capital...")
+        emergency_close_order = place_market_order(symbol, stop_side, contracts)
+        
+        if emergency_close_order:
+            logger.error(f"  ✓ Emergency close executed - Position closed")
+            logger.error(f"  This trade is abandoned due to stop order failure")
+        else:
+            logger.error(f"  ❌ EMERGENCY CLOSE ALSO FAILED - MANUAL INTERVENTION REQUIRED!")
+            logger.error(f"  Symbol: {symbol}, Side: {side}, Contracts: {contracts}")
+        
+        # Don't track this position - it's closed or needs manual handling
+        logger.error(SEPARATOR_LINE)
+        return
     
     # Increment daily trade counter
     state[symbol]["daily_trade_count"] += 1
@@ -1976,10 +2473,39 @@ def check_target_reached(symbol: str, current_bar: Dict[str, Any], position: Dic
     # Check regular target
     if side == "long":
         if current_bar["high"] >= target_price:
-            return True, target_price
+            # ===== CRITICAL FIX #4: Target Order Validation =====
+            # Price reached target - verify we can actually fill at this price
+            # In backtesting, assume fill. In live, would check if limit order filled.
+            
+            # Check if price is still near target (within CONFIG threshold)
+            tick_size = CONFIG["tick_size"]
+            target_validation_ticks = CONFIG.get("target_fill_validation_ticks", 2)
+            price_distance = abs(current_bar["close"] - target_price) / tick_size
+            
+            if price_distance <= target_validation_ticks:
+                # Price still near target - good fill likely
+                return True, target_price
+            else:
+                # Price ran past target and reversed - might not fill at target
+                logger.warning(f"⚠️ Target Validation: Price hit ${target_price:.2f} but reversed to ${current_bar['close']:.2f}")
+                logger.warning(f"  Distance: {price_distance:.1f} ticks (>{target_validation_ticks} tick threshold)")
+                logger.warning(f"  Using current price for guaranteed fill instead")
+                # Use current price (more conservative, guaranteed fill)
+                return True, current_bar["close"]
     else:  # short
         if current_bar["low"] <= target_price:
-            return True, target_price
+            # ===== CRITICAL FIX #4: Target Order Validation =====
+            tick_size = CONFIG["tick_size"]
+            target_validation_ticks = CONFIG.get("target_fill_validation_ticks", 2)
+            price_distance = abs(current_bar["close"] - target_price) / tick_size
+            
+            if price_distance <= target_validation_ticks:
+                return True, target_price
+            else:
+                logger.warning(f"⚠️ Target Validation: Price hit ${target_price:.2f} but reversed to ${current_bar['close']:.2f}")
+                logger.warning(f"  Distance: {price_distance:.1f} ticks (>{target_validation_ticks} tick threshold)")
+                logger.warning(f"  Using current price for guaranteed fill instead")
+                return True, current_bar["close"]
     
     # Phase Five: Time-based exit tightening after 3 PM
     if bar_time.time() >= time(15, 0) and not bot_status["flatten_mode"]:
@@ -2435,7 +2961,26 @@ def check_trailing_stop(symbol: str, current_price: float) -> None:
         logger.info(f"  Current Price: ${current_price:.2f}")
         logger.info("=" * 60)
     else:
-        logger.error("Failed to update trailing stop order")
+        # ===== CRITICAL FIX #3: Trailing Stop Validation =====
+        logger.error(SEPARATOR_LINE)
+        logger.error("🚨 CRITICAL: TRAILING STOP UPDATE FAILED!")
+        logger.error(f"  Tried to update stop from ${position['stop_price']:.2f} to ${new_trailing_stop:.2f}")
+        logger.error(f"  Current profit: ${profit_locked_dollars:+.2f} (UNPROTECTED)")
+        logger.error("  Position now at risk - emergency exit required!")
+        logger.error(SEPARATOR_LINE)
+        
+        # EMERGENCY: Close position immediately to lock in profit
+        logger.error("  🆘 Executing emergency market close to protect profit...")
+        emergency_close_order = place_market_order(symbol, stop_side, contracts)
+        
+        if emergency_close_order:
+            logger.error("  ✓ Emergency close executed - profit protected")
+            # Execute full exit with tracking
+            execute_exit(symbol, current_price, "trailing_stop_failure_emergency")
+        else:
+            logger.error("  ❌ EMERGENCY CLOSE ALSO FAILED - MANUAL INTERVENTION REQUIRED!")
+            logger.error(f"  Position: {side.upper()} {contracts} contracts at ${entry_price:.2f}")
+            logger.error(f"  Current Price: ${current_price:.2f}, Profit at Risk: ${profit_locked_dollars:+.2f}")
 
 
 # ============================================================================
@@ -2971,6 +3516,35 @@ def calculate_pnl(position: Dict[str, Any], exit_price: float) -> Tuple[float, f
         
         actual_exit_price = round_to_tick(actual_exit_price)
     
+    # ===== CRITICAL FIX #6: Exit Slippage Tracking and Alerts =====
+    # Track slippage impact separately for critical exits (stops)
+    if exit_price != actual_exit_price:
+        slippage_amount = abs(exit_price - actual_exit_price)
+        slippage_ticks_actual = slippage_amount / tick_size
+        slippage_cost_dollars = slippage_ticks_actual * tick_value * contracts
+        
+        # Check if this is a stop loss exit (higher slippage risk)
+        is_stop_exit = position.get("stop_price") and abs(exit_price - position["stop_price"]) < (2 * tick_size)
+        
+        # Get alert threshold from config
+        slippage_alert_threshold = CONFIG.get("exit_slippage_alert_ticks", 2)
+        
+        if is_stop_exit and slippage_ticks_actual > slippage_alert_threshold:
+            # CRITICAL: Stop loss slippage exceeds threshold!
+            logger.warning("=" * 80)
+            logger.warning("⚠️ CRITICAL: HIGH STOP LOSS SLIPPAGE DETECTED!")
+            logger.warning("=" * 80)
+            logger.warning(f"  Expected Exit: ${exit_price:.2f}")
+            logger.warning(f"  Actual Fill: ${actual_exit_price:.2f}")
+            logger.warning(f"  Slippage: {slippage_ticks_actual:.1f} ticks (${slippage_cost_dollars:.2f})")
+            logger.warning(f"  Risk Taken: 4 ticks, Actual Loss: {slippage_ticks_actual + 4:.1f} ticks")
+            logger.warning(f"  ⚠️ Stop losses experiencing >{slippage_alert_threshold} tick slippage - consider tighter stops or avoid fast markets")
+            logger.warning("=" * 80)
+        elif slippage_ticks_actual > 0:
+            # Normal slippage logging
+            logger.info(f"  Exit Slippage: {slippage_ticks_actual:.1f} ticks (${slippage_cost_dollars:.2f})")
+            logger.info(f"  Expected: ${exit_price:.2f}, Actual: ${actual_exit_price:.2f}")
+    
     # Calculate gross P&L
     if position["side"] == "long":
         price_change = actual_exit_price - entry_price
@@ -3046,6 +3620,70 @@ def handle_exit_orders(symbol: str, position: Dict[str, Any], exit_price: float,
     order_side = "SELL" if position["side"] == "long" else "BUY"
     contracts = position["quantity"]
     
+    # ===== CRITICAL FIX #5: Forced Flatten with Aggressive Retries =====
+    # For emergency forced flatten, use aggressive retry logic to ensure position closes
+    if reason == "emergency_forced_flatten":
+        logger.critical("=" * 80)
+        logger.critical("FORCED FLATTEN EXECUTION - AGGRESSIVE RETRY MODE")
+        logger.critical("=" * 80)
+        
+        # Get retry configuration
+        max_attempts = CONFIG.get("forced_flatten_max_retries", 5)
+        retry_backoff_base = CONFIG.get("forced_flatten_retry_backoff_base", 1)
+        
+        for attempt in range(1, max_attempts + 1):
+            logger.critical(f"🆘 Forced flatten attempt {attempt}/{max_attempts}")
+            logger.critical(f"  Position: {position['side'].upper()} {contracts} contracts")
+            logger.critical(f"  Exit Price: ${exit_price:.2f}")
+            
+            # Use market order for maximum urgency
+            order = place_market_order(symbol, order_side, contracts)
+            
+            if order:
+                logger.critical(f"  ✓ Order placed - Order ID: {order.get('order_id', 'N/A')}")
+                
+                # In backtesting, position closes immediately
+                # In live trading, wait briefly and verify
+                import time
+                time.sleep(1)
+                
+                # Verify position actually closed
+                current_position = get_position_quantity(symbol)
+                
+                if current_position == 0:
+                    logger.critical("=" * 80)
+                    logger.critical(f"✅ FORCED FLATTEN SUCCESSFUL (Attempt {attempt})")
+                    logger.critical("=" * 80)
+                    return  # SUCCESS - position closed
+                else:
+                    logger.error(f"  ⚠️ Position still shows {current_position} contracts - verifying...")
+                    # Might be a delay in reporting, continue to next check
+            else:
+                logger.error(f"  ❌ Order placement FAILED on attempt {attempt}")
+            
+            # Failed - retry with increasing urgency
+            if attempt < max_attempts:
+                wait_time = attempt * retry_backoff_base  # 1s, 2s, 3s, 4s delays
+                logger.error(f"  Retrying in {wait_time} seconds with increased urgency...")
+                time.sleep(wait_time)
+        
+        # ALL RETRIES FAILED - CRITICAL ALERT!
+        logger.critical("=" * 80)
+        logger.critical(f"🚨🚨🚨 FORCED FLATTEN FAILED AFTER {max_attempts} ATTEMPTS! 🚨🚨🚨")
+        logger.critical("=" * 80)
+        logger.critical(f"  Position: {position['side'].upper()} {contracts} contracts")
+        logger.critical(f"  Entry: ${position['entry_price']:.2f}, Current: ${exit_price:.2f}")
+        logger.critical(f"  Symbol: {symbol}")
+        logger.critical("  ⚠️ POSITION STILL OPEN - MANUAL INTERVENTION REQUIRED IMMEDIATELY!")
+        logger.critical("  ⚠️ OVERNIGHT RISK - CONTACT BROKER TO FORCE CLOSE!")
+        logger.critical("=" * 80)
+        
+        # TODO: In production, send critical alert (email, SMS, webhook)
+        # send_critical_alert(f"FLATTEN FAILED: {symbol} {position['side']} {contracts} contracts")
+        
+        return  # Cannot continue - manual intervention needed
+    
+    # Normal exit handling (non-forced-flatten)
     # Determine exit type based on reason
     exit_type_map = {
         "target_reached": "target",
@@ -3053,9 +3691,9 @@ def handle_exit_orders(symbol: str, position: Dict[str, Any], exit_price: float,
         "flatten_mode_exit": "time_flatten",
         "time_based_profit_take": "time_flatten",
         "time_based_loss_cut": "time_flatten",
-        "emergency_forced_flatten": "time_flatten",
         "signal_reversal": "partial",
-        "early_profit_lock": "partial"
+        "early_profit_lock": "partial",
+        "trailing_stop_failure_emergency": "emergency"  # Added for trailing stop fix
     }
     exit_type = exit_type_map.get(reason, "stop")  # Default to stop for safety
     
@@ -3192,7 +3830,16 @@ def execute_exit(symbol: str, exit_price: float, reason: str) -> None:
                     state=entry_state,
                     took_trade=True,
                     pnl=pnl,
-                    duration_minutes=duration_minutes
+                    duration_minutes=duration_minutes,
+                    execution_data={
+                        # Execution quality metrics for RL learning
+                        "order_type_used": position.get("order_type_used", "unknown"),
+                        "entry_slippage_ticks": abs(position.get("actual_entry_price", 0) - position.get("original_entry_price", 0)) / CONFIG.get("tick_size", 0.25) if position.get("actual_entry_price") and position.get("original_entry_price") else 0,
+                        "partial_fill": position.get("quantity", 0) < position.get("original_quantity", 0),
+                        "fill_ratio": position.get("quantity", 0) / position.get("original_quantity", 1) if position.get("original_quantity") else 1.0,
+                        "exit_reason": reason,
+                        "held_full_duration": reason in ["target_hit", "stop_hit"]
+                    }
                 )
                 
                 # Get RL stats
@@ -3214,7 +3861,7 @@ def execute_exit(symbol: str, exit_price: float, reason: str) -> None:
         "flatten_mode_exit", "time_based_profit_take", "time_based_loss_cut",
         "emergency_forced_flatten", "tightened_target", "early_loss_cut",
         "proactive_stop", "early_profit_lock", "friday_weekend_protection",
-        "friday_profit_protection"
+        "friday_profit_protection", "trailing_stop_failure_emergency"
     ]
     
     if reason in time_based_reasons:
@@ -3236,7 +3883,8 @@ def execute_exit(symbol: str, exit_price: float, reason: str) -> None:
             "proactive_stop": "Proactive stop (within 2 ticks)",
             "early_profit_lock": "Early profit lock in flatten mode",
             "friday_weekend_protection": "Friday 3 PM weekend protection",
-            "friday_profit_protection": "Friday 2 PM profit protection"
+            "friday_profit_protection": "Friday 2 PM profit protection",
+            "trailing_stop_failure_emergency": "Trailing stop update failed - emergency exit"
         }
         
         log_time_based_action(
