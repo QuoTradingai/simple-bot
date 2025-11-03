@@ -29,7 +29,10 @@ except ImportError:
 # Check if in backtest mode via environment variable
 _backtest_mode = os.getenv("BOT_BACKTEST_MODE", "false").lower() == "true"
 _bot_config = load_config(backtest_mode=_backtest_mode)
-_bot_config.validate()  # Validate configuration at startup
+
+# Only validate if not importing for live mode (live mode will validate after loading .env)
+if _backtest_mode or os.getenv("TOPSTEP_API_TOKEN"):
+    _bot_config.validate()  # Validate configuration at startup
 
 # Convert BotConfiguration to dictionary for backward compatibility with existing code
 CONFIG: Dict[str, Any] = _bot_config.to_dict()

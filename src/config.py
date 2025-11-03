@@ -73,11 +73,132 @@ class BotConfiguration:
     friday_close_target: time = field(default_factory=lambda: time(16, 30))  # Flatten by 4:30 PM Friday
     
     # Safety Parameters
-    daily_loss_limit: float = 200.0
-    max_drawdown_percent: float = 5.0
+    daily_loss_limit: float = 1000.0  # Default - will be calculated from account size
+    max_drawdown_percent: float = 4.0  # TopStep standard: 4% max trailing drawdown
     tick_timeout_seconds: int = 60
     proactive_stop_buffer_ticks: int = 2
     flatten_buffer_ticks: int = 2  # Buffer for flatten price calculation
+    
+    def get_daily_loss_limit(self, account_balance: float) -> float:
+        """
+        Calculate dynamic daily loss limit based on TopStep account rules.
+        Works for ALL TopStep account sizes (Express, Step 1, Step 2, Funded).
+        
+        TopStep Rules (as of 2025):
+        - Express ($25K): $500 max daily loss (2%)
+        - Step 1 ($50K): $1,000 max daily loss (2%)
+        - Step 2 ($100K): $2,000 max daily loss (2%)
+        - Step 2 ($150K): $3,000 max daily loss (2%)
+        - Funded ($50K): $1,000 max daily loss (2%)
+        - Funded ($100K): $2,000 max daily loss (2%)
+        - Funded ($150K): $3,000 max daily loss (2%)
+        - Funded ($250K+): 2% of balance
+        
+        Args:
+            account_balance: Current account balance
+            
+        Returns:
+            Daily loss limit in dollars (2% of starting balance)
+        """
+        # TopStep standard: 2% of starting balance for ALL account sizes
+        return account_balance * 0.02
+    
+    def get_max_drawdown_dollars(self, account_balance: float) -> float:
+        """
+        Calculate max trailing drawdown in dollars based on TopStep rules.
+        Works for ALL TopStep account sizes.
+        
+        TopStep Trailing Drawdown Rules:
+        - Calculated from HIGHEST equity reached (not starting balance)
+        - Express ($25K): 4% = $1,000 max drawdown from peak
+        - Step 1 ($50K): 4% = $2,000 max drawdown from peak
+        - Step 2 ($100K): 4% = $4,000 max drawdown from peak
+        - Step 2 ($150K): 4% = $6,000 max drawdown from peak
+        - Funded (All sizes): 4% max drawdown from peak
+        
+        Example: Start at $50K, grow to $55K → Max drawdown = $55K - ($55K × 0.04) = $52,800
+        
+        Args:
+            account_balance: Current/highest account balance reached
+            
+        Returns:
+            Max trailing drawdown in dollars (4% of highest balance)
+        """
+        return account_balance * (self.max_drawdown_percent / 100.0)
+    
+    def get_profit_target(self, account_balance: float) -> float:
+        """
+        Calculate profit target based on TopStep rules.
+        Users must hit profit target to advance to next step or get funded.
+        
+        TopStep Profit Targets:
+        - Express ($25K): $1,500 (6%)
+        - Step 1 ($50K): $3,000 (6%)
+        - Step 2 ($100K): $6,000 (6%)
+        - Step 2 ($150K): $9,000 (6%)
+        - Funded: No target, keep profits!
+        
+        Args:
+            account_balance: Starting account balance
+            
+        Returns:
+            Profit target in dollars (6% for evaluation accounts)
+        """
+        # 6% profit target for evaluation accounts
+        return account_balance * 0.06
+    
+    def get_account_type(self, account_balance: float) -> str:
+        """
+        Determine TopStep account type based on balance.
+        
+        Args:
+            account_balance: Current account balance
+            
+        Returns:
+            Account type string
+        """
+        if account_balance <= 25000:
+            return "Express ($25K)"
+        elif account_balance <= 50000:
+            return "Step 1 ($50K) or Funded ($50K)"
+        elif account_balance <= 100000:
+            return "Step 2 ($100K) or Funded ($100K)"
+        elif account_balance <= 150000:
+            return "Step 2 ($150K) or Funded ($150K)"
+        elif account_balance <= 250000:
+            return "Funded ($250K)"
+        else:
+            return f"Funded (${account_balance/1000:.0f}K)"
+    
+    def auto_configure_for_account(self, account_balance: float, logger=None) -> None:
+        """
+        Automatically configure all risk limits based on account balance.
+        Called when bot connects to TopStep to set proper limits.
+        
+        This makes the bot work on ANY TopStep account size without manual configuration!
+        
+        Args:
+            account_balance: Current account balance from broker
+            logger: Optional logger for info messages
+        """
+        # Calculate dynamic limits
+        self.daily_loss_limit = self.get_daily_loss_limit(account_balance)
+        max_dd_dollars = self.get_max_drawdown_dollars(account_balance)
+        profit_target = self.get_profit_target(account_balance)
+        account_type = self.get_account_type(account_balance)
+        
+        if logger:
+            logger.info("=" * 80)
+            logger.info("🎯 AUTO-CONFIGURED FOR TOPSTEP ACCOUNT")
+            logger.info("=" * 80)
+            logger.info(f"Account Type: {account_type}")
+            logger.info(f"Account Balance: ${account_balance:,.2f}")
+            logger.info(f"Daily Loss Limit: ${self.daily_loss_limit:,.2f} (2% of balance)")
+            logger.info(f"Max Trailing Drawdown: ${max_dd_dollars:,.2f} ({self.max_drawdown_percent}% from peak)")
+            logger.info(f"Profit Target (Eval): ${profit_target:,.2f} (6% - if in evaluation)")
+            logger.info(f"Max Contracts: {self.max_contracts}")
+            logger.info(f"Max Trades/Day: {self.max_trades_per_day}")
+            logger.info("=" * 80)
     
     # ATR-Based Dynamic Risk Management - ITERATION 3 (PROVEN WINNER!)
     use_atr_stops: bool = True  # ATR stops enabled

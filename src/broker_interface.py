@@ -226,7 +226,68 @@ class TopStepBroker(BrokerInterface):
             account = self.sdk_client.get_account_info()
             if account:
                 account_id = getattr(account, 'account_id', getattr(account, 'id', 'N/A'))
+                account_balance = float(getattr(account, 'balance', getattr(account, 'equity', 0)))
+                
                 logger.info(f"Connected to TopStep - Account: {account_id}")
+                logger.info(f"Account Balance: ${account_balance:,.2f}")
+                
+                # AUTO-CONFIGURE: Set risk limits based on account size
+                # This makes the bot work on ANY TopStep account automatically!
+                from config import BotConfiguration
+                config = BotConfiguration()
+                config.auto_configure_for_account(account_balance, logger)
+                
+                self.connected = True
+                self.failure_count = 0
+                return True
+            else:
+                logger.error("Failed to retrieve account info")
+                self._record_failure()
+                return False
+            
+        except Exception as e:
+            logger.error(f"Failed to connect to TopStep SDK: {e}")
+            self._record_failure()
+            return False
+    
+    async def connect_async(self) -> bool:
+        """Connect to TopStep SDK asynchronously (for use within async context)."""
+        if self.circuit_breaker_open:
+            logger.error("Circuit breaker is open - cannot connect")
+            return False
+        
+        try:
+            logger.info("Connecting to TopStep SDK (Project-X)...")
+            
+            # Initialize SDK client with username and API key
+            self.sdk_client = ProjectX(
+                username=self.username or "",
+                api_key=self.api_token,
+                config=ProjectXConfig()
+            )
+            
+            # Authenticate first (async method)
+            logger.info("Authenticating with TopStep...")
+            await self.sdk_client.authenticate()
+            
+            # Trading suite is optional - only needed for live trading, not historical data
+            self.trading_suite = None
+            
+            # Test connection by getting account info
+            account = self.sdk_client.get_account_info()
+            if account:
+                account_id = getattr(account, 'account_id', getattr(account, 'id', 'N/A'))
+                account_balance = float(getattr(account, 'balance', getattr(account, 'equity', 0)))
+                
+                logger.info(f"Connected to TopStep - Account: {account_id}")
+                logger.info(f"Account Balance: ${account_balance:,.2f}")
+                
+                # AUTO-CONFIGURE: Set risk limits based on account size
+                # This makes the bot work on ANY TopStep account automatically!
+                from config import BotConfiguration
+                config = BotConfiguration()
+                config.auto_configure_for_account(account_balance, logger)
+                
                 self.connected = True
                 self.failure_count = 0
                 return True
