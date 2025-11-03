@@ -104,7 +104,7 @@ class HistoricalDataLoader:
     def load_tick_data(self, symbol: str) -> List[Dict[str, Any]]:
         """
         Load tick data from CSV file.
-        Expected CSV format: timestamp,price,volume
+        Expected CSV format: timestamp,price,size (or volume)
         
         Args:
             symbol: Instrument symbol
@@ -113,11 +113,19 @@ class HistoricalDataLoader:
             List of tick dictionaries
         """
         ticks = []
-        filepath = os.path.join(self.config.data_path, f"{symbol}_ticks.csv")
         
+        # Try enhanced tick data first (has realistic intra-bar price movement)
+        filepath = os.path.join(self.config.data_path, f"{symbol}_ticks_enhanced.csv")
         if not os.path.exists(filepath):
-            self.logger.warning(f"Tick data file not found: {filepath}")
-            return ticks
+            # Fall back to regular tick data
+            filepath = os.path.join(self.config.data_path, f"{symbol}_ticks.csv")
+            if not os.path.exists(filepath):
+                self.logger.warning(f"Tick data file not found: {filepath}")
+                return ticks
+            else:
+                self.logger.info(f"Using regular tick data (enhanced not available)")
+        else:
+            self.logger.info(f"Using ENHANCED tick data for realistic ATR calculation")
             
         try:
             start_date, end_date = self._normalize_date_range()
@@ -130,13 +138,15 @@ class HistoricalDataLoader:
                     
                     # Filter by date range
                     if start_date <= timestamp <= end_date:
+                        # Handle both 'size' and 'volume' column names
+                        volume = int(row.get('size', row.get('volume', 1)))
                         ticks.append({
                             'timestamp': timestamp,
                             'price': float(row['price']),
-                            'volume': int(row['volume'])
+                            'volume': volume
                         })
                         
-            self.logger.info(f"Loaded {len(ticks)} ticks for {symbol}")
+            self.logger.info(f"Loaded {len(ticks):,} ticks for {symbol}")
             
         except Exception as e:
             self.logger.error(f"Error loading tick data: {e}")
@@ -187,6 +197,58 @@ class HistoricalDataLoader:
         except Exception as e:
             self.logger.error(f"Error loading bar data: {e}")
             
+        return bars
+    
+    def _aggregate_ticks_to_bars(self, ticks: List[Dict[str, Any]], timeframe: str = "1min") -> List[Dict[str, Any]]:
+        """
+        Aggregate tick data into OHLCV bars.
+        
+        Args:
+            ticks: List of tick dictionaries with 'timestamp', 'price', 'volume'
+            timeframe: Timeframe for aggregation (e.g., "1min", "5min", "15min")
+            
+        Returns:
+            List of bar dictionaries with OHLCV data
+        """
+        if not ticks:
+            return []
+        
+        # Parse timeframe
+        interval_minutes = int(timeframe.replace("min", ""))
+        bars = []
+        current_bar = None
+        
+        for tick in ticks:
+            tick_time = tick['timestamp']
+            
+            # Round timestamp to bar interval
+            bar_time = tick_time.replace(second=0, microsecond=0)
+            bar_time = bar_time.replace(minute=(bar_time.minute // interval_minutes) * interval_minutes)
+            
+            # Start new bar if needed
+            if current_bar is None or current_bar['timestamp'] != bar_time:
+                if current_bar is not None:
+                    bars.append(current_bar)
+                
+                current_bar = {
+                    'timestamp': bar_time,
+                    'open': tick['price'],
+                    'high': tick['price'],
+                    'low': tick['price'],
+                    'close': tick['price'],
+                    'volume': tick['volume']
+                }
+            else:
+                # Update current bar
+                current_bar['high'] = max(current_bar['high'], tick['price'])
+                current_bar['low'] = min(current_bar['low'], tick['price'])
+                current_bar['close'] = tick['price']
+                current_bar['volume'] += tick['volume']
+        
+        # Add final bar
+        if current_bar is not None:
+            bars.append(current_bar)
+        
         return bars
     
     def validate_data_quality(self, data: List[Dict[str, Any]]) -> Tuple[bool, List[str]]:
@@ -568,13 +630,29 @@ class BacktestEngine:
         """
         self.logger.info(f"\nBacktesting {symbol}...")
         
-        # Load bar data (primary mode)
-        bars_1min = self.data_loader.load_bar_data(symbol, "1min")
-        bars_15min = self.data_loader.load_bar_data(symbol, "15min")
-        
-        if len(bars_1min) == 0:
-            self.logger.warning(f"No bar data available for {symbol}")
-            return
+        # Load data based on replay mode
+        if self.config.use_tick_data:
+            # TICK-BY-TICK MODE: Load actual tick data
+            ticks = self.data_loader.load_tick_data(symbol)
+            if len(ticks) == 0:
+                self.logger.warning(f"No tick data available for {symbol}")
+                return
+            self.logger.info(f"Running TICK-BY-TICK replay with {len(ticks):,} actual ticks")
+            
+            # Still load bar data for higher timeframe analysis
+            bars_15min = self.data_loader.load_bar_data(symbol, "15min")
+            
+            # Convert ticks to 1-min bars for compatibility with strategy
+            bars_1min = self.data_loader._aggregate_ticks_to_bars(ticks, "1min")
+            self.logger.info(f"Aggregated {len(ticks):,} ticks into {len(bars_1min)} 1-minute bars")
+        else:
+            # BAR-BY-BAR MODE: Load pre-aggregated bars (default)
+            bars_1min = self.data_loader.load_bar_data(symbol, "1min")
+            bars_15min = self.data_loader.load_bar_data(symbol, "15min")
+            
+            if len(bars_1min) == 0:
+                self.logger.warning(f"No bar data available for {symbol}")
+                return
             
         # Validate data quality
         is_valid, issues = self.data_loader.validate_data_quality(bars_1min)

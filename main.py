@@ -276,18 +276,16 @@ def run_backtest_with_params(symbol, days, initial_equity, params, return_bars=F
             
             for bar in bars_1min:
                 timestamp = bar['timestamp']
-                price = bar['close']
-                volume = bar['volume']
                 timestamp_ms = int(timestamp.timestamp() * 1000)
                 
                 # Check for new trading day
                 timestamp_et = timestamp.astimezone(et)
                 check_daily_reset(symbol, timestamp_et)
                 
-                # Process through bot
-                on_tick(symbol, price, volume, timestamp_ms)
-                check_for_signals(symbol)
-                check_exit_conditions(symbol)
+                # CRITICAL FIX: Inject complete OHLCV bar to preserve high/low ranges for ATR
+                # This is necessary for adaptive exits to calculate volatility correctly
+                from vwap_bounce_bot import inject_complete_bar
+                inject_complete_bar(symbol, bar)
                 
                 # Update engine with bot position
                 if symbol in state and 'position' in state[symbol]:

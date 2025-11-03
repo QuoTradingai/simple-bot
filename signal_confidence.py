@@ -262,35 +262,44 @@ class SignalConfidenceRL:
         # EXPANDED RANGE: Test lower thresholds (30%, 35%, 40%) to capture more trades
         threshold_results = {}
         
+        # OPTIMIZATION: Pre-calculate confidences once instead of for each threshold
+        # This avoids O(n²) complexity by doing the expensive work upfront
+        experience_confidences = []
+        for exp in self.experiences:
+            if not exp.get('action', {}).get('took_trade', False):
+                continue  # Skip experiences where trade wasn't taken
+            
+            # Calculate what confidence this trade would have had
+            # (based on similar past trades at the time)
+            state = exp['state']
+            similar_before = [
+                e for e in self.experiences 
+                if e['timestamp'] < exp['timestamp'] and 
+                   abs(e['state'].get('rsi', 50) - state.get('rsi', 50)) < 10 and
+                   abs(e['state'].get('vwap_distance', 1.0) - state.get('vwap_distance', 1.0)) < 0.5 and
+                   e['state'].get('side') == state.get('side')
+            ]
+            
+            if len(similar_before) < 5:
+                continue  # Not enough similar trades to calculate confidence
+            
+            # Calculate win rate of similar trades
+            wins = sum(1 for e in similar_before if e['reward'] > 0)
+            confidence = wins / len(similar_before) if similar_before else 0.5
+            
+            experience_confidences.append({
+                'confidence': confidence,
+                'reward': exp['reward']
+            })
+        
+        # Now test each threshold quickly using pre-calculated confidences
         for test_threshold in [0.0, 0.1, 0.2, 0.25, 0.3, 0.35, 0.4, 0.45, 0.5, 0.55, 0.6, 0.65, 0.7, 0.75, 0.8]:
             trades_at_threshold = []
             
-            # Simulate: if we had used this threshold in the past, which trades would we have taken?
-            for exp in self.experiences:
-                if not exp.get('action', {}).get('took_trade', False):
-                    continue  # Skip experiences where trade wasn't taken
-                
-                # Calculate what confidence this trade would have had
-                # (based on similar past trades at the time)
-                state = exp['state']
-                similar_before = [
-                    e for e in self.experiences 
-                    if e['timestamp'] < exp['timestamp'] and 
-                       abs(e['state'].get('rsi', 50) - state.get('rsi', 50)) < 10 and
-                       abs(e['state'].get('vwap_distance', 1.0) - state.get('vwap_distance', 1.0)) < 0.5 and
-                       e['state'].get('side') == state.get('side')
-                ]
-                
-                if len(similar_before) < 5:
-                    continue  # Not enough similar trades to calculate confidence
-                
-                # Calculate win rate of similar trades
-                wins = sum(1 for e in similar_before if e['reward'] > 0)
-                confidence = wins / len(similar_before) if similar_before else 0.5
-                
-                # Would we have taken this trade with the test threshold?
-                if confidence >= test_threshold:
-                    trades_at_threshold.append(exp['reward'])
+            # Would we have taken this trade with the test threshold?
+            for exp_conf in experience_confidences:
+                if exp_conf['confidence'] >= test_threshold:
+                    trades_at_threshold.append(exp_conf['reward'])
             
             # Calculate expected value at this threshold
             if len(trades_at_threshold) >= 10:  # Need minimum sample

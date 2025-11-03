@@ -696,6 +696,34 @@ def update_1min_bar(symbol: str, price: float, volume: int, dt: datetime) -> Non
             check_exit_conditions(symbol)
 
 
+def inject_complete_bar(symbol: str, bar: Dict[str, Any]) -> None:
+    """
+    Inject a complete OHLCV bar directly (for backtesting with historical bars).
+    This preserves accurate high/low ranges for ATR calculation.
+    
+    Args:
+        symbol: Instrument symbol
+        bar: Complete bar dict with timestamp, open, high, low, close, volume
+    """
+    # DEBUG: Check what we're getting
+    if len(state[symbol]["bars_1min"]) == 0:  # First bar only
+        logger.info(f"[INJECT_BAR] First bar: H={bar.get('high', 'MISSING'):.2f} L={bar.get('low', 'MISSING'):.2f}")
+    
+    # Finalize any pending bar first
+    if state[symbol]["current_1min_bar"] is not None:
+        state[symbol]["bars_1min"].append(state[symbol]["current_1min_bar"])
+        state[symbol]["current_1min_bar"] = None
+    
+    # Add the complete bar with proper OHLC
+    state[symbol]["bars_1min"].append(bar)
+    
+    # Update VWAP and check conditions
+    calculate_vwap(symbol)
+    check_exit_conditions(symbol)
+    check_for_signals(symbol)
+
+
+
 def update_15min_bar(symbol: str, price: float, volume: int, dt: datetime) -> None:
     """
     Update or create 15-minute bars for trend filter.
@@ -1797,10 +1825,10 @@ def validate_entry_price_still_valid(symbol: str, signal_price: float, side: str
         # PRICE IS GOOD - GO!
         if is_acceptable:
             if check_count > 1:
-                logger.info(f"  ✓ Price validation passed after {elapsed:.1f}s wait (checked {check_count}x)")
-                logger.info(f"    Signal: ${signal_price:.2f} → Current: ${current_price:.2f} ({price_move_ticks:+.1f} ticks)")
+                logger.info(f"  [OK] Price validation passed after {elapsed:.1f}s wait (checked {check_count}x)")
+                logger.info(f"    Signal: ${signal_price:.2f} -> Current: ${current_price:.2f} ({price_move_ticks:+.1f} ticks)")
             else:
-                logger.info(f"  ✓ Price validation passed: ${signal_price:.2f} → ${current_price:.2f} ({price_move_ticks:+.1f} ticks)")
+                logger.info(f"  [OK] Price validation passed: ${signal_price:.2f} -> ${current_price:.2f} ({price_move_ticks:+.1f} ticks)")
             return True, "Price acceptable", current_price
         
         # Price BAD - should we wait for it to come back?
@@ -1869,7 +1897,7 @@ def handle_partial_fill(symbol: str, side: str, expected_qty: int, timeout_secon
         
         if fill_ratio >= min_acceptable_fill_ratio:
             # Acceptable partial fill - work with it
-            logger.info(f"  ✓ Accepting partial fill ({fill_ratio:.0%})")
+            logger.info(f"  [OK] Accepting partial fill ({fill_ratio:.0%})")
             return actual_filled, False
         else:
             # Unacceptable partial fill - close it
@@ -1935,28 +1963,28 @@ def place_entry_order_with_retry(symbol: str, side: str, contracts: int,
                             )
                             
                             if was_filled:
-                                logger.info(f"  ✅ Queue monitor: {queue_reason}")
+                                logger.info(f"  [FILLED] Queue monitor: {queue_reason}")
                                 return order, limit_price, "passive"
                             else:
-                                logger.warning(f"  ⚠️ Queue monitor: {queue_reason}")
+                                logger.warning(f"  [WARN] Queue monitor: {queue_reason}")
                                 
                                 if queue_reason == "timeout" and attempt < max_retries:
                                     # Timeout - switch to aggressive
-                                    logger.info(f"  ⚡ Switching to aggressive (market) entry")
+                                    logger.info(f"  [SWITCH] Switching to aggressive (market) entry")
                                     order_params['strategy'] = 'aggressive'
                                     order_params['limit_price'] = order_params.get('fallback_price', limit_price)
                                     continue
                                 elif queue_reason == "price_moved_away" and attempt < max_retries:
                                     # Price moved - retry with new price
-                                    logger.info(f"  🔄 Reassessing entry with updated quote")
+                                    logger.info(f"  [RETRY] Reassessing entry with updated quote")
                                     time.sleep(0.5)
                                     continue
                                 
                                 # Failed - move to retry
-                                logger.warning(f"  ❌ Attempt {attempt}: Queue monitoring failed")
+                                logger.warning(f"  [FAIL] Attempt {attempt}: Queue monitoring failed")
                                 
                         except Exception as e:
-                            logger.error(f"  ❌ Queue monitoring error: {e}")
+                            logger.error(f"  [ERROR] Queue monitoring error: {e}")
                             # Fall through to regular passive fill handling
                     
                     else:
@@ -1966,10 +1994,10 @@ def place_entry_order_with_retry(symbol: str, side: str, contracts: int,
                         )
                         
                         if is_complete:
-                            logger.info(f"  ✅ Complete fill at ${limit_price:.2f}")
+                            logger.info(f"  [FILLED] Complete fill at ${limit_price:.2f}")
                             return order, limit_price, "passive"
                         elif actual_filled > 0:
-                            logger.warning(f"  ⚠️  Partial fill: {actual_filled}/{contracts} contracts")
+                            logger.warning(f"  [PARTIAL] Partial fill: {actual_filled}/{contracts} contracts")
                             return order, limit_price, "passive_partial"
                     
                     # Check for fill (fallback)
@@ -1978,14 +2006,14 @@ def place_entry_order_with_retry(symbol: str, side: str, contracts: int,
                     )
                     
                     if is_complete:
-                        logger.info(f"  ✅ Complete fill at ${limit_price:.2f}")
+                        logger.info(f"  [FILLED] Complete fill at ${limit_price:.2f}")
                         return order, limit_price, "passive"
                     elif actual_filled > 0:
-                        logger.warning(f"  ⚠️  Partial fill: {actual_filled}/{contracts} contracts")
+                        logger.warning(f"  [PARTIAL] Partial fill: {actual_filled}/{contracts} contracts")
                         return order, limit_price, "passive_partial"
                     
                     # Not filled - retry with better price if attempts remain
-                    logger.warning(f"  ❌ Attempt {attempt}: Passive not filled")
+                    logger.warning(f"  [FAIL] Attempt {attempt}: Passive not filled")
                     
                     if attempt < max_retries:
                         # Jump queue by 1 tick
@@ -1994,16 +2022,16 @@ def place_entry_order_with_retry(symbol: str, side: str, contracts: int,
                         else:
                             order_params['limit_price'] -= tick_size
                         
-                        logger.info(f"  🔄 Retry with improved price: ${order_params['limit_price']:.2f}")
+                        logger.info(f"  [RETRY] Retry with improved price: ${order_params['limit_price']:.2f}")
                         time.sleep(0.5)  # Brief pause before retry
                         continue
                 
                 # Order placement failed
-                logger.error(f"  ❌ Attempt {attempt}: Order placement failed")
+                logger.error(f"  [ERROR] Attempt {attempt}: Order placement failed")
                 
             elif order_params['strategy'] == 'aggressive':
                 limit_price = order_params['limit_price']
-                logger.info(f"  ⚡ Aggressive Entry: ${limit_price:.2f} (guaranteed fill)")
+                logger.info(f"  [AGGRESSIVE] Aggressive Entry: ${limit_price:.2f} (guaranteed fill)")
                 
                 order = place_limit_order(symbol, order_side, contracts, limit_price)
                 
@@ -2012,10 +2040,10 @@ def place_entry_order_with_retry(symbol: str, side: str, contracts: int,
                     time.sleep(1)  # Brief wait to confirm fill
                     actual_filled = get_position_quantity(symbol)
                     if abs(actual_filled) >= contracts:
-                        logger.info(f"  ✅ Aggressive fill at ${limit_price:.2f}")
+                        logger.info(f"  [FILLED] Aggressive fill at ${limit_price:.2f}")
                         return order, limit_price, "aggressive"
                     else:
-                        logger.warning(f"  ⚠️  Aggressive order placed but not filled yet")
+                        logger.warning(f"  [PARTIAL] Aggressive order placed but not filled yet")
                         # Still return it, assume it will fill
                         return order, limit_price, "aggressive"
                 
@@ -2231,7 +2259,7 @@ def execute_entry(symbol: str, side: str, entry_price: float) -> None:
                 logger.error("❌ Failed to place entry after retries - TRADE SKIPPED")
                 return
             
-            logger.info(f"  ✓ Order placed successfully using {order_type_used} strategy")
+            logger.info(f"  [OK] Order placed successfully using {order_type_used} strategy")
             
         except Exception as e:
             logger.error(f"Error using bid/ask manager for entry: {e}")
@@ -2389,7 +2417,7 @@ def execute_entry(symbol: str, side: str, entry_price: float) -> None:
     
     if stop_order:
         state[symbol]["position"]["stop_order_id"] = stop_order.get("order_id")
-        logger.info(f"  ✅ Stop loss placed and validated: ${stop_price:.2f}")
+        logger.info(f"  [OK] Stop loss placed and validated: ${stop_price:.2f}")
         logger.info(f"     Stop Order ID: {stop_order.get('order_id')}")
     else:
         # CRITICAL: Stop order rejected - this is DANGEROUS!
@@ -2727,6 +2755,7 @@ def check_breakeven_protection(symbol: str, current_price: float) -> None:
             if adaptive_manager is None:
                 from adaptive_exits import AdaptiveExitManager
                 adaptive_manager = AdaptiveExitManager(CONFIG)
+                logger.info(f"✅ Adaptive Exit Manager initialized")
             
             from adaptive_exits import get_adaptive_exit_params
             
@@ -2741,12 +2770,12 @@ def check_breakeven_protection(symbol: str, current_price: float) -> None:
             breakeven_threshold_ticks = adaptive_params["breakeven_threshold_ticks"]
             breakeven_offset_ticks = adaptive_params["breakeven_offset_ticks"]
             
-            logger.info(f" ADAPTIVE BREAKEVEN: {breakeven_threshold_ticks}t threshold "
-                       f"| Regime: {adaptive_params['market_regime'].upper()} "
-                       f"| ATR: {adaptive_params['current_volatility_atr']:.2f} "
-                       f"| Aggressive: {adaptive_params['is_aggressive_mode']}")
+            # STORE exit params for learning when trade closes
+            position["exit_params_used"] = adaptive_params
+            
         except Exception as e:
-            logger.warning(f"Adaptive exits failed, using static params: {e}")
+            logger.error(f"❌ Adaptive exits ERROR: {e}", exc_info=True)
+            logger.warning(f"⚠️  Falling back to static params")
             breakeven_threshold_ticks = CONFIG.get("breakeven_profit_threshold_ticks", 8)
             breakeven_offset_ticks = CONFIG.get("breakeven_stop_offset_ticks", 1)
     else:
@@ -2863,11 +2892,12 @@ def check_trailing_stop(symbol: str, current_price: float) -> None:
             trailing_distance_ticks = adaptive_params["trailing_distance_ticks"]
             min_profit_ticks = adaptive_params["trailing_min_profit_ticks"]
             
-            logger.info(f" ADAPTIVE TRAILING: {trailing_distance_ticks}t distance, {min_profit_ticks}t min "
-                       f"| Regime: {adaptive_params['market_regime'].upper()} "
-                       f"| Aggressive: {adaptive_params['is_aggressive_mode']}")
+            # STORE exit params for learning when trade closes
+            position["exit_params_used"] = adaptive_params
+            
         except Exception as e:
-            logger.warning(f"Adaptive exits failed, using static params: {e}")
+            logger.error(f"❌ Adaptive trailing ERROR: {e}", exc_info=True)
+            logger.warning(f"⚠️  Falling back to static trailing params")
             trailing_distance_ticks = CONFIG.get("trailing_stop_distance_ticks", 8)
             min_profit_ticks = CONFIG.get("trailing_stop_min_profit_ticks", 12)
     else:
@@ -3777,6 +3807,8 @@ def execute_exit(symbol: str, exit_price: float, reason: str) -> None:
         exit_price: Exit price
         reason: Reason for exit (stop_loss, target_reached, signal_reversal, etc.)
     """
+    global adaptive_manager  # Declare at top of function
+    
     position = state[symbol]["position"]
     
     if not position["active"]:
@@ -3798,7 +3830,6 @@ def execute_exit(symbol: str, exit_price: float, reason: str) -> None:
     # ADAPTIVE EXIT MANAGEMENT - Record trade result for streak tracking
     if CONFIG.get("adaptive_exits_enabled", False):
         try:
-            global adaptive_manager
             if adaptive_manager is None:
                 from adaptive_exits import AdaptiveExitManager
                 adaptive_manager = AdaptiveExitManager(CONFIG)
@@ -3854,7 +3885,41 @@ def execute_exit(symbol: str, exit_price: float, reason: str) -> None:
                     del state[symbol]["entry_rl_confidence"]
             
         except Exception as e:
-            logger.debug(f"Streak tracking update skipped: {e}")
+            logger.debug(f"RL outcome recording failed: {e}")
+    
+    # ADAPTIVE EXIT LEARNING - Record exit parameters and outcome
+    if CONFIG.get("adaptive_exits_enabled", False):
+        try:
+            if adaptive_manager is not None and hasattr(adaptive_manager, 'record_exit_outcome'):
+                # Get exit parameters that were used
+                if "exit_params_used" in position:
+                    exit_params = position["exit_params_used"]
+                    regime = exit_params.get("market_regime", "UNKNOWN")
+                    
+                    # Calculate trade duration
+                    entry_time = position.get("entry_time")
+                    duration_minutes = 0
+                    if entry_time:
+                        duration = exit_time - entry_time
+                        duration_minutes = duration.total_seconds() / 60
+                    
+                    # Record for learning
+                    adaptive_manager.record_exit_outcome(
+                        regime=regime,
+                        exit_params=exit_params,
+                        trade_outcome={
+                            'pnl': pnl,
+                            'duration': duration_minutes,
+                            'exit_reason': reason,
+                            'side': position["side"],
+                            'contracts': position["quantity"],
+                            'win': pnl > 0
+                        }
+                    )
+                    
+                    logger.info(f"[EXIT RL] Learned {regime} exit -> ${pnl:+.2f} in {duration_minutes:.1f}min")
+        except Exception as e:
+            logger.debug(f"Exit learning failed: {e}")
     
     # Log time-based exits with detailed audit trail
     time_based_reasons = [
