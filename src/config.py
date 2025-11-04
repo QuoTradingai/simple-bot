@@ -20,8 +20,8 @@ class BotConfiguration:
     
     # Trading Parameters
     risk_per_trade: float = 0.012  # 1.2% of account per trade (increased for more profit)
-    max_contracts: int = 3
-    max_trades_per_day: int = 9  # ITERATION 3 - proven optimal with Brain 2
+    max_contracts: int = 3  # USER CONFIGURABLE - customers can adjust
+    max_trades_per_day: int = 9  # USER CONFIGURABLE - customers can adjust
     risk_reward_ratio: float = 2.0  # Realistic 2:1 for mean reversion with tight stops
     
     # Slippage & Commission - PRODUCTION READY
@@ -170,22 +170,51 @@ class BotConfiguration:
         else:
             return f"Funded (${account_balance/1000:.0f}K)"
     
-    def auto_configure_for_account(self, account_balance: float, logger=None) -> None:
+    def auto_configure_for_account(self, account_balance: float, logger=None, force: bool = False) -> bool:
         """
         Automatically configure all risk limits based on account balance.
-        Called when bot connects to TopStep to set proper limits.
+        Called when bot connects to TopStep or when balance changes significantly.
         
         This makes the bot work on ANY TopStep account size without manual configuration!
+        Ensures 100% compliance with TopStep rules at all times.
+        
+        NOTE: max_contracts and max_trades_per_day are USER CONFIGURABLE and NOT changed here.
+        Only TopStep-mandated risk limits are auto-configured (daily loss, max drawdown).
         
         Args:
             account_balance: Current account balance from broker
             logger: Optional logger for info messages
+            force: Force reconfiguration even if balance seems invalid
+            
+        Returns:
+            True if configuration was successful, False if balance invalid
         """
-        # Calculate dynamic limits
+        # Safety check: Validate balance is reasonable
+        if account_balance <= 0 and not force:
+            if logger:
+                logger.error(f"⚠️ Invalid account balance: ${account_balance:,.2f}")
+                logger.error("Skipping auto-configuration to prevent misconfiguration")
+            return False
+        
+        # Safety check: Prevent extreme values (likely API error)
+        if account_balance > 10_000_000 and not force:  # $10M+ seems wrong for TopStep
+            if logger:
+                logger.warning(f"⚠️ Unusually high balance: ${account_balance:,.2f}")
+                logger.warning("This may be an API error - skipping reconfiguration")
+            return False
+        
+        # Calculate dynamic limits based on TopStep rules
         self.daily_loss_limit = self.get_daily_loss_limit(account_balance)
         max_dd_dollars = self.get_max_drawdown_dollars(account_balance)
         profit_target = self.get_profit_target(account_balance)
         account_type = self.get_account_type(account_balance)
+        
+        # CRITICAL: Update max_drawdown_percent to always be 4% (TopStep standard)
+        # This ensures trailing drawdown is ALWAYS calculated correctly
+        self.max_drawdown_percent = 4.0
+        
+        # NOTE: max_contracts and max_trades_per_day are NOT changed here
+        # Those are user preferences that customers can configure themselves
         
         if logger:
             logger.info("=" * 80)
@@ -193,11 +222,74 @@ class BotConfiguration:
             logger.info("=" * 80)
             logger.info(f"Account Type: {account_type}")
             logger.info(f"Account Balance: ${account_balance:,.2f}")
-            logger.info(f"Daily Loss Limit: ${self.daily_loss_limit:,.2f} (2% of balance)")
-            logger.info(f"Max Trailing Drawdown: ${max_dd_dollars:,.2f} ({self.max_drawdown_percent}% from peak)")
-            logger.info(f"Profit Target (Eval): ${profit_target:,.2f} (6% - if in evaluation)")
-            logger.info(f"Max Contracts: {self.max_contracts}")
-            logger.info(f"Max Trades/Day: {self.max_trades_per_day}")
+            logger.info("")
+            logger.info("TopStep Mandatory Limits (Auto-Configured):")
+            logger.info(f"  Daily Loss Limit: ${self.daily_loss_limit:,.2f} (2% of balance)")
+            logger.info(f"  Max Trailing Drawdown: ${max_dd_dollars:,.2f} ({self.max_drawdown_percent}% from peak)")
+            logger.info(f"  Profit Target (Eval): ${profit_target:,.2f} (6% - if in evaluation)")
+            logger.info("")
+            logger.info("User Configurable Settings (Not Changed):")
+            logger.info(f"  Max Contracts: {self.max_contracts}")
+            logger.info(f"  Max Trades/Day: {self.max_trades_per_day}")
+            logger.info("✅ TopStep compliance rules applied successfully")
+        
+        return True
+    
+    def get_current_risk_limits(self) -> Dict[str, Any]:
+        """
+        Get current risk limits configured for the account.
+        Useful for monitoring and validation.
+        
+        Returns:
+            Dictionary with all current risk parameters
+        """
+        return {
+            "daily_loss_limit": self.daily_loss_limit,
+            "max_drawdown_percent": self.max_drawdown_percent,
+            "max_contracts": self.max_contracts,
+            "max_trades_per_day": self.max_trades_per_day,
+            "risk_per_trade": self.risk_per_trade,
+            "risk_reward_ratio": self.risk_reward_ratio,
+        }
+    
+    def validate_topstep_compliance(self, account_balance: float, logger=None) -> bool:
+        """
+        Validate that current risk limits comply with TopStep rules.
+        
+        Args:
+            account_balance: Current account balance
+            logger: Optional logger for validation messages
+            
+        Returns:
+            True if compliant, False if violations detected
+        """
+        violations = []
+        
+        # Check daily loss limit (must be 2% of balance)
+        expected_daily_loss = self.get_daily_loss_limit(account_balance)
+        if abs(self.daily_loss_limit - expected_daily_loss) > 1.0:  # $1 tolerance
+            violations.append(
+                f"Daily loss limit mismatch: Expected ${expected_daily_loss:,.2f}, "
+                f"Got ${self.daily_loss_limit:,.2f}"
+            )
+        
+        # Check max drawdown (must be 4%)
+        if self.max_drawdown_percent != 4.0:
+            violations.append(
+                f"Max drawdown must be 4% (TopStep rule), got {self.max_drawdown_percent}%"
+            )
+        
+        if violations:
+            if logger:
+                logger.error("⚠️ TOPSTEP COMPLIANCE VIOLATIONS DETECTED:")
+                for violation in violations:
+                    logger.error(f"  - {violation}")
+                logger.error("Auto-reconfiguring to fix violations...")
+            return False
+        
+        if logger:
+            logger.info("✅ All TopStep compliance rules validated successfully")
+        return True
             logger.info("=" * 80)
     
     # ATR-Based Dynamic Risk Management - ITERATION 3 (PROVEN WINNER!)

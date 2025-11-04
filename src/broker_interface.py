@@ -359,6 +359,7 @@ class TopStepBroker(BrokerInterface):
         """
         Get account equity from TopStep.
         Automatically reconfigures risk limits if balance changes significantly.
+        Ensures 100% TopStep compliance at all times.
         """
         if not self.connected or not self.sdk_client:
             logger.error("Cannot get equity: not connected")
@@ -369,7 +370,22 @@ class TopStepBroker(BrokerInterface):
             if account:
                 current_balance = float(account.balance or 0.0)
                 
-                # Check if balance changed significantly (5% threshold)
+                # CRITICAL: Always reconfigure if config doesn't exist (safety net)
+                if not self.config:
+                    logger.warning("⚠️ Config missing - initializing auto-configuration")
+                    from config import BotConfiguration
+                    self.config = BotConfiguration()
+                    if self.config.auto_configure_for_account(current_balance, logger):
+                        self._last_configured_balance = current_balance
+                    return current_balance
+                
+                # Validate TopStep compliance (safety check every balance check)
+                if not self.config.validate_topstep_compliance(current_balance):
+                    logger.warning("⚠️ Compliance violation detected - forcing reconfiguration")
+                    if self.config.auto_configure_for_account(current_balance, logger, force=True):
+                        self._last_configured_balance = current_balance
+                
+                # Check if balance changed significantly (5% threshold for reconfiguration)
                 if self._last_configured_balance > 0:
                     balance_change_pct = abs(current_balance - self._last_configured_balance) / self._last_configured_balance
                     
@@ -381,12 +397,13 @@ class TopStepBroker(BrokerInterface):
                         logger.info(f"Current Balance: ${current_balance:,.2f}")
                         logger.info(f"Change: {balance_change_pct * 100:.1f}%")
                         
-                        # Reconfigure with new balance
-                        if self.config:
-                            self.config.auto_configure_for_account(current_balance, logger)
+                        # Reconfigure with new balance (with safety checks)
+                        if self.config.auto_configure_for_account(current_balance, logger):
                             self._last_configured_balance = current_balance
+                            logger.info("✅ Risk limits updated successfully")
                         else:
-                            logger.warning("Config not available for reconfiguration")
+                            logger.error("❌ Failed to reconfigure - keeping previous limits")
+                            logger.error(f"Still using limits for ${self._last_configured_balance:,.2f} balance")
                 
                 return current_balance
             return 0.0
