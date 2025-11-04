@@ -5100,7 +5100,7 @@ def main() -> None:
             from live_data_recorder import LiveDataRecorder
             logger.info("Initializing live data recorder...")
             live_recorder = LiveDataRecorder(
-                output_dir="live_data_recordings",
+                output_dir="historical_data",  # Save with historical data
                 symbol=CONFIG["instrument"],
                 compress=True,
                 max_file_size_mb=100,

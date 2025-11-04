@@ -21,7 +21,7 @@ class LiveDataRecorder:
     
     def __init__(
         self,
-        output_dir: str = "live_data_recordings",
+        output_dir: str = "historical_data",  # Save with historical data
         symbol: str = "ES",
         compress: bool = True,
         max_file_size_mb: int = 100,
@@ -85,19 +85,6 @@ class LiveDataRecorder:
         self.tick_file_start_time = time.time()
         logger.info(f"[RECORDER] New tick file: {filename}")
     
-    def _should_rotate_tick_file(self) -> bool:
-        """Check if tick file should be rotated"""
-        # Check size
-        if self.tick_file_path.exists():
-            if self.tick_file_path.stat().st_size > self.max_file_size_bytes:
-                return True
-        
-        # Check time
-        if time.time() - self.tick_file_start_time > self.rotation_interval_seconds:
-            return True
-        
-        return False
-    
     def record_tick(
         self,
         bid: float,
@@ -118,6 +105,38 @@ class LiveDataRecorder:
         # Write CSV row: time, bid, ask, last
         try:
             self.csv_writer.writerow([now, bid, ask, last])
+            self.tick_file.flush()  # Ensure data is written immediately
+            self.ticks_recorded += 1
+            
+            # Rotate if needed
+            if self._should_rotate_tick_file():
+                self._rotate_tick_file()
+                
+        except Exception as e:
+            logger.error(f"[RECORDER] Failed to record tick: {e}")
+    
+    def record_tick(
+        self,
+        bid: float,
+        ask: float,
+        last: float,
+        action: str = "",  # Optional: 'BUY', 'SELL', '' for regular ticks
+        **kwargs  # Ignore all other arguments
+    ):
+        """
+        Record a market tick (only essential data)
+        
+        Args:
+            bid: Best bid price
+            ask: Best ask price
+            last: Last traded price
+            action: Optional action taken ('BUY', 'SELL', or empty)
+        """
+        now = time.time()
+        
+        # Write CSV row: time, bid, ask, last, action
+        try:
+            self.csv_writer.writerow([now, bid, ask, last, action])
             self.tick_file.flush()  # Ensure data is written immediately
             self.ticks_recorded += 1
             
