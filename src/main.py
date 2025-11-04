@@ -12,6 +12,10 @@ from datetime import datetime, timedelta
 from typing import List, Dict, Any
 import pytz
 import pandas as pd
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
 
 # Import bot modules
 from config import load_config, log_config

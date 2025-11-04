@@ -120,14 +120,13 @@ def initialize_broker() -> None:
     recovery_manager = ErrorRecoveryManager(CONFIG)
     
     # Create broker using configuration
-    broker = create_broker(_bot_config.api_token)
+    broker = create_broker(_bot_config.api_token, _bot_config.username)
     
-    # Connect with error recovery
-    breaker = recovery_manager.get_circuit_breaker("broker_connection")
-    success, result = breaker.call(broker.connect)
-    
-    if not success:
+    # Connect to broker (initial connection doesn't use circuit breaker)
+    logger.info("Connecting to broker...")
+    if not broker.connect():
         logger.error("Failed to connect to broker")
+        return False
         raise RuntimeError("Broker connection failed")
     
     logger.info("Broker connected successfully")
@@ -670,6 +669,8 @@ def update_1min_bar(symbol: str, price: float, volume: int, dt: datetime) -> Non
         # Finalize previous bar if exists
         if current_bar is not None:
             state[symbol]["bars_1min"].append(current_bar)
+            bar_count = len(state[symbol]["bars_1min"])
+            logger.info(f"[BAR COMPLETED] 1min bar closed | Price: ${current_bar['close']:.2f} | Vol: {current_bar['volume']} | Total bars: {bar_count}")
             # Calculate VWAP after new bar is added
             calculate_vwap(symbol)
             # Check for exit conditions if position is active
@@ -1099,13 +1100,20 @@ def calculate_vwap(symbol: str) -> None:
     state[symbol]["vwap_bands"]["lower_2"] = vwap - (std_dev * band_2_mult)
     state[symbol]["vwap_bands"]["lower_3"] = vwap - (std_dev * band_3_mult)
     
-    logger.debug(f"VWAP: {vwap:.2f}, StdDev: {std_dev:.2f}")
-    logger.debug(f"Bands - U3: {state[symbol]['vwap_bands']['upper_3']:.2f}, "
-                f"U2: {state[symbol]['vwap_bands']['upper_2']:.2f}, "
-                f"U1: {state[symbol]['vwap_bands']['upper_1']:.2f}, "
-                f"L1: {state[symbol]['vwap_bands']['lower_1']:.2f}, "
-                f"L2: {state[symbol]['vwap_bands']['lower_2']:.2f}, "
-                f"L3: {state[symbol]['vwap_bands']['lower_3']:.2f}")
+    # Log VWAP update every 10 bars to show bot is working
+    bar_count = len(bars)
+    if bar_count % 10 == 0:
+        logger.info(f"[VWAP] ${vwap:.2f} | StdDev: ${std_dev:.2f} | Bars: {bar_count} | "
+                   f"U2: ${state[symbol]['vwap_bands']['upper_2']:.2f} | "
+                   f"L2: ${state[symbol]['vwap_bands']['lower_2']:.2f}")
+    else:
+        logger.debug(f"VWAP: {vwap:.2f}, StdDev: {std_dev:.2f}")
+        logger.debug(f"Bands - U3: {state[symbol]['vwap_bands']['upper_3']:.2f}, "
+                    f"U2: {state[symbol]['vwap_bands']['upper_2']:.2f}, "
+                    f"U1: {state[symbol]['vwap_bands']['upper_1']:.2f}, "
+                    f"L1: {state[symbol]['vwap_bands']['lower_1']:.2f}, "
+                    f"L2: {state[symbol]['vwap_bands']['lower_2']:.2f}, "
+                    f"L3: {state[symbol]['vwap_bands']['lower_3']:.2f}")
 
 
 # ============================================================================
@@ -2758,7 +2766,7 @@ def check_breakeven_protection(symbol: str, current_price: float) -> None:
             if adaptive_manager is None:
                 from adaptive_exits import AdaptiveExitManager
                 adaptive_manager = AdaptiveExitManager(CONFIG)
-                logger.info(f"✅ Adaptive Exit Manager initialized")
+                logger.info(f"[SUCCESS] Adaptive Exit Manager initialized")
             
             from adaptive_exits import get_adaptive_exit_params
             
@@ -3685,7 +3693,7 @@ def handle_exit_orders(symbol: str, position: Dict[str, Any], exit_price: float,
                 
                 if current_position == 0:
                     logger.critical("=" * 80)
-                    logger.critical(f"✅ FORCED FLATTEN SUCCESSFUL (Attempt {attempt})")
+                    logger.critical(f"[SUCCESS] FORCED FLATTEN SUCCESSFUL (Attempt {attempt})")
                     logger.critical("=" * 80)
                     return  # SUCCESS - position closed
                 else:
@@ -5055,8 +5063,8 @@ def main() -> None:
     logger.info(SEPARATOR_LINE)
     logger.info(f"Mode: {'DRY RUN' if CONFIG['dry_run'] else 'LIVE TRADING'}")
     logger.info(f"Instrument: {CONFIG['instrument']}")
-    logger.info(f"Entry Window: {CONFIG['entry_window_start']} - {CONFIG['entry_window_end']} ET")
-    logger.info(f"Flatten Mode: {CONFIG['warning_time']} ET")
+    logger.info(f"Entry Window: {CONFIG['entry_start_time']} - {CONFIG['entry_end_time']} ET")
+    logger.info(f"Flatten Mode: {CONFIG['flatten_time']} ET")
     logger.info(f"Force Close: {CONFIG['forced_flatten_time']} ET")
     logger.info(f"Shutdown: {CONFIG['shutdown_time']} ET")
     logger.info(f"Max Trades/Day: {CONFIG['max_trades_per_day']}")
@@ -5085,7 +5093,7 @@ def main() -> None:
     # Fetch historical bars for trend filter initialization
     historical_bars = fetch_historical_bars(
         symbol=symbol,
-        timeframe=CONFIG.get("trend_timeframe", "15min"),
+        timeframe=CONFIG.get("trend_timeframe", 15),
         count=CONFIG.get("trend_filter_period", 20)
     )
     
@@ -5137,21 +5145,19 @@ def main() -> None:
     finally:
         logger.info("Event loop stopped")
         
-        # Print final metrics
-        metrics = event_loop.get_metrics()
-        logger.info("Event Loop Metrics:")
-        logger.info(f"  Total iterations: {metrics['total_iterations']}")
-        logger.info(f"  Events processed: {metrics['events_processed']}")
-        logger.info(f"  Max queue depth: {metrics['max_queue_depth']}")
-        logger.info(f"  Stall count: {metrics['stall_count']}")
+        # Metrics are already logged by event loop's _log_metrics()
+        # No need to call get_metrics() here
 
 
 # ============================================================================
 # EVENT HANDLERS
 # ============================================================================
 
-def handle_tick_event(data: Dict[str, Any]) -> None:
+def handle_tick_event(event) -> None:
     """Handle tick data event from event loop"""
+    # Extract data from Event object
+    data = event.data if hasattr(event, 'data') else event
+    
     symbol = data["symbol"]
     price = data["price"]
     volume = data["volume"]
@@ -5165,9 +5171,10 @@ def handle_tick_event(data: Dict[str, Any]) -> None:
     dt = datetime.fromtimestamp(timestamp_ms / 1000.0, tz=tz)
     bot_status["last_tick_time"] = dt
     
-    # Monitor data feed health
-    if recovery_manager:
-        recovery_manager.data_feed_monitor.record_tick(symbol)
+    # Log tick data periodically (every 100 ticks to avoid spam)
+    tick_count = len(state[symbol]["ticks"])
+    if tick_count % 100 == 0 or tick_count < 5:
+        logger.info(f"[TICK] {symbol} @ ${price:.2f} | Vol: {volume} | Total ticks: {tick_count}")
     
     # Create tick object
     tick = {

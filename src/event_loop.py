@@ -175,13 +175,23 @@ class EventLoop:
         Processes events until shutdown is requested.
         """
         self.running = True
+        self.start_time = time.time()
         logger.info(SEPARATOR_LINE)
         logger.info("EVENT LOOP STARTED")
         logger.info(SEPARATOR_LINE)
         
+        last_status_time = time.time()
+        
         try:
             while self.running and self.bot_status.get("trading_enabled", True):
                 iteration_start = time.time()
+                
+                # Periodic status update (every 60 seconds)
+                if iteration_start - last_status_time > 60:
+                    events_processed = self.metrics["events_processed"]
+                    uptime = iteration_start - self.start_time if hasattr(self, 'start_time') else 0
+                    logger.info(f"[STATUS] Event Loop Active | Events: {events_processed} | Uptime: {int(uptime)}s")
+                    last_status_time = iteration_start
                 
                 # Check for shutdown
                 if self.shutdown_requested:
@@ -369,14 +379,16 @@ class TimerManager:
                             {"time": current_time}
                         )
                 
-                # Check shutdown time
+                # Check shutdown time (only during maintenance window: 4:50 PM - 6:00 PM ET)
                 shutdown_time = self.config.get("shutdown_time")
-                if shutdown_time and self._should_check("shutdown", current_time, 60):
-                    if current_time_only >= shutdown_time:
+                entry_start = self.config.get("entry_start_time")  # 6 PM - when trading resumes
+                if shutdown_time and entry_start and self._should_check("shutdown", current_time, 60):
+                    # Only shutdown if we're in the maintenance window (shutdown_time <= now < entry_start)
+                    if shutdown_time <= current_time_only < entry_start:
                         self.event_loop.post_event(
                             EventType.SHUTDOWN,
                             EventPriority.CRITICAL,
-                            {"time": current_time, "reason": "scheduled_shutdown"}
+                            {"time": current_time, "reason": "maintenance_window"}
                         )
                 
                 # Post periodic time check event

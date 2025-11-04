@@ -57,11 +57,11 @@ class TopStepWebSocketStreamer:
             time.sleep(1)
             
             self.is_connected = True
-            logger.info("✅ Connected to TopStep WebSocket (SignalR Market Hub)")
+            logger.info("[SUCCESS] Connected to TopStep WebSocket (SignalR Market Hub)")
             return True
             
         except Exception as e:
-            logger.error(f"❌ Failed to connect to WebSocket: {e}", exc_info=True)
+            logger.error(f"[ERROR] Failed to connect to WebSocket: {e}", exc_info=True)
             self.is_connected = False
             return False
     
@@ -76,7 +76,7 @@ class TopStepWebSocketStreamer:
     
     def _on_open(self):
         """Called when WebSocket connection opens"""
-        logger.info("🔗 WebSocket connection opened")
+        logger.info("[CONNECTED] WebSocket connection opened")
         self.is_connected = True
     
     def _on_close(self):
@@ -95,7 +95,7 @@ class TopStepWebSocketStreamer:
         elif hasattr(error, '__dict__'):
             error_msg = str(error.__dict__)
         
-        logger.error(f"❌ WebSocket error: {error_msg}")
+        logger.error(f"[ERROR] WebSocket error: {error_msg}")
     
     def _on_quote(self, data):
         """Handle incoming quote data"""
@@ -105,7 +105,7 @@ class TopStepWebSocketStreamer:
             try:
                 # Log first quote to see structure
                 if self.quotes_received == 1:
-                    logger.info(f"📋 First quote data structure: {type(data)} = {data}")
+                    logger.info(f"[DATA] First quote data structure: {type(data)} = {data}")
                 self.on_quote_callback(data)
             except Exception as e:
                 logger.error(f"Error in quote callback: {e}")
@@ -118,7 +118,7 @@ class TopStepWebSocketStreamer:
             try:
                 # Log first trade to see structure
                 if self.trades_received == 1:
-                    logger.info(f"📋 First trade data structure: {type(data)} = {data}")
+                    logger.info(f"[DATA] First trade data structure: {type(data)} = {data}")
                 self.on_trade_callback(data)
             except Exception as e:
                 logger.error(f"Error in trade callback: {e}")
@@ -141,7 +141,7 @@ class TopStepWebSocketStreamer:
             # TopStep uses contract IDs, not symbols
             # The calling code should pass the contract ID
             self.connection.send("SubscribeContractQuotes", [symbol])
-            logger.info(f"✅ Subscribed to quotes for contract {symbol}")
+            logger.info(f"[SUCCESS] Subscribed to quotes for contract {symbol}")
         except Exception as e:
             logger.error(f"Failed to subscribe to quotes: {e}", exc_info=True)
     
@@ -153,7 +153,7 @@ class TopStepWebSocketStreamer:
             # TopStep uses contract IDs, not symbols
             # The calling code should pass the contract ID
             self.connection.send("SubscribeContractTrades", [symbol])
-            logger.info(f"✅ Subscribed to trades for contract {symbol}")
+            logger.info(f"[SUCCESS] Subscribed to trades for contract {symbol}")
         except Exception as e:
             logger.error(f"Failed to subscribe to trades: {e}", exc_info=True)
     
@@ -163,7 +163,7 @@ class TopStepWebSocketStreamer:
         try:
             # Try common SignalR method variations
             self.connection.send("Subscribe", [symbol, "Depth"])
-            logger.info(f"✅ Subscribed to market depth for {symbol}")
+            logger.info(f"[SUCCESS] Subscribed to market depth for {symbol}")
         except Exception as e:
             logger.error(f"Failed to subscribe to depth: {e}", exc_info=True)
             logger.error(f"Failed to subscribe to depth: {e}")

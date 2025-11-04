@@ -223,69 +223,8 @@ class TopStepBroker(BrokerInterface):
             logger.error("Circuit breaker is open - cannot connect")
             return False
         
-        try:
-            logger.info("Connecting to TopStep SDK (Project-X)...")
-            
-            # Initialize SDK client with username and API key
-            self.sdk_client = ProjectX(
-                username=self.username or "",
-                api_key=self.api_token,
-                config=ProjectXConfig()
-            )
-            
-            # Authenticate first (async method needs await)
-            logger.info("Authenticating with TopStep...")
-            asyncio.run(self.sdk_client.authenticate())
-            
-            # Trading suite is optional - only needed for live trading, not historical data
-            self.trading_suite = None
-            
-            # Test connection by getting account info
-            account = self.sdk_client.get_account_info()
-            if account:
-                account_id = getattr(account, 'account_id', getattr(account, 'id', 'N/A'))
-                account_balance = float(getattr(account, 'balance', getattr(account, 'equity', 0)))
-                
-                logger.info(f"Connected to TopStep - Account: {account_id}")
-                logger.info(f"Account Balance: ${account_balance:,.2f}")
-                
-                # AUTO-CONFIGURE: Set risk limits based on account size
-                # This makes the bot work on ANY TopStep account automatically!
-                from config import BotConfiguration
-                config = BotConfiguration()
-                config.auto_configure_for_account(account_balance, logger)
-                
-                # Store config and balance for dynamic reconfiguration
-                self.config = config
-                self._last_configured_balance = account_balance
-                
-                # Initialize WebSocket streamer for live data
-                if TOPSTEP_WEBSOCKET_AVAILABLE:
-                    try:
-                        session_token = self.sdk_client.get_session_token()
-                        if session_token:
-                            logger.info("Initializing WebSocket streamer for live data...")
-                            self.websocket_streamer = TopStepWebSocketStreamer(session_token)
-                            self.websocket_streamer.connect()
-                            logger.info("✅ WebSocket streamer connected - Live tick data ready!")
-                        else:
-                            logger.warning("Failed to get session token - WebSocket streaming unavailable")
-                    except Exception as e:
-                        logger.warning(f"Failed to initialize WebSocket streamer: {e}")
-                        logger.warning("Continuing without live streaming")
-                
-                self.connected = True
-                self.failure_count = 0
-                return True
-            else:
-                logger.error("Failed to retrieve account info")
-                self._record_failure()
-                return False
-            
-        except Exception as e:
-            logger.error(f"Failed to connect to TopStep SDK: {e}")
-            self._record_failure()
-            return False
+        # Use the async version wrapped in asyncio.run
+        return asyncio.run(self.connect_async())
     
     async def connect_async(self) -> bool:
         """Connect to TopStep SDK asynchronously (for use within async context)."""
@@ -305,13 +244,28 @@ class TopStepBroker(BrokerInterface):
             
             # Authenticate first (async method)
             logger.info("Authenticating with TopStep...")
-            await self.sdk_client.authenticate()
+            try:
+                await self.sdk_client.authenticate()
+                logger.info("Authentication successful!")
+                # Give SDK a moment to establish session
+                await asyncio.sleep(0.5)
+            except Exception as auth_error:
+                logger.error(f"Authentication error: {auth_error}")
+                self._record_failure()
+                return False
             
             # Trading suite is optional - only needed for live trading, not historical data
             self.trading_suite = None
             
             # Test connection by getting account info
-            account = self.sdk_client.get_account_info()
+            try:
+                account = self.sdk_client.get_account_info()
+                logger.info(f"Account info retrieved: {account}")
+            except Exception as account_error:
+                logger.error(f"Failed to get account info: {account_error}")
+                self._record_failure()
+                return False
+                
             if account:
                 account_id = getattr(account, 'account_id', getattr(account, 'id', 'N/A'))
                 account_balance = float(getattr(account, 'balance', getattr(account, 'equity', 0)))
@@ -328,6 +282,22 @@ class TopStepBroker(BrokerInterface):
                 # Store config and balance for dynamic reconfiguration
                 self.config = config
                 self._last_configured_balance = account_balance
+                
+                # Initialize WebSocket streamer for real-time market data
+                try:
+                    session_token = self.sdk_client.get_session_token()
+                    if session_token:
+                        logger.info("Initializing WebSocket streamer...")
+                        self.websocket_streamer = TopStepWebSocketStreamer(session_token)
+                        if self.websocket_streamer.connect():
+                            logger.info("[SUCCESS] WebSocket streamer initialized and connected")
+                        else:
+                            logger.warning("WebSocket connection failed - will use REST API polling")
+                    else:
+                        logger.warning("No session token available - WebSocket disabled")
+                except Exception as ws_error:
+                    logger.warning(f"WebSocket initialization failed: {ws_error} - will use REST API")
+                    self.websocket_streamer = None
                 
                 self.connected = True
                 self.failure_count = 0
@@ -366,13 +336,13 @@ class TopStepBroker(BrokerInterface):
             return 0.0
         
         try:
-            account = self.sdk_client.get_account()
+            account = self.sdk_client.get_account_info()
             if account:
                 current_balance = float(account.balance or 0.0)
                 
                 # CRITICAL: Always reconfigure if config doesn't exist (safety net)
                 if not self.config:
-                    logger.warning("⚠️ Config missing - initializing auto-configuration")
+                    logger.warning("[WARNING] Config missing - initializing auto-configuration")
                     from config import BotConfiguration
                     self.config = BotConfiguration()
                     if self.config.auto_configure_for_account(current_balance, logger):
@@ -381,7 +351,7 @@ class TopStepBroker(BrokerInterface):
                 
                 # Validate TopStep compliance (safety check every balance check)
                 if not self.config.validate_topstep_compliance(current_balance):
-                    logger.warning("⚠️ Compliance violation detected - forcing reconfiguration")
+                    logger.warning("[WARNING] Compliance violation detected - forcing reconfiguration")
                     if self.config.auto_configure_for_account(current_balance, logger, force=True):
                         self._last_configured_balance = current_balance
                 
@@ -400,7 +370,7 @@ class TopStepBroker(BrokerInterface):
                         # Reconfigure with new balance (with safety checks)
                         if self.config.auto_configure_for_account(current_balance, logger):
                             self._last_configured_balance = current_balance
-                            logger.info("✅ Risk limits updated successfully")
+                            logger.info("[SUCCESS] Risk limits updated successfully")
                         else:
                             logger.error("❌ Failed to reconfigure - keeping previous limits")
                             logger.error(f"Still using limits for ${self._last_configured_balance:,.2f} balance")
@@ -594,7 +564,7 @@ class TopStepBroker(BrokerInterface):
             
             # Subscribe to trades via WebSocket
             self.websocket_streamer.subscribe_trades(contract_id, trade_callback)
-            logger.info(f"✅ Subscribed to LIVE trade data for {symbol} (contract: {contract_id})")
+            logger.info(f"[SUCCESS] Subscribed to LIVE trade data for {symbol} (contract: {contract_id})")
             
         except Exception as e:
             logger.error(f"Error subscribing to market data: {e}")
@@ -617,15 +587,45 @@ class TopStepBroker(BrokerInterface):
                 logger.error(f"Failed to get contract ID for {symbol}")
                 return
             
+            # Sticky state - keep last valid bid/ask
+            last_valid_bid = [0.0]  # Use list to maintain closure reference
+            last_valid_ask = [0.0]
+            last_valid_timestamp = [0]
+            
             # Define callback wrapper to convert WebSocket data format
             def quote_callback(data):
                 """Handle quote data from WebSocket: [contract_id, {quote_dict}]"""
                 if isinstance(data, list) and len(data) >= 2:
                     quote = data[1]  # Quote dict
                     if isinstance(quote, dict):
-                        bid_price = float(quote.get('bestBid', 0))
-                        ask_price = float(quote.get('bestAsk', 0))
-                        last_price = float(quote.get('lastPrice', 0))
+                        # STICKY STATE PATTERN: Update only if new values are valid
+                        # This prevents false signals from partial/incomplete WebSocket updates
+                        
+                        # Update bid if present and valid
+                        if 'bestBid' in quote:
+                            new_bid = float(quote.get('bestBid', 0))
+                            if new_bid > 0:
+                                last_valid_bid[0] = new_bid
+                        
+                        # Update ask if present and valid
+                        if 'bestAsk' in quote:
+                            new_ask = float(quote.get('bestAsk', 0))
+                            if new_ask > 0:
+                                last_valid_ask[0] = new_ask
+                        
+                        # Only process if we have BOTH valid bid and ask
+                        if last_valid_bid[0] <= 0 or last_valid_ask[0] <= 0:
+                            logger.debug(f"Waiting for valid bid/ask - bid={last_valid_bid[0]}, ask={last_valid_ask[0]}")
+                            return
+                        
+                        # Sanity check: ask must be >= bid
+                        if last_valid_ask[0] < last_valid_bid[0]:
+                            logger.warning(f"Inverted market: bid={last_valid_bid[0]} > ask={last_valid_ask[0]} - skipping")
+                            return
+                        
+                        bid_price = last_valid_bid[0]
+                        ask_price = last_valid_ask[0]
+                        last_price = float(quote.get('lastPrice', bid_price))  # Default to bid if missing
                         bid_size = 1  # TopStep doesn't provide sizes in quote data
                         ask_size = 1
                         
@@ -633,11 +633,20 @@ class TopStepBroker(BrokerInterface):
                         timestamp_str = quote.get('timestamp', '')
                         try:
                             from datetime import datetime
+                            import time
                             if timestamp_str:
                                 dt = datetime.fromisoformat(timestamp_str.replace('Z', '+00:00'))
                                 timestamp = int(dt.timestamp() * 1000)
                             else:
                                 timestamp = int(datetime.now().timestamp() * 1000)
+                            
+                            # Staleness detection: warn if quote is more than 2 seconds old
+                            current_time = int(time.time() * 1000)
+                            age_seconds = (current_time - last_valid_timestamp[0]) / 1000.0
+                            if last_valid_timestamp[0] > 0 and age_seconds > 2.0:
+                                logger.warning(f"Quote feed stale - {age_seconds:.1f}s since last update")
+                            last_valid_timestamp[0] = current_time
+                            
                         except:
                             timestamp = int(datetime.now().timestamp() * 1000)
                         
@@ -646,7 +655,7 @@ class TopStepBroker(BrokerInterface):
             
             # Subscribe to quotes via WebSocket
             self.websocket_streamer.subscribe_quotes(contract_id, quote_callback)
-            logger.info(f"✅ Subscribed to LIVE quote data for {symbol} (contract: {contract_id})")
+            logger.info(f"[SUCCESS] Subscribed to LIVE quote data for {symbol} (contract: {contract_id})")
             
         except Exception as e:
             logger.error(f"Error subscribing to quotes: {e}")

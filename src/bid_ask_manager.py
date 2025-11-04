@@ -395,7 +395,7 @@ class QueuePositionMonitor:
             try:
                 if is_filled_func(order_id):
                     elapsed = time.time() - start_time
-                    logger.info(f"  ✅ Passive fill after {elapsed:.1f}s ({check_count} checks)")
+                    logger.info(f"  [SUCCESS] Passive fill after {elapsed:.1f}s ({check_count} checks)")
                     return True, "filled"
             except Exception as e:
                 logger.debug(f"  Error checking fill status: {e}")
@@ -1264,19 +1264,25 @@ class BidAskManager:
         
         self.quotes[symbol] = quote
         
-        # Update spread analyzer
+        # Update spread analyzer ONLY if quote is valid (no corrupted data)
         if symbol not in self.spread_analyzers:
             self.spread_analyzers[symbol] = SpreadAnalyzer(
                 lookback_periods=self.config.get("spread_lookback_periods", 100),
                 abnormal_multiplier=self.config.get("abnormal_spread_multiplier", 2.0)
             )
         
-        # Update spread with timestamp for time-of-day tracking
-        from datetime import datetime
-        import pytz
-        tz = pytz.timezone(self.config.get("timezone", "America/New_York"))
-        dt = datetime.fromtimestamp(timestamp / 1000, tz=tz)
-        self.spread_analyzers[symbol].update(quote.spread, dt)
+        # Validate quote before updating spread history to prevent data corruption
+        is_valid, validation_reason = quote.is_valid()
+        if is_valid:
+            # Update spread with timestamp for time-of-day tracking
+            from datetime import datetime
+            import pytz
+            tz = pytz.timezone(self.config.get("timezone", "America/New_York"))
+            dt = datetime.fromtimestamp(timestamp / 1000, tz=tz)
+            self.spread_analyzers[symbol].update(quote.spread, dt)
+        else:
+            # Skip invalid quotes to prevent spread history corruption
+            logger.debug(f"Skipping spread update for {symbol}: {validation_reason}")
         
         logger.debug(f"Quote updated for {symbol}: Bid={bid_price:.2f}x{bid_size} "
                     f"Ask={ask_price:.2f}x{ask_size} Spread={quote.spread:.4f}")

@@ -18,6 +18,10 @@ class BotConfiguration:
     instrument: str = "ES"
     timezone: str = "America/New_York"
     
+    # Broker Configuration
+    api_token: str = ""
+    username: str = ""  # TopStep username/email
+    
     # Trading Parameters
     risk_per_trade: float = 0.012  # 1.2% of account per trade (increased for more profit)
     max_contracts: int = 3  # USER CONFIGURABLE - customers can adjust
@@ -65,7 +69,7 @@ class BotConfiguration:
     entry_end_time: time = field(default_factory=lambda: time(16, 55))  # 4:55 PM ET next day - before maintenance
     flatten_time: time = field(default_factory=lambda: time(16, 30))  # 4:30 PM ET - flatten before session close
     forced_flatten_time: time = field(default_factory=lambda: time(16, 45))  # 4:45 PM ET - forced flatten
-    shutdown_time: time = field(default_factory=lambda: time(16, 50))  # 4:50 PM ET - shutdown before maintenance
+    shutdown_time: time = field(default_factory=lambda: time(16, 50))  # 4:50 PM ET - shutdown for 5-6 PM maintenance
     vwap_reset_time: time = field(default_factory=lambda: time(18, 0))  # 6 PM ET - futures daily session reset
     
     # Friday Special Rules - Close before weekend
@@ -191,14 +195,14 @@ class BotConfiguration:
         # Safety check: Validate balance is reasonable
         if account_balance <= 0 and not force:
             if logger:
-                logger.error(f"⚠️ Invalid account balance: ${account_balance:,.2f}")
+                logger.error(f"[WARNING] Invalid account balance: ${account_balance:,.2f}")
                 logger.error("Skipping auto-configuration to prevent misconfiguration")
             return False
         
         # Safety check: Prevent extreme values (likely API error)
         if account_balance > 10_000_000 and not force:  # $10M+ seems wrong
             if logger:
-                logger.warning(f"⚠️ Unusually high balance: ${account_balance:,.2f}")
+                logger.warning(f"[WARNING] Unusually high balance: ${account_balance:,.2f}")
                 logger.warning("This may be an API error - skipping reconfiguration")
             return False
         
@@ -221,7 +225,7 @@ class BotConfiguration:
         
         if logger:
             logger.info("=" * 80)
-            logger.info(f"🎯 AUTO-CONFIGURED FOR {account_label}")
+            logger.info(f"[AUTO-CONFIG] Configured for {account_label}")
             logger.info("=" * 80)
             logger.info(f"Account Type: {account_type}")
             logger.info(f"Account Balance: ${account_balance:,.2f}")
@@ -238,7 +242,7 @@ class BotConfiguration:
             logger.info("User Configurable Settings (Not Changed):")
             logger.info(f"  Max Contracts: {self.max_contracts}")
             logger.info(f"  Max Trades/Day: {self.max_trades_per_day}")
-            logger.info("✅ Risk limits applied successfully")
+            logger.info("[SUCCESS] Risk limits applied successfully")
         
         return True
     
@@ -288,14 +292,14 @@ class BotConfiguration:
         
         if violations:
             if logger:
-                logger.error("⚠️ TOPSTEP COMPLIANCE VIOLATIONS DETECTED:")
+                logger.error("[WARNING] TOPSTEP COMPLIANCE VIOLATIONS DETECTED:")
                 for violation in violations:
                     logger.error(f"  - {violation}")
                 logger.error("Auto-reconfiguring to fix violations...")
             return False
         
         if logger:
-            logger.info("✅ All TopStep compliance rules validated successfully")
+            logger.info("[SUCCESS] All TopStep compliance rules validated successfully")
         return True
     
     # ATR-Based Dynamic Risk Management - ITERATION 3 (PROVEN WINNER!)
@@ -586,6 +590,10 @@ def load_from_env() -> BotConfiguration:
     # API Token (without logging)
     if os.getenv("TOPSTEP_API_TOKEN"):
         config.api_token = os.getenv("TOPSTEP_API_TOKEN")
+    
+    # Username
+    if os.getenv("TOPSTEP_USERNAME"):
+        config.username = os.getenv("TOPSTEP_USERNAME")
     
     return config
 
