@@ -38,6 +38,7 @@ class EventType(IntEnum):
     ORDER_REJECT = 12
     STOP_HIT = 13
     POSITION_RECONCILIATION = 14  # New: Periodic position sync check
+    CONNECTION_HEALTH = 15  # New: Periodic broker connection health check
     
     # Medium priority events
     TICK_DATA = 20
@@ -384,6 +385,14 @@ class TimerManager:
                 if self._should_check("position_reconciliation", current_time, 300):
                     self.event_loop.post_event(
                         EventType.POSITION_RECONCILIATION,
+                        EventPriority.HIGH,
+                        {"time": current_time}
+                    )
+                
+                # Connection health check (every 30 seconds)
+                if self._should_check("connection_health", current_time, 30):
+                    self.event_loop.post_event(
+                        EventType.CONNECTION_HEALTH,
                         EventPriority.HIGH,
                         {"time": current_time}
                     )

@@ -82,8 +82,8 @@ Examples:
     parser.add_argument(
         '--data-path',
         type=str,
-        default='./historical_data',
-        help='Path to historical data directory (default: ./historical_data)'
+        default='./data/historical_data',
+        help='Path to historical data directory (default: ./data/historical_data)'
     )
     
     parser.add_argument(
@@ -261,11 +261,34 @@ def run_backtest_with_params(symbol, days, initial_equity, params, return_bars=F
         # Initialize backtest engine with proper parameters
         engine = BacktestEngine(config=backtest_config, bot_config=bot_config_dict)
         
-        # Import bot functions
-        from vwap_bounce_bot import initialize_state, on_tick, check_for_signals, check_exit_conditions, state, check_daily_reset, rl_brain, adaptive_manager
-        
-        # Initialize bot state for the symbol
+        # Import bot functions and initialize state
+        from vwap_bounce_bot import initialize_state, on_tick, check_for_signals, check_exit_conditions, state, check_daily_reset
         initialize_state(symbol)
+        
+        # CRITICAL: Force initialize RL brain in backtest mode
+        # This must happen BEFORE importing rl_brain to ensure experience files are loaded
+        import vwap_bounce_bot
+        from signal_confidence import SignalConfidenceRL
+        from adaptive_exits import AdaptiveExitManager
+        
+        # Initialize RL brain with experience file FROM PARENT DIRECTORY (not src/)
+        if vwap_bounce_bot.rl_brain is None:
+            vwap_bounce_bot.rl_brain = SignalConfidenceRL(
+                experience_file="data/signal_experience.json",
+                backtest_mode=True
+            )
+            logger.info(f"✓ RL BRAIN INITIALIZED for backtest - {len(vwap_bounce_bot.rl_brain.experiences)} signal experiences loaded")
+        
+        # Initialize adaptive exit manager FROM PARENT DIRECTORY
+        if vwap_bounce_bot.adaptive_manager is None:
+            vwap_bounce_bot.adaptive_manager = AdaptiveExitManager(
+                config=vwap_bounce_bot.CONFIG,
+                experience_file="data/exit_experience.json"
+            )
+            logger.info(f"✓ ADAPTIVE EXITS INITIALIZED for backtest - {len(vwap_bounce_bot.adaptive_manager.exit_experiences)} exit experiences loaded")
+        
+        # Now import the initialized objects
+        from vwap_bounce_bot import rl_brain, adaptive_manager
         
         # Track starting experience counts
         starting_signal_count = len(rl_brain.experiences) if rl_brain else 0
@@ -513,7 +536,7 @@ def run_backtest(args, bot_config):
     # Read the experience files directly since module globals get cleared
     try:
         import json
-        with open('signal_experience.json', 'r') as f:
+        with open('data/signal_experience.json', 'r') as f:
             signal_data = json.load(f)
             signal_count = len(signal_data['experiences'])
             signal_wins = len([e for e in signal_data['experiences'] if e['reward'] > 0])
@@ -526,7 +549,7 @@ def run_backtest(args, bot_config):
         print(f"Could not load signal experiences: {e}")
         
     try:
-        with open('exit_experience.json', 'r') as f:
+        with open('data/exit_experience.json', 'r') as f:
             exit_data = json.load(f)
             exit_count = len(exit_data['exit_experiences'])
             print(f"[EXITS] {exit_count} total experiences")

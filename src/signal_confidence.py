@@ -31,7 +31,7 @@ class SignalConfidenceRL:
     Reward: Profit/loss from trade outcome
     """
     
-    def __init__(self, experience_file: str = "signal_experience.json", backtest_mode: bool = False):
+    def __init__(self, experience_file: str = "data/signal_experience.json", backtest_mode: bool = False):
         """Initialize RL confidence scorer."""
         self.experience_file = experience_file
         self.experiences = []  # All past (state, action, reward) tuples
@@ -56,12 +56,11 @@ class SignalConfidenceRL:
         self.signals_taken = 0
         self.signals_skipped = 0
         
-        # Position sizing parameters (MAX 3 CONTRACTS)
-        self.max_contracts = 3
+        # Win/loss streak tracking (for adaptive behavior)
         self.current_win_streak = 0
         self.current_loss_streak = 0
         
-        # Regime-specific multipliers (adjusts base size)
+        # Regime-specific multipliers (reserved for future use)
         self.regime_multipliers = {
             'HIGH_VOL_CHOPPY': 0.7,    # Reduce size in choppy high vol
             'HIGH_VOL_TRENDING': 0.85,  # Slightly reduce in volatile trends
@@ -345,90 +344,45 @@ class SignalConfidenceRL:
         
         return best_threshold
     
-    def calculate_position_size(self, confidence: float, regime: str = 'NORMAL') -> Tuple[int, str]:
-        """
-        Calculate position size with advanced logic (MAX 3 CONTRACTS).
-        
-        Considers:
-        - Signal confidence
-        - Market regime
-        - Win/loss streaks
-        
-        Args:
-            confidence: Signal confidence (0-1)
-            regime: Market regime (e.g., 'HIGH_VOL_CHOPPY', 'NORMAL')
-            
-        Returns:
-            (contracts, reason) - Number of contracts (1-3) and explanation
-        """
-        reasons = []
-        
-        # 1. Base size from confidence (1-3 contracts)
-        if confidence < 0.4:
-            base_size = 1.0
-            reasons.append(f"Low conf {confidence:.0%}")
-        elif confidence < 0.7:
-            # Interpolate 1 → 2
-            range_pct = (confidence - 0.4) / 0.3
-            base_size = 1.0 + range_pct
-            reasons.append(f"Med conf {confidence:.0%}")
-        else:
-            # Interpolate 2 → 3
-            range_pct = (confidence - 0.7) / 0.3
-            base_size = 2.0 + range_pct
-            reasons.append(f"High conf {confidence:.0%}")
-        
-        # 2. Regime adjustment
-        regime_mult = self.regime_multipliers.get(regime, 1.0)
-        adjusted_size = base_size * regime_mult
-        if regime_mult != 1.0:
-            reasons.append(f"{regime}×{regime_mult:.2f}")
-        
-        # 3. Streak adjustment
-        if self.current_win_streak >= 3:
-            adjusted_size *= 1.15  # Boost 15% on hot streak
-            reasons.append(f"Win streak+15%")
-        elif self.current_loss_streak >= 2:
-            adjusted_size *= 0.75  # Reduce 25% after losses
-            reasons.append(f"Loss streak-25%")
-        
-        # 4. Cap at 1-3 contracts
-        final_size = max(1, min(3, round(adjusted_size)))
-        
-        reason_str = " | ".join(reasons) + f" → {final_size}c"
-        
-        return final_size, reason_str
-    
     def get_position_size_multiplier(self, confidence: float) -> float:
         """
         Get position size multiplier based on confidence.
         Uses smooth interpolation for better sizing precision.
-        MAX: 3 contracts
+        
+        Returns a multiplier (0-1) that scales with user's max_contracts:
+        - LOW confidence (0-40%): ~33% of max_contracts
+        - MEDIUM confidence (40-70%): ~33-67% of max_contracts (interpolated)
+        - HIGH confidence (70-100%): ~67-100% of max_contracts (interpolated)
+        
+        Examples:
+        - max_contracts=3: LOW=1, MEDIUM=2, HIGH=3
+        - max_contracts=10: LOW=3, MEDIUM=6, HIGH=10
+        - max_contracts=1: Always 1 (confidence just validates entry)
         
         Args:
             confidence: Confidence level (0-1)
         
         Returns:
-            Multiplier value (0.33 = 1 contract, 0.67 = 2 contracts, 1.0 = 3 contracts)
+            Multiplier value 0.33-1.0 (multiply by max_contracts to get actual size)
         """
-        # Smooth interpolation from 1 to 3 contracts based on confidence
-        # confidence 0-40%: 1 contract
-        # confidence 40-70%: 1-2 contracts (interpolated)
-        # confidence 70-100%: 2-3 contracts (interpolated)
+        # Smooth interpolation based on confidence tiers
+        # confidence 0-40%: 1 unit (33% of max)
+        # confidence 40-70%: 1-2 units (33-67% of max, interpolated)
+        # confidence 70-100%: 2-3 units (67-100% of max, interpolated)
         
         if confidence < 0.4:
-            # Low confidence: 1 contract
+            # Low confidence: ~33% of max
             contracts = 1.0
         elif confidence < 0.7:
-            # Medium confidence: interpolate 1 → 2 contracts
+            # Medium confidence: interpolate 33% → 67% of max
             range_pct = (confidence - 0.4) / 0.3
             contracts = 1.0 + range_pct
         else:
-            # High confidence: interpolate 2 → 3 contracts
+            # High confidence: interpolate 67% → 100% of max
             range_pct = (confidence - 0.7) / 0.3
             contracts = 2.0 + range_pct
         
-        # Convert to multiplier (1 contract = 0.33, 2 = 0.67, 3 = 1.0)
+        # Convert to multiplier (1 unit = 0.33, 2 units = 0.67, 3 units = 1.0)
         multiplier = contracts / 3.0
         
         return multiplier

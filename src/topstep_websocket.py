@@ -103,7 +103,7 @@ class TopStepWebSocketStreamer:
     
     def _on_close(self):
         """Called when WebSocket connection closes - attempt manual reconnect if auto-reconnect fails"""
-        logger.warning("⚠️ WebSocket connection closed")
+        logger.warning("[WARN] WebSocket connection closed")
         self.is_connected = False
         
         # SignalR has built-in auto-reconnect, but if that fails, try manual reconnect
@@ -119,10 +119,10 @@ class TopStepWebSocketStreamer:
             except Exception as e:
                 logger.error(f"Manual reconnection attempt {self.reconnect_attempt} failed: {e}")
                 if self.reconnect_attempt >= self.max_reconnect_attempts:
-                    logger.error(f"⚠️ CRITICAL: All {self.max_reconnect_attempts} reconnection attempts failed!")
+                    logger.error(f"[WARN] CRITICAL: All {self.max_reconnect_attempts} reconnection attempts failed!")
                     logger.error("WebSocket will remain disconnected. Bot will continue with REST API polling.")
         else:
-            logger.error("⚠️ Max reconnection attempts reached - WebSocket remains disconnected")
+            logger.error("[WARN] Max reconnection attempts reached - WebSocket remains disconnected")
     
     def _on_error(self, error):
         """Called when WebSocket error occurs"""

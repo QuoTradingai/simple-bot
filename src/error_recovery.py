@@ -232,7 +232,7 @@ class StatePersistence:
     Handles saving and loading critical bot state to disk.
     """
     
-    def __init__(self, state_file: str = "bot_state.json"):
+    def __init__(self, state_file: str = "data/bot_state.json"):
         """
         Initialize state persistence.
         

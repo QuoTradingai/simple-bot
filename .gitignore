@@ -127,13 +127,33 @@ dmypy.json
 # Pyre type checker
 .pyre/
 
-# Bot specific
+# Bot specific - Logs
 vwap_bounce_bot.log
 *.log
+logs/
+
+# Bot specific - Runtime data
+/data/bot_state.json
+/data/bot_state.json.backup
+/data/*.json.backup
+/data/historical_data/
+
+# Bot specific - Old locations (to be removed - files created in wrong location)
+/historical_data/
+/bot_state.json
+/bot_state.json.backup
+
+# Bot specific - Temporary files
 /tmp/
 bot.pid
-/logs/
-/data/
 /backups/
-# Allow ES data files for GitHub Copilot agent
-# /historical_data/*.csv
+
+# Customer builds
+customer/dist/
+customer/build/
+customer/*.exe
+customer/config.json
+
+# Keep example/template files
+!data/.gitkeep
+!customer/.gitkeep

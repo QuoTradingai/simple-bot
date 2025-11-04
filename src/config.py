@@ -4,6 +4,7 @@ Supports multiple environments with validation and environment variable override
 """
 
 import os
+import logging
 from typing import Dict, Any, Optional
 from datetime import time
 from dataclasses import dataclass, field
@@ -24,7 +25,7 @@ class BotConfiguration:
     
     # Trading Parameters
     risk_per_trade: float = 0.012  # 1.2% of account per trade (increased for more profit)
-    max_contracts: int = 3  # USER CONFIGURABLE - customers can adjust
+    max_contracts: int = 3  # USER CONFIGURABLE - maximum contracts allowed (user sets their own limit)
     max_trades_per_day: int = 9  # USER CONFIGURABLE - customers can adjust
     risk_reward_ratio: float = 2.0  # Realistic 2:1 for mean reversion with tight stops
     
@@ -314,7 +315,7 @@ class BotConfiguration:
     
     # Operational Parameters
     dry_run: bool = False
-    log_file: str = "vwap_bounce_bot.log"
+    log_file: str = "logs/vwap_bounce_bot.log"
     max_bars_storage: int = 200
     
     # Bid/Ask Trading Strategy Parameters
@@ -388,7 +389,7 @@ class BotConfiguration:
     rl_min_contracts: int = 1  # Minimum contracts (low confidence)
     rl_medium_contracts: int = 2  # Medium contracts (moderate confidence)
     rl_max_contracts: int = 3  # Maximum contracts (high confidence)
-    rl_experience_file: str = "../data/signal_experience.json"  # Where to save learning
+    rl_experience_file: str = "data/signal_experience.json"  # Where to save learning
     rl_save_frequency: int = 5  # Save experiences every N trades
     
     # Broker Configuration (only for live trading)
@@ -403,6 +404,7 @@ class BotConfiguration:
     def validate(self) -> None:
         """Validate configuration values."""
         errors = []
+        warnings = []
         
         # Validate risk parameters
         if not 0 < self.risk_per_trade <= 1:
@@ -410,6 +412,12 @@ class BotConfiguration:
         
         if self.max_contracts <= 0:
             errors.append(f"max_contracts must be positive, got {self.max_contracts}")
+        
+        # Validate max_contracts with warnings and hard caps
+        if self.max_contracts > 25:
+            errors.append(f"max_contracts exceeds safety limit: {self.max_contracts} (maximum allowed: 25)")
+        elif self.max_contracts > 15:
+            warnings.append(f"max_contracts is high: {self.max_contracts} (recommended max: 15 for most traders)")
         
         if self.max_trades_per_day <= 0:
             errors.append(f"max_trades_per_day must be positive, got {self.max_trades_per_day}")
@@ -459,6 +467,13 @@ class BotConfiguration:
         # Validate environment
         if self.environment not in ["development", "staging", "production"]:
             errors.append(f"environment must be 'development', 'staging', or 'production', got {self.environment}")
+        
+        # Log warnings (non-fatal)
+        if warnings:
+            logger = logging.getLogger(__name__)
+            logger.warning("Configuration warnings:")
+            for warning in warnings:
+                logger.warning(f"  [WARN] {warning}")
         
         if errors:
             raise ValueError("Configuration validation failed:\n  - " + "\n  - ".join(errors))
@@ -587,12 +602,16 @@ def load_from_env() -> BotConfiguration:
     if os.getenv("BOT_ENVIRONMENT"):
         config.environment = os.getenv("BOT_ENVIRONMENT")
     
-    # API Token (without logging)
-    if os.getenv("TOPSTEP_API_TOKEN"):
+    # API Token (support both old TOPSTEP and new TOPSTEPX variable names)
+    if os.getenv("TOPSTEPX_API_TOKEN"):
+        config.api_token = os.getenv("TOPSTEPX_API_TOKEN")
+    elif os.getenv("TOPSTEP_API_TOKEN"):
         config.api_token = os.getenv("TOPSTEP_API_TOKEN")
     
-    # Username
-    if os.getenv("TOPSTEP_USERNAME"):
+    # Username (support both old TOPSTEP and new TOPSTEPX variable names)
+    if os.getenv("TOPSTEPX_USERNAME"):
+        config.username = os.getenv("TOPSTEPX_USERNAME")
+    elif os.getenv("TOPSTEP_USERNAME"):
         config.username = os.getenv("TOPSTEP_USERNAME")
     
     return config

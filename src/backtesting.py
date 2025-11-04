@@ -54,7 +54,7 @@ class BacktestConfig:
     slippage_ticks: float = 0.5  # Average slippage in ticks
     commission_per_contract: float = 2.50  # Round-trip commission
     data_source: str = "csv"  # "csv" for local files (no API needed)
-    data_path: str = "../data/historical_data"
+    data_path: str = "data/historical_data"
     use_tick_data: bool = False  # Use tick-by-tick replay (default: bar-by-bar with 1min bars)
     
 

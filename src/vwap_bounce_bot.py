@@ -1,14 +1,46 @@
 """
 VWAP Bounce Bot - Mean Reversion Trading Strategy
 Event-driven bot that trades bounces off VWAP standard deviation bands
+
+========================================================================
+24/7 MULTI-USER READY ARCHITECTURE
+========================================================================
+
+This bot is designed to run continuously and support global users:
+
+✅ UTC-FIRST DESIGN: All times converted to UTC first, then to exchange timezone
+✅ AUTO-FLATTEN: Automatically closes positions at 4:45 PM Chicago (forced_flatten_time)
+✅ AUTO-RESUME: Automatically resumes trading when market reopens (5 PM Sunday Chicago)
+✅ NO MANUAL SHUTDOWN: Bot runs 24/7, just pauses trading when market closed
+✅ TIMEZONE SAFE: Works for users in any timezone (UTC → Exchange → User Display)
+
+Trading Hours (ES Futures - Chicago Time):
+- OPEN: Sunday 5:00 PM → Friday 4:45 PM
+- FORCED FLATTEN: 4:45 PM (all positions must be closed)
+- WEEKEND: Friday 4:45 PM → Sunday 5:00 PM
+
+Bot States:
+- entry_window: Market open, trading allowed (before 3 PM)
+- flatten_mode: After 3 PM, aggressively close positions (1hr 45min buffer before 4:45 PM)
+- closed: After 4:45 PM, auto-flatten any positions, wait for reopen
+
+For Multi-User Subscriptions:
+- Add user_id to state dictionary for data isolation
+- Each user gets their own position/RL/VWAP state
+- Display times in user's local timezone (UTC → User TZ conversion)
+- Bot continues running for all users regardless of individual timezone
+
 """
 
 import os
 import logging
-from datetime import datetime, time, timedelta
+from datetime import datetime, timedelta
+from datetime import time as datetime_time  # Alias to avoid conflict with time.time()
 from collections import deque
 from typing import Any, Dict, List, Optional, Tuple, Callable
 import pytz
+import time as time_module  # Import time module with alias
+import statistics  # For calculating statistics like mean, median, etc.
 
 # Import new production modules
 from config import load_config, BotConfiguration
@@ -123,7 +155,7 @@ def initialize_broker() -> None:
     recovery_manager = ErrorRecoveryManager(CONFIG)
     
     # Create broker using configuration
-    broker = create_broker(_bot_config.api_token, _bot_config.username)
+    broker = create_broker(_bot_config.api_token, _bot_config.username, CONFIG["instrument"])
     
     # Connect to broker (initial connection doesn't use circuit breaker)
     logger.info("Connecting to broker...")
@@ -133,6 +165,48 @@ def initialize_broker() -> None:
         raise RuntimeError("Broker connection failed")
     
     logger.info("Broker connected successfully")
+
+
+def check_broker_connection() -> None:
+    """
+    Periodic health check for broker connection.
+    Verifies connection is alive and attempts reconnection if needed.
+    Called every 30 seconds by timer manager.
+    Only logs when there's an issue to avoid spam.
+    """
+    global broker
+    
+    if broker is None:
+        logger.error("[HEALTH] Broker is None - cannot check connection")
+        return
+    
+    # Check if broker reports as connected
+    if not broker.connected:
+        logger.warning("[HEALTH] Broker connection lost - attempting reconnection...")
+        try:
+            # Attempt to reconnect
+            success = broker.connect(max_retries=2)
+            if success:
+                logger.info("[HEALTH] Reconnection successful!")
+            else:
+                logger.error("[HEALTH] Reconnection failed - will retry in 30s")
+        except Exception as e:
+            logger.error(f"[HEALTH] Reconnection error: {e}")
+        return
+    
+    # Connection looks healthy - do a lightweight ping test
+    # Only log if there's a problem (silent success to avoid spam)
+    try:
+        # Try to get account equity as a connection health check
+        equity = broker.get_account_equity()
+        if equity is None or equity <= 0:
+            logger.warning("[HEALTH] Connection may be stale - got invalid equity response")
+            # Mark as disconnected to trigger reconnect on next check
+            broker.connected = False
+    except Exception as e:
+        logger.warning(f"[HEALTH] Connection check failed: {e}")
+        # Mark as disconnected to trigger reconnect on next check
+        broker.connected = False
 
 
 def get_account_equity() -> float:
@@ -626,6 +700,10 @@ def on_quote(symbol: str, bid_price: float, ask_price: float, bid_size: int,
             )
         except Exception as e:
             logger.error(f"Failed to record tick: {e}")
+    
+    # Also process as tick data to build bars
+    # Use last_price and estimated volume of 1 (quote updates don't have volume)
+    on_tick(symbol, last_price, 1, timestamp_ms)
 
 
 def on_tick(symbol: str, price: float, volume: int, timestamp_ms: int) -> None:
@@ -687,8 +765,29 @@ def update_1min_bar(symbol: str, price: float, volume: int, dt: datetime) -> Non
             state[symbol]["bars_1min"].append(current_bar)
             bar_count = len(state[symbol]["bars_1min"])
             logger.info(f"[BAR COMPLETED] 1min bar closed | Price: ${current_bar['close']:.2f} | Vol: {current_bar['volume']} | Total bars: {bar_count}")
+            
             # Calculate VWAP after new bar is added
             calculate_vwap(symbol)
+            
+            # Log detailed status every 5 minutes
+            if bar_count % 5 == 0:
+                vwap_data = state[symbol].get("vwap", {})
+                position_dict = state[symbol]["position"]
+                position_qty = position_dict.get("quantity", 0) if isinstance(position_dict, dict) else 0
+                market_cond = state[symbol].get("market_condition", "UNKNOWN")
+                
+                logger.info("=" * 80)
+                logger.info(f"[STATUS] 5-MIN UPDATE | Bars: {bar_count} | Position: {position_qty} contracts")
+                if vwap_data and isinstance(vwap_data, dict):
+                    vwap_val = vwap_data.get('vwap', 0)
+                    std_dev = vwap_data.get('std_dev', 0)
+                    logger.info(f"[VWAP] ${vwap_val:.2f} | StdDev: ${std_dev:.2f}")
+                    bands = vwap_data.get('bands', {})
+                    if bands and isinstance(bands, dict):
+                        logger.info(f"[BANDS] U2: ${bands.get('upper_2', 0):.2f} | L2: ${bands.get('lower_2', 0):.2f}")
+                logger.info(f"[MARKET] {market_cond}")
+                logger.info("=" * 80)
+            
             # Check for exit conditions if position is active
             check_exit_conditions(symbol)
             # Check for entry signals if no position
@@ -1148,14 +1247,18 @@ def validate_signal_requirements(symbol: str, bar_time: datetime) -> Tuple[bool,
     Returns:
         Tuple of (is_valid, reason)
     """
-    # Check trading state
+    # Check trading state - block signals when market closed or in flatten mode
     trading_state = get_trading_state(bar_time)
-    if trading_state == "maintenance":
-        logger.debug(f"Maintenance window (5-6 PM), skipping signal check")
-        return False, f"Maintenance window"
-    elif trading_state == "weekend":
-        logger.debug(f"Weekend, skipping signal check")
-        return False, f"Weekend"
+    
+    if trading_state == "closed":
+        logger.debug(f"Market closed, skipping signal check")
+        return False, f"Market closed"
+    
+    if trading_state == "flatten_mode":
+        logger.debug(f"Flatten mode active (after 3 PM), no new entries")
+        return False, f"Flatten mode - close positions only"
+    
+    # Trading state is "entry_window" - market is open, proceed with checks
     
     # Friday restriction - close before weekend
     if bar_time.weekday() == 4 and bar_time.time() >= CONFIG["friday_entry_cutoff"]:
@@ -1520,7 +1623,10 @@ def check_for_signals(symbol: str) -> None:
         # REINFORCEMENT LEARNING - Check if RL brain approves this signal
         if CONFIG.get("rl_enabled", True):  # RL enabled by default
             if rl_brain is None:
-                rl_brain = SignalConfidenceRL(backtest_mode=_bot_config.backtest_mode)
+                rl_brain = SignalConfidenceRL(
+                    experience_file="data/signal_experience.json",  # Relative to project root
+                    backtest_mode=_bot_config.backtest_mode
+                )
                 logger.info(" RL BRAIN INITIALIZED - Learning from signal experiences")
             
             # Capture market state
@@ -1560,7 +1666,10 @@ def check_for_signals(symbol: str) -> None:
         # REINFORCEMENT LEARNING - Check if RL brain approves this signal
         if CONFIG.get("rl_enabled", True):  # RL enabled by default
             if rl_brain is None:
-                rl_brain = SignalConfidenceRL(backtest_mode=_bot_config.backtest_mode)
+                rl_brain = SignalConfidenceRL(
+                    experience_file="signal_experience.json",
+                    backtest_mode=_bot_config.backtest_mode
+                )
                 logger.info(" RL BRAIN INITIALIZED - Learning from signal experiences")
             
             # Capture market state
@@ -1604,6 +1713,11 @@ def calculate_position_size(symbol: str, side: str, entry_price: float, rl_confi
     """
     Calculate position size based on risk management rules.
     
+    USER SETS MAX LIMIT → RL Confidence dynamically chooses contracts within that limit!
+    - User configures max_contracts (e.g., 3 contracts)
+    - RL confidence scales: LOW = 1 contract, MEDIUM = 2 contracts, HIGH = 3 contracts
+    - User with max_contracts=10 gets: LOW = 3, MEDIUM = 6, HIGH = 10
+    
     Args:
         symbol: Instrument symbol
         side: 'long' or 'short'
@@ -1616,7 +1730,7 @@ def calculate_position_size(symbol: str, side: str, entry_price: float, rl_confi
     # Get account equity
     equity = get_account_equity()
     
-    # Calculate risk allowance (0.1% of equity)
+    # Calculate risk allowance (1.2% of equity)
     risk_dollars = equity * CONFIG["risk_per_trade"]
     logger.info(f"Account equity: ${equity:.2f}, Risk allowance: ${risk_dollars:.2f}")
     
@@ -1685,27 +1799,30 @@ def calculate_position_size(symbol: str, side: str, entry_price: float, rl_confi
     tick_value = CONFIG["tick_value"]
     risk_per_contract = ticks_at_risk * tick_value
     
-    # Calculate number of contracts
+    # Calculate number of contracts based on risk (baseline calculation)
     if risk_per_contract > 0:
         contracts = int(risk_dollars / risk_per_contract)
     else:
         contracts = 0
     
-    # Apply RL confidence multiplier if available
+    # Get user's max contracts limit
+    user_max_contracts = CONFIG["max_contracts"]
+    
+    # Apply RL confidence to dynamically scale WITHIN user's limit
     if rl_confidence is not None and CONFIG.get("rl_enabled", True):
         global rl_brain
         if rl_brain is not None:
             size_multiplier = rl_brain.get_position_size_multiplier(rl_confidence)
-            # RL returns discrete multipliers: 0.33 (1 contract), 0.67 (2 contracts), 1.0 (3 contracts)
-            # Scale base position to get final contract count
-            original_contracts = contracts
-            contracts = max(1, int(round(3 * size_multiplier)))  # 3 * 0.33 = 1, 3 * 0.67 = 2, 3 * 1.0 = 3
             
-            confidence_level = "LOW" if size_multiplier < 0.5 else ("MEDIUM" if size_multiplier < 0.9 else "HIGH")
-            logger.info(f" RL POSITION SIZING: {confidence_level} confidence  {contracts} contract(s) ({rl_confidence:.1%})")
-    
-    # Cap at max contracts
-    contracts = min(contracts, CONFIG["max_contracts"])
+        # Scale contracts based on confidence WITHIN user's max limit
+        # LOW confidence (0.33) = 33% of max, MEDIUM (0.67) = 67% of max, HIGH (1.0) = 100% of max
+        contracts = max(1, int(round(user_max_contracts * size_multiplier)))
+        
+        confidence_level = "LOW" if size_multiplier < 0.5 else ("MEDIUM" if size_multiplier < 0.9 else "HIGH")
+        logger.info(f"[RL] CONFIDENCE SIZING: {confidence_level} ({rl_confidence:.1%}) -> {contracts}/{user_max_contracts} contracts")
+    else:
+        # No RL confidence - cap at user's max
+        contracts = min(contracts, user_max_contracts)
     
     if contracts == 0:
         logger.warning(f"Position size too small: risk=${risk_per_contract:.2f}, allowance=${risk_dollars:.2f}")
@@ -1779,7 +1896,7 @@ def validate_entry_price_still_valid(symbol: str, signal_price: float, side: str
         # SAFETY #1: Max checks limit (prevent infinite loops)
         if check_count > max_checks:
             reason = f"Max checks ({max_checks}) exceeded - signal too stale"
-            logger.warning(f"  ❌ ENTRY ABORTED - {reason}")
+            logger.warning(f"  [FAIL] ENTRY ABORTED - {reason}")
             return False, reason, signal_price
         
         # Get current market price from bid/ask if available
@@ -1814,13 +1931,13 @@ def validate_entry_price_still_valid(symbol: str, signal_price: float, side: str
         # SAFETY #2: Hard abort threshold (price running away)
         if side == "long" and price_move > abort_threshold:
             reason = f"Price running away UP {price_move_ticks:.1f} ticks (>{abort_if_worse_than_ticks}) - HARD ABORT"
-            logger.warning(f"  ❌ ENTRY ABORTED - {reason}")
+            logger.warning(f"  [FAIL] ENTRY ABORTED - {reason}")
             logger.warning(f"     Signal: ${signal_price:.2f} → Current: ${current_price:.2f}")
             return False, reason, current_price
         
         if side == "short" and price_move < -abort_threshold:
             reason = f"Price running away DOWN {price_move_ticks:.1f} ticks (>{abort_if_worse_than_ticks}) - HARD ABORT"
-            logger.warning(f"  ❌ ENTRY ABORTED - {reason}")
+            logger.warning(f"  [FAIL] ENTRY ABORTED - {reason}")
             logger.warning(f"     Signal: ${signal_price:.2f} → Current: ${current_price:.2f}")
             return False, reason, current_price
         
@@ -1832,7 +1949,7 @@ def validate_entry_price_still_valid(symbol: str, signal_price: float, side: str
                 
                 if consecutive_worse_count >= trending_away_threshold:
                     reason = f"Price trending away ({consecutive_worse_count} worse checks) - aborting early"
-                    logger.warning(f"  ❌ ENTRY ABORTED - {reason}")
+                    logger.warning(f"  [FAIL] ENTRY ABORTED - {reason}")
                     logger.warning(f"     Signal: ${signal_price:.2f} → Current: ${current_price:.2f} (trend: worse)")
                     return False, reason, current_price
             else:
@@ -1866,7 +1983,7 @@ def validate_entry_price_still_valid(symbol: str, signal_price: float, side: str
             else:
                 reason = f"Price moved DOWN {price_move_ticks:.1f} ticks - too cheap to short"
             
-            logger.warning(f"  ❌ ENTRY ABORTED - {reason}")
+            logger.warning(f"  [FAIL] ENTRY ABORTED - {reason}")
             logger.warning(f"     Signal: ${signal_price:.2f} → Current: ${current_price:.2f}")
             if check_count > 1:
                 logger.warning(f"     Waited {elapsed:.1f}s, checked {check_count}x, best seen: ${best_price_seen:.2f}")
@@ -1875,9 +1992,9 @@ def validate_entry_price_still_valid(symbol: str, signal_price: float, side: str
         # Price bad but we can still wait - log once and retry
         if check_count == 1:
             if side == "long":
-                logger.info(f"  ⏳ Price too high (${current_price:.2f}, +{price_move_ticks:.1f} ticks) - waiting for pullback...")
+                logger.info(f"  [WAIT] Price too high (${current_price:.2f}, +{price_move_ticks:.1f} ticks) - waiting for pullback...")
             else:
-                logger.info(f"  ⏳ Price too low (${current_price:.2f}, -{price_move_ticks:.1f} ticks) - waiting for bounce...")
+                logger.info(f"  [WAIT] Price too low (${current_price:.2f}, -{price_move_ticks:.1f} ticks) - waiting for bounce...")
         
         time.sleep(check_interval)
 
@@ -1908,7 +2025,7 @@ def handle_partial_fill(symbol: str, side: str, expected_qty: int, timeout_secon
     if not is_complete and actual_filled > 0:
         # PARTIAL FILL DETECTED
         logger.warning(SEPARATOR_LINE)
-        logger.warning("⚠️  PARTIAL FILL DETECTED")
+        logger.warning("[WARN] PARTIAL FILL DETECTED")
         logger.warning(f"  Expected: {expected_qty} contracts")
         logger.warning(f"  Filled: {actual_filled} contracts")
         logger.warning(f"  Missing: {expected_qty - actual_filled} contracts")
@@ -1961,12 +2078,12 @@ def place_entry_order_with_retry(symbol: str, side: str, contracts: int,
     tick_size = CONFIG["tick_size"]
     
     for attempt in range(1, max_retries + 1):
-        logger.info(f"  📋 Order attempt {attempt}/{max_retries}")
+        logger.info(f"  [ORDER] Order attempt {attempt}/{max_retries}")
         
         try:
             if order_params['strategy'] == 'passive':
                 limit_price = order_params['limit_price']
-                logger.info(f"  💰 Passive Entry: ${limit_price:.2f} (saving spread)")
+                logger.info(f"  [PASSIVE] Passive Entry: ${limit_price:.2f} (saving spread)")
                 
                 order = place_limit_order(symbol, order_side, contracts, limit_price)
                 
@@ -1976,7 +2093,7 @@ def place_entry_order_with_retry(symbol: str, side: str, contracts: int,
                     
                     if queue_monitoring_enabled and bid_ask_manager is not None and not _bot_config.backtest_mode:
                         # Use queue monitor for live trading
-                        logger.info(f"  📊 Monitoring queue position...")
+                        logger.info(f"  [QUEUE] Monitoring queue position...")
                         
                         try:
                             was_filled, queue_reason = bid_ask_manager.queue_monitor.monitor_limit_order_queue(
@@ -2074,7 +2191,7 @@ def place_entry_order_with_retry(symbol: str, side: str, contracts: int,
                         # Still return it, assume it will fill
                         return order, limit_price, "aggressive"
                 
-                logger.error(f"  ❌ Attempt {attempt}: Aggressive order failed")
+                logger.error(f"  [FAIL] Attempt {attempt}: Aggressive order failed")
             
             elif order_params['strategy'] == 'mixed':
                 # Mixed strategy - split between passive and aggressive
@@ -2097,17 +2214,17 @@ def place_entry_order_with_retry(symbol: str, side: str, contracts: int,
             # Failed this attempt
             if attempt < max_retries:
                 backoff_time = 0.5 * attempt  # Exponential backoff
-                logger.warning(f"  ⏳ Retrying in {backoff_time:.1f}s...")
+                logger.warning(f"  [WAIT] Retrying in {backoff_time:.1f}s...")
                 time.sleep(backoff_time)
             
         except Exception as e:
-            logger.error(f"  ❌ Attempt {attempt} exception: {e}")
+            logger.error(f"  [FAIL] Attempt {attempt} exception: {e}")
             if attempt < max_retries:
                 time.sleep(0.5 * attempt)
                 continue
     
     # All retries exhausted
-    logger.error(f"  🚫 All {max_retries} attempts failed - ENTRY ABORTED")
+    logger.error(f"  [BLOCKED] All {max_retries} attempts failed - ENTRY ABORTED")
     return None, 0.0, "failed"
 
 
@@ -2140,7 +2257,8 @@ def is_market_moving_too_fast(symbol: str) -> Tuple[bool, str]:
     if len(bars) < 5:
         return False, "Not enough data"
     
-    recent_bars = bars[-5:]
+    # Convert deque to list for slicing
+    recent_bars = list(bars)[-5:]
     price_ranges = [(b["high"] - b["low"]) for b in recent_bars]
     avg_range = statistics.mean(price_ranges)
     current_range = recent_bars[-1]["high"] - recent_bars[-1]["low"]
@@ -2283,7 +2401,7 @@ def execute_entry(symbol: str, side: str, entry_price: float) -> None:
             )
             
             if order is None:
-                logger.error("❌ Failed to place entry after retries - TRADE SKIPPED")
+                logger.error("[FAIL] Failed to place entry after retries - TRADE SKIPPED")
                 return
             
             logger.info(f"  [OK] Order placed successfully using {order_type_used} strategy")
@@ -2335,13 +2453,13 @@ def execute_entry(symbol: str, side: str, entry_price: float) -> None:
                 if entry_slippage_ticks > entry_slippage_alert_threshold:
                     # HIGH ENTRY SLIPPAGE DETECTED
                     logger.warning("=" * 80)
-                    logger.warning("⚠️ CRITICAL: HIGH ENTRY SLIPPAGE DETECTED!")
+                    logger.warning("[WARN] CRITICAL: HIGH ENTRY SLIPPAGE DETECTED!")
                     logger.warning("=" * 80)
                     logger.warning(f"  Expected Entry: ${actual_fill_price:.2f}")
                     logger.warning(f"  Actual Fill: ${actual_fill_from_broker:.2f}")
                     logger.warning(f"  Slippage: {entry_slippage_ticks:.1f} ticks (${entry_slippage_cost:.2f})")
                     logger.warning(f"  Side: {side.upper()}, Contracts: {contracts}")
-                    logger.warning(f"  ⚠️ Entry slippage >{entry_slippage_alert_threshold} ticks - consider tighter price validation or avoid volatile periods")
+                    logger.warning(f"  [WARN] Entry slippage >{entry_slippage_alert_threshold} ticks - consider tighter price validation or avoid volatile periods")
                     logger.warning("=" * 80)
                     
                     # Track for session statistics
@@ -2463,7 +2581,7 @@ def execute_entry(symbol: str, side: str, entry_price: float) -> None:
             logger.error(f"  ✓ Emergency close executed - Position closed")
             logger.error(f"  This trade is abandoned due to stop order failure")
         else:
-            logger.error(f"  ❌ EMERGENCY CLOSE ALSO FAILED - MANUAL INTERVENTION REQUIRED!")
+            logger.error(f"  [FAIL] EMERGENCY CLOSE ALSO FAILED - MANUAL INTERVENTION REQUIRED!")
             logger.error(f"  Symbol: {symbol}, Side: {side}, Contracts: {contracts}")
         
         # Don't track this position - it's closed or needs manual handling
@@ -2542,7 +2660,7 @@ def check_target_reached(symbol: str, current_bar: Dict[str, Any], position: Dic
                 return True, target_price
             else:
                 # Price ran past target and reversed - might not fill at target
-                logger.warning(f"⚠️ Target Validation: Price hit ${target_price:.2f} but reversed to ${current_bar['close']:.2f}")
+                logger.warning(f"[WARN] Target Validation: Price hit ${target_price:.2f} but reversed to ${current_bar['close']:.2f}")
                 logger.warning(f"  Distance: {price_distance:.1f} ticks (>{target_validation_ticks} tick threshold)")
                 logger.warning(f"  Using current price for guaranteed fill instead")
                 # Use current price (more conservative, guaranteed fill)
@@ -2557,13 +2675,13 @@ def check_target_reached(symbol: str, current_bar: Dict[str, Any], position: Dic
             if price_distance <= target_validation_ticks:
                 return True, target_price
             else:
-                logger.warning(f"⚠️ Target Validation: Price hit ${target_price:.2f} but reversed to ${current_bar['close']:.2f}")
+                logger.warning(f"[WARN] Target Validation: Price hit ${target_price:.2f} but reversed to ${current_bar['close']:.2f}")
                 logger.warning(f"  Distance: {price_distance:.1f} ticks (>{target_validation_ticks} tick threshold)")
                 logger.warning(f"  Using current price for guaranteed fill instead")
                 return True, current_bar["close"]
     
     # Phase Five: Time-based exit tightening after 3 PM
-    if bar_time.time() >= time(15, 0) and not bot_status["flatten_mode"]:
+    if bar_time.time() >= datetime_time(15, 0) and not bot_status["flatten_mode"]:
         # After 3 PM - tighten profit taking to 1:1 R/R
         stop_distance = abs(entry_price - stop_price)
         tightened_target_distance = stop_distance  # 1:1 instead of 1.5:1
@@ -2684,17 +2802,17 @@ def check_time_based_exits(symbol: str, current_bar: Dict[str, Any], position: D
         current_time = datetime.now(tz)
         
         # 4:40 PM - close profitable positions immediately
-        if current_time.time() >= time(16, 40) and unrealized_pnl > 0:
+        if current_time.time() >= datetime_time(16, 40) and unrealized_pnl > 0:
             return "time_based_profit_take", get_flatten_price(symbol, side, current_bar["close"])
         
         # 4:42 PM - close small losses
-        if current_time.time() >= time(16, 42):
+        if current_time.time() >= datetime_time(16, 42):
             stop_distance = abs(entry_price - stop_price)
             if unrealized_pnl < 0 and abs(unrealized_pnl) < (stop_distance * tick_value * position["quantity"] / 2):
                 return "time_based_loss_cut", get_flatten_price(symbol, side, current_bar["close"])
         
         # Phase 10: Early profit lock after 4:40 PM
-        if current_time.time() >= time(16, 40) and unrealized_pnl > 0:
+        if current_time.time() >= datetime_time(16, 40) and unrealized_pnl > 0:
             bot_status["early_close_saves"] += 1
             return "early_profit_lock", get_flatten_price(symbol, side, current_bar["close"])
         
@@ -2717,11 +2835,11 @@ def check_time_based_exits(symbol: str, current_bar: Dict[str, Any], position: D
             return "friday_weekend_protection", get_flatten_price(symbol, side, current_bar["close"])
         
         # After 2 PM on Friday, take any profit
-        if bar_time.time() >= time(14, 0) and unrealized_pnl > 0:
+        if bar_time.time() >= datetime_time(14, 0) and unrealized_pnl > 0:
             return "friday_profit_protection", get_flatten_price(symbol, side, current_bar["close"])
     
     # After 3:30 PM - cut losses early if less than 75% of stop distance
-    if bar_time.time() >= time(15, 30) and not bot_status["flatten_mode"]:
+    if bar_time.time() >= datetime_time(15, 30) and not bot_status["flatten_mode"]:
         if side == "long":
             current_loss_distance = entry_price - current_bar["close"]
             stop_distance = entry_price - stop_price
@@ -2781,7 +2899,10 @@ def check_breakeven_protection(symbol: str, current_price: float) -> None:
             global adaptive_manager
             if adaptive_manager is None:
                 from adaptive_exits import AdaptiveExitManager
-                adaptive_manager = AdaptiveExitManager(CONFIG)
+                adaptive_manager = AdaptiveExitManager(
+                    config=CONFIG,
+                    experience_file="data/exit_experience.json"
+                )
                 logger.info(f"[SUCCESS] Adaptive Exit Manager initialized")
             
             from adaptive_exits import get_adaptive_exit_params
@@ -2801,8 +2922,8 @@ def check_breakeven_protection(symbol: str, current_price: float) -> None:
             position["exit_params_used"] = adaptive_params
             
         except Exception as e:
-            logger.error(f"❌ Adaptive exits ERROR: {e}", exc_info=True)
-            logger.warning(f"⚠️  Falling back to static params")
+            logger.error(f"[FAIL] Adaptive exits ERROR: {e}", exc_info=True)
+            logger.warning("[WARN] Falling back to static params")
             breakeven_threshold_ticks = CONFIG.get("breakeven_profit_threshold_ticks", 8)
             breakeven_offset_ticks = CONFIG.get("breakeven_stop_offset_ticks", 1)
     else:
@@ -2904,7 +3025,10 @@ def check_trailing_stop(symbol: str, current_price: float) -> None:
             global adaptive_manager
             if adaptive_manager is None:
                 from adaptive_exits import AdaptiveExitManager
-                adaptive_manager = AdaptiveExitManager(CONFIG)
+                adaptive_manager = AdaptiveExitManager(
+                    config=CONFIG,
+                    experience_file="data/exit_experience.json"
+                )
             
             from adaptive_exits import get_adaptive_exit_params
             
@@ -2923,8 +3047,8 @@ def check_trailing_stop(symbol: str, current_price: float) -> None:
             position["exit_params_used"] = adaptive_params
             
         except Exception as e:
-            logger.error(f"❌ Adaptive trailing ERROR: {e}", exc_info=True)
-            logger.warning(f"⚠️  Falling back to static trailing params")
+            logger.error(f"[FAIL] Adaptive trailing ERROR: {e}", exc_info=True)
+            logger.warning("[WARN] Falling back to static trailing params")
             trailing_distance_ticks = CONFIG.get("trailing_stop_distance_ticks", 8)
             min_profit_ticks = CONFIG.get("trailing_stop_min_profit_ticks", 12)
     else:
@@ -3035,7 +3159,7 @@ def check_trailing_stop(symbol: str, current_price: float) -> None:
             # Execute full exit with tracking
             execute_exit(symbol, current_price, "trailing_stop_failure_emergency")
         else:
-            logger.error("  ❌ EMERGENCY CLOSE ALSO FAILED - MANUAL INTERVENTION REQUIRED!")
+            logger.error("  [FAIL] EMERGENCY CLOSE ALSO FAILED - MANUAL INTERVENTION REQUIRED!")
             logger.error(f"  Position: {side.upper()} {contracts} contracts at ${entry_price:.2f}")
             logger.error(f"  Current Price: ${current_price:.2f}, Profit at Risk: ${profit_locked_dollars:+.2f}")
 
@@ -3364,8 +3488,47 @@ def check_exit_conditions(symbol: str) -> None:
     entry_price = position["entry_price"]
     stop_price = position["stop_price"]
     
-    # Phase Two: Check trading state
+    # Phase Two: Check trading state and handle market close/open
     trading_state = get_trading_state(bar_time)
+    
+    # AUTO-FLATTEN: Market closing - flatten all positions immediately
+    if trading_state == "closed" and position["active"]:
+        logger.critical(SEPARATOR_LINE)
+        logger.critical("MARKET CLOSING - AUTO-FLATTENING POSITION")
+        logger.critical(f"Time: {bar_time.strftime('%H:%M:%S %Z')}")
+        logger.critical(f"Position: {side.upper()} {position['quantity']} @ ${entry_price:.2f}")
+        logger.critical(SEPARATOR_LINE)
+        
+        # Force close immediately
+        close_side = "sell" if side == "long" else "buy"
+        flatten_price = get_flatten_price(symbol, side, current_bar["close"])
+        
+        log_time_based_action(
+            "market_close_flatten",
+            "Market closed - auto-flattening position for 24/7 operation",
+            {
+                "side": side,
+                "quantity": position["quantity"],
+                "entry_price": f"${entry_price:.2f}",
+                "exit_price": f"${flatten_price:.2f}",
+                "time": bar_time.strftime('%H:%M:%S %Z')
+            }
+        )
+        
+        # Execute close order
+        close_position(symbol, "market_close", flatten_price)
+        
+        logger.info("Position flattened - bot will continue running and auto-resume when market opens")
+        return
+    
+    # AUTO-RESUME: Reset flatten mode when market reopens
+    if trading_state == "entry_window" and bot_status["flatten_mode"]:
+        bot_status["flatten_mode"] = False
+        logger.info(SEPARATOR_LINE)
+        logger.info("MARKET REOPENED - AUTO-RESUMING TRADING")
+        logger.info(f"Time: {bar_time.strftime('%H:%M:%S %Z')}")
+        logger.info("Flatten mode deactivated - ready for new entries")
+        logger.info(SEPARATOR_LINE)
     
     # Phase Six: Enhanced flatten mode activation
     if trading_state == "flatten_mode" and not bot_status["flatten_mode"]:
@@ -3589,13 +3752,13 @@ def calculate_pnl(position: Dict[str, Any], exit_price: float) -> Tuple[float, f
         if is_stop_exit and slippage_ticks_actual > slippage_alert_threshold:
             # CRITICAL: Stop loss slippage exceeds threshold!
             logger.warning("=" * 80)
-            logger.warning("⚠️ CRITICAL: HIGH STOP LOSS SLIPPAGE DETECTED!")
+            logger.warning("[WARN] CRITICAL: HIGH STOP LOSS SLIPPAGE DETECTED!")
             logger.warning("=" * 80)
             logger.warning(f"  Expected Exit: ${exit_price:.2f}")
             logger.warning(f"  Actual Fill: ${actual_exit_price:.2f}")
             logger.warning(f"  Slippage: {slippage_ticks_actual:.1f} ticks (${slippage_cost_dollars:.2f})")
             logger.warning(f"  Risk Taken: 4 ticks, Actual Loss: {slippage_ticks_actual + 4:.1f} ticks")
-            logger.warning(f"  ⚠️ Stop losses experiencing >{slippage_alert_threshold} tick slippage - consider tighter stops or avoid fast markets")
+            logger.warning(f"  [WARN] Stop losses experiencing >{slippage_alert_threshold} tick slippage - consider tighter stops or avoid fast markets")
             logger.warning("=" * 80)
         elif slippage_ticks_actual > 0:
             # Normal slippage logging
@@ -3713,10 +3876,10 @@ def handle_exit_orders(symbol: str, position: Dict[str, Any], exit_price: float,
                     logger.critical("=" * 80)
                     return  # SUCCESS - position closed
                 else:
-                    logger.error(f"  ⚠️ Position still shows {current_position} contracts - verifying...")
+                    logger.error(f"  [WARN] Position still shows {current_position} contracts - verifying...")
                     # Might be a delay in reporting, continue to next check
             else:
-                logger.error(f"  ❌ Order placement FAILED on attempt {attempt}")
+                logger.error(f"  [FAIL] Order placement FAILED on attempt {attempt}")
             
             # Failed - retry with increasing urgency
             if attempt < max_attempts:
@@ -3726,13 +3889,13 @@ def handle_exit_orders(symbol: str, position: Dict[str, Any], exit_price: float,
         
         # ALL RETRIES FAILED - CRITICAL ALERT!
         logger.critical("=" * 80)
-        logger.critical(f"🚨🚨🚨 FORCED FLATTEN FAILED AFTER {max_attempts} ATTEMPTS! 🚨🚨🚨")
+        logger.critical(f"[!!!] FORCED FLATTEN FAILED AFTER {max_attempts} ATTEMPTS! [!!!]")
         logger.critical("=" * 80)
         logger.critical(f"  Position: {position['side'].upper()} {contracts} contracts")
         logger.critical(f"  Entry: ${position['entry_price']:.2f}, Current: ${exit_price:.2f}")
         logger.critical(f"  Symbol: {symbol}")
-        logger.critical("  ⚠️ POSITION STILL OPEN - MANUAL INTERVENTION REQUIRED IMMEDIATELY!")
-        logger.critical("  ⚠️ OVERNIGHT RISK - CONTACT BROKER TO FORCE CLOSE!")
+        logger.critical("  [WARN] POSITION STILL OPEN - MANUAL INTERVENTION REQUIRED IMMEDIATELY!")
+        logger.critical("  [WARN] OVERNIGHT RISK - CONTACT BROKER TO FORCE CLOSE!")
         logger.critical("=" * 80)
         
         # TODO: In production, send critical alert (email, SMS, webhook)
@@ -3859,7 +4022,10 @@ def execute_exit(symbol: str, exit_price: float, reason: str) -> None:
         try:
             if adaptive_manager is None:
                 from adaptive_exits import AdaptiveExitManager
-                adaptive_manager = AdaptiveExitManager(CONFIG)
+                adaptive_manager = AdaptiveExitManager(
+                    config=CONFIG,
+                    experience_file="data/exit_experience.json"
+                )
             adaptive_manager.record_trade_result(pnl)
             logger.info(f" STREAK TRACKING: Recorded P&L ${pnl:+.2f} (Recent: {len(adaptive_manager.recent_trades)} trades)")
         except Exception as e:
@@ -3870,7 +4036,10 @@ def execute_exit(symbol: str, exit_price: float, reason: str) -> None:
         try:
             global rl_brain
             if rl_brain is None:
-                rl_brain = SignalConfidenceRL(backtest_mode=_bot_config.backtest_mode)
+                rl_brain = SignalConfidenceRL(
+                    experience_file="data/signal_experience.json",
+                    backtest_mode=_bot_config.backtest_mode
+                )
             
             # Check if we have the entry state stored
             if "entry_rl_state" in state[symbol]:
@@ -4176,7 +4345,7 @@ def check_vwap_reset(symbol: str, current_time: datetime) -> None:
         current_time: Current datetime in Eastern Time
     """
     current_date = current_time.date()
-    vwap_reset_time = time(18, 0)  # 6 PM ET - futures trading day starts
+    vwap_reset_time = datetime_time(18, 0)  # 6 PM ET - futures trading day starts
     
     # Check if we've crossed 6 PM on a new day
     if state[symbol]["vwap_day"] is None:
@@ -4241,7 +4410,7 @@ def check_daily_reset(symbol: str, current_time: datetime) -> None:
         current_time: Current datetime in Eastern Time
     """
     current_date = current_time.date()
-    vwap_reset_time = time(18, 0)  # 6 PM ET - futures trading day starts
+    vwap_reset_time = datetime_time(18, 0)  # 6 PM ET - futures trading day starts
     
     # If we have a trading day stored and it's different from current date
     if state[symbol]["trading_day"] is not None:
@@ -4404,7 +4573,7 @@ def check_trade_limits(current_time: datetime) -> Tuple[bool, Optional[str]]:
         return False, "Weekend - market closed"
     
     if current_time.weekday() == 6:  # Sunday
-        if current_time.time() < time(18, 0):  # Before 6 PM Sunday
+        if current_time.time() < datetime_time(18, 0):  # Before 6 PM Sunday
             if bot_status["trading_enabled"]:
                 logger.debug(f"Sunday before 6 PM - market closed")
                 bot_status["trading_enabled"] = False
@@ -4413,8 +4582,8 @@ def check_trade_limits(current_time: datetime) -> Tuple[bool, Optional[str]]:
     
     # Check for futures maintenance window (5:00 PM - 6:00 PM ET Monday-Friday)
     if current_time.weekday() < 5:  # Monday through Friday only
-        maintenance_start = time(17, 0)  # 5 PM
-        maintenance_end = time(18, 0)    # 6 PM
+        maintenance_start = datetime_time(17, 0)  # 5 PM
+        maintenance_end = datetime_time(18, 0)    # 6 PM
         if maintenance_start <= current_time.time() < maintenance_end:
             if bot_status["trading_enabled"]:
                 logger.debug(f"Maintenance window - disabling trading")
@@ -4791,44 +4960,68 @@ def get_current_time() -> datetime:
 def get_trading_state(dt: datetime = None) -> str:
     """
     Centralized time checking function that returns current trading state.
-    24/5 trading - always in entry window except maintenance/weekend.
+    24/5 trading - supports multi-user global operation with UTC-first approach.
+    
+    **MULTI-USER READY**: Works for users in any timezone by using UTC internally,
+    then converting to exchange timezone (Chicago for ES futures).
     
     Args:
         dt: Datetime to check (defaults to current time - live or backtest)
+            Can be UTC or timezone-aware. Will convert to exchange timezone.
     
     Returns:
-        Trading state: 'entry_window', 'maintenance', or 'weekend'
+        Trading state:
+        - 'entry_window': Market open, ready to trade
+        - 'flatten_mode': After 3 PM Chicago, close positions aggressively
+        - 'closed': Market closed (flatten all positions immediately)
+        - 'before_open': Before Sunday 6 PM Chicago open
     """
+    # Get current time (UTC-first for multi-user)
     if dt is None:
         dt = get_current_time()
-    elif dt.tzinfo is None:
-        # If naive datetime provided, assume it's Eastern Time
+    
+    # Convert to UTC first (standardize)
+    if dt.tzinfo is None:
+        # If naive datetime, assume it's Chicago time (legacy compatibility)
         tz = pytz.timezone(CONFIG["timezone"])
         dt = tz.localize(dt)
-    else:
-        # Convert to Eastern Time
-        tz = pytz.timezone(CONFIG["timezone"])
-        dt = dt.astimezone(tz)
     
-    # Check for weekend (Saturday + Sunday before 6 PM)
-    if dt.weekday() == 5:  # Saturday - always closed
-        return 'weekend'
+    # Convert to UTC, then to exchange timezone (Chicago for ES)
+    utc_time = dt.astimezone(pytz.UTC)
+    exchange_tz = pytz.timezone(CONFIG["timezone"])  # Chicago for ES
+    local_time = utc_time.astimezone(exchange_tz)
     
-    if dt.weekday() == 6:  # Sunday
-        # ES futures open Sunday at 6 PM ET
-        if dt.time() < time(18, 0):  # Before 6 PM Sunday
-            return 'weekend'
+    weekday = local_time.weekday()  # 0=Monday, 6=Sunday
+    current_time = local_time.time()
     
-    # Check for maintenance window (5-6 PM ET Monday-Friday)
-    # Sunday 5-6 PM is part of weekend, so only check Mon-Fri
-    if dt.weekday() < 5:  # Monday through Friday
-        maintenance_start = time(17, 0)
-        maintenance_end = time(18, 0)
-        current_time = dt.time()
-        if maintenance_start <= current_time < maintenance_end:
-            return 'maintenance'
+    # ES Futures Hours (Chicago Time):
+    # Sunday 5:00 PM - Friday 4:00 PM (with daily 4-5 PM maintenance)
     
-    # Otherwise in entry window (Sunday 6 PM through Friday 5 PM)
+    # CLOSED: Saturday (all day)
+    if weekday == 5:  # Saturday
+        return 'closed'
+    
+    # CLOSED: Sunday before 5:00 PM Chicago
+    if weekday == 6 and current_time < datetime_time(17, 0):
+        return 'closed'
+    
+    # CLOSED: Friday after 4:45 PM Chicago (weekend starts)
+    # Note: 4:45 PM is forced_flatten_time - positions must be closed by then
+    if weekday == 4 and current_time >= datetime_time(16, 45):
+        return 'closed'
+    
+    # CLOSED: Daily maintenance (4:45-5:00 PM Chicago, Monday-Thursday)
+    # Note: Positions should already be flat by 4:45 PM
+    if weekday < 4:  # Monday-Thursday
+        if datetime_time(16, 45) <= current_time < datetime_time(17, 0):
+            return 'closed'  # Daily settlement period
+    
+    # FLATTEN MODE: After 3:00 PM Chicago (aggressively close positions)
+    # This gives 1 hour 45 minutes buffer before 4:45 PM forced flatten
+    if current_time >= datetime_time(15, 0):
+        return 'flatten_mode'
+    
+    # ENTRY WINDOW: Market open, ready to trade
     return 'entry_window'
 
 
@@ -5102,13 +5295,13 @@ def main() -> None:
             from live_data_recorder import LiveDataRecorder
             logger.info("Initializing live data recorder...")
             live_recorder = LiveDataRecorder(
-                output_dir="historical_data",  # Save with historical data
+                output_dir="data/historical_data",  # Save with historical data
                 symbol=CONFIG["instrument"],
                 compress=True,
                 max_file_size_mb=100,
-                rotation_interval_minutes=60
+                rotation_interval_minutes=720  # 12 hours
             )
-            logger.info("✅ Live data recorder enabled - saving tick-by-tick data")
+            logger.info("[OK] Live data recorder enabled - saving tick-by-tick data")
         except Exception as e:
             logger.warning(f"Failed to initialize live data recorder: {e}")
             logger.warning("Continuing without data recording")
@@ -5131,16 +5324,9 @@ def main() -> None:
     symbol = CONFIG["instrument"]
     initialize_state(symbol)
     
-    # Fetch historical bars for trend filter initialization
-    historical_bars = fetch_historical_bars(
-        symbol=symbol,
-        timeframe=CONFIG.get("trend_timeframe", 15),
-        count=CONFIG.get("trend_filter_period", 20)
-    )
-    
-    if historical_bars:
-        state[symbol]["bars_15min"].extend(historical_bars)
-        update_trend_filter(symbol)
+    # Skip historical bars fetching in live mode - not needed for real-time trading
+    # The bot will build bars from live tick data
+    logger.info("Skipping historical bars fetch - will build bars from live data")
     
     # Initialize event loop
     logger.info("Initializing event loop...")
@@ -5152,6 +5338,7 @@ def main() -> None:
     event_loop.register_handler(EventType.VWAP_RESET, handle_vwap_reset_event)
     event_loop.register_handler(EventType.FLATTEN_MODE, handle_flatten_mode_event)
     event_loop.register_handler(EventType.POSITION_RECONCILIATION, handle_position_reconciliation_event)
+    event_loop.register_handler(EventType.CONNECTION_HEALTH, handle_connection_health_event)
     event_loop.register_handler(EventType.SHUTDOWN, handle_shutdown_event)
     
     # Register shutdown handlers for cleanup
@@ -5213,10 +5400,22 @@ def handle_tick_event(event) -> None:
     dt = datetime.fromtimestamp(timestamp_ms / 1000.0, tz=tz)
     bot_status["last_tick_time"] = dt
     
-    # Log tick data periodically (every 100 ticks to avoid spam)
-    tick_count = len(state[symbol]["ticks"])
-    if tick_count % 100 == 0 or tick_count < 5:
-        logger.info(f"[TICK] {symbol} @ ${price:.2f} | Vol: {volume} | Total ticks: {tick_count}")
+    # Increment total tick counter (separate from deque storage which caps at 10k)
+    if "total_ticks_received" not in state[symbol]:
+        state[symbol]["total_ticks_received"] = 0
+    state[symbol]["total_ticks_received"] += 1
+    total_ticks = state[symbol]["total_ticks_received"]
+    
+    # Log tick data periodically (every 1000 ticks to avoid spam)
+    if total_ticks % 1000 == 0:
+        # Get current bid/ask from bid_ask_manager if available
+        bid_ask_info = ""
+        if bid_ask_manager is not None:
+            quote = bid_ask_manager.get_current_quote(symbol)
+            if quote:
+                spread = quote.ask_price - quote.bid_price
+                bid_ask_info = f" | Bid: ${quote.bid_price:.2f} x {quote.bid_size} | Ask: ${quote.ask_price:.2f} x {quote.ask_size} | Spread: ${spread:.2f}"
+        logger.info(f"[TICK] {symbol} @ ${price:.2f} | Vol: {volume} | Total ticks: {total_ticks}{bid_ask_info}")
     
     # Create tick object
     tick = {
@@ -5350,7 +5549,7 @@ def handle_position_reconciliation_event(data: Dict[str, Any]) -> None:
             
         else:
             # Positions match - log success every hour only to avoid spam
-            current_time = time.time()
+            current_time = time_module.time()
             last_log = state[symbol].get("last_reconciliation_log", 0)
             if current_time - last_log > 3600:  # 1 hour
                 logger.info(f"[RECONCILIATION] Position sync OK: {broker_position} contracts")
@@ -5358,6 +5557,15 @@ def handle_position_reconciliation_event(data: Dict[str, Any]) -> None:
     
     except Exception as e:
         logger.error(f"Error during position reconciliation: {e}", exc_info=True)
+
+
+def handle_connection_health_event(data: Dict[str, Any]) -> None:
+    """
+    Handle periodic connection health check event.
+    Verifies broker connection is alive and reconnects if needed.
+    Runs every 30 seconds.
+    """
+    check_broker_connection()
 
 
 def handle_shutdown_event(data: Dict[str, Any]) -> None:

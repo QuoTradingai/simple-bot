@@ -21,7 +21,7 @@ class LiveDataRecorder:
     
     def __init__(
         self,
-        output_dir: str = "historical_data",
+        output_dir: str = "data/historical_data",
         symbol: str = "ES",
         compress: bool = True,
         max_file_size_mb: int = 100,

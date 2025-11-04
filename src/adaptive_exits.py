@@ -28,7 +28,7 @@ class AdaptiveExitManager:
     LEARNS optimal exit parameters from past outcomes.
     """
     
-    def __init__(self, config: Dict, experience_file: str = "exit_experience.json"):
+    def __init__(self, config: Dict, experience_file: str = "data/exit_experience.json"):
         """Initialize adaptive exit manager with RL learning."""
         self.config = config
         self.experience_file = experience_file
