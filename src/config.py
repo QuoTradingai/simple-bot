@@ -74,34 +74,33 @@ class BotConfiguration:
     
     # Safety Parameters
     daily_loss_limit: float = 1000.0  # Default - will be calculated from account size
-    max_drawdown_percent: float = 4.0  # TopStep standard: 4% max trailing drawdown
+    max_drawdown_percent: float = 4.0  # Default: 4% (TopStep standard, but user can override)
+    daily_loss_percent: float = 2.0  # Default: 2% (TopStep standard, but user can override)
+    use_topstep_rules: bool = True  # If False, uses custom daily_loss_percent and max_drawdown_percent
     tick_timeout_seconds: int = 60
     proactive_stop_buffer_ticks: int = 2
     flatten_buffer_ticks: int = 2  # Buffer for flatten price calculation
     
     def get_daily_loss_limit(self, account_balance: float) -> float:
         """
-        Calculate dynamic daily loss limit based on TopStep account rules.
-        Works for ALL TopStep account sizes (Express, Step 1, Step 2, Funded).
+        Calculate dynamic daily loss limit based on account rules.
+        Works for TopStep accounts OR personal accounts with custom risk %.
         
         TopStep Rules (as of 2025):
-        - Express ($25K): $500 max daily loss (2%)
-        - Step 1 ($50K): $1,000 max daily loss (2%)
-        - Step 2 ($100K): $2,000 max daily loss (2%)
-        - Step 2 ($150K): $3,000 max daily loss (2%)
-        - Funded ($50K): $1,000 max daily loss (2%)
-        - Funded ($100K): $2,000 max daily loss (2%)
-        - Funded ($150K): $3,000 max daily loss (2%)
-        - Funded ($250K+): 2% of balance
+        - All accounts: 2% of starting balance
+        
+        Personal Account:
+        - Uses daily_loss_percent setting (default: 2%, but customizable)
         
         Args:
             account_balance: Current account balance
             
         Returns:
-            Daily loss limit in dollars (2% of starting balance)
+            Daily loss limit in dollars
         """
-        # TopStep standard: 2% of starting balance for ALL account sizes
-        return account_balance * 0.02
+        # Use custom percentage or TopStep standard (2%)
+        loss_percent = self.daily_loss_percent if hasattr(self, 'daily_loss_percent') else 2.0
+        return account_balance * (loss_percent / 100.0)
     
     def get_max_drawdown_dollars(self, account_balance: float) -> float:
         """
@@ -173,13 +172,13 @@ class BotConfiguration:
     def auto_configure_for_account(self, account_balance: float, logger=None, force: bool = False) -> bool:
         """
         Automatically configure all risk limits based on account balance.
-        Called when bot connects to TopStep or when balance changes significantly.
+        Called when bot connects or when balance changes significantly.
         
-        This makes the bot work on ANY TopStep account size without manual configuration!
-        Ensures 100% compliance with TopStep rules at all times.
+        Supports BOTH TopStep accounts and personal trading accounts:
+        - TopStep: Enforces 2% daily loss, 4% max DD (mandatory rules)
+        - Personal: Uses custom daily_loss_percent and max_drawdown_percent
         
         NOTE: max_contracts and max_trades_per_day are USER CONFIGURABLE and NOT changed here.
-        Only TopStep-mandated risk limits are auto-configured (daily loss, max drawdown).
         
         Args:
             account_balance: Current account balance from broker
@@ -197,41 +196,49 @@ class BotConfiguration:
             return False
         
         # Safety check: Prevent extreme values (likely API error)
-        if account_balance > 10_000_000 and not force:  # $10M+ seems wrong for TopStep
+        if account_balance > 10_000_000 and not force:  # $10M+ seems wrong
             if logger:
                 logger.warning(f"⚠️ Unusually high balance: ${account_balance:,.2f}")
                 logger.warning("This may be an API error - skipping reconfiguration")
             return False
         
-        # Calculate dynamic limits based on TopStep rules
+        # Calculate dynamic limits based on account type
         self.daily_loss_limit = self.get_daily_loss_limit(account_balance)
         max_dd_dollars = self.get_max_drawdown_dollars(account_balance)
         profit_target = self.get_profit_target(account_balance)
         account_type = self.get_account_type(account_balance)
         
-        # CRITICAL: Update max_drawdown_percent to always be 4% (TopStep standard)
-        # This ensures trailing drawdown is ALWAYS calculated correctly
-        self.max_drawdown_percent = 4.0
+        # Set max drawdown percent based on account type
+        if self.use_topstep_rules:
+            self.max_drawdown_percent = 4.0  # TopStep mandatory
+            account_label = "TOPSTEP ACCOUNT"
+        else:
+            # Keep user's custom setting (already set in config)
+            account_label = "PERSONAL ACCOUNT"
         
         # NOTE: max_contracts and max_trades_per_day are NOT changed here
         # Those are user preferences that customers can configure themselves
         
         if logger:
             logger.info("=" * 80)
-            logger.info("🎯 AUTO-CONFIGURED FOR TOPSTEP ACCOUNT")
+            logger.info(f"🎯 AUTO-CONFIGURED FOR {account_label}")
             logger.info("=" * 80)
             logger.info(f"Account Type: {account_type}")
             logger.info(f"Account Balance: ${account_balance:,.2f}")
             logger.info("")
-            logger.info("TopStep Mandatory Limits (Auto-Configured):")
-            logger.info(f"  Daily Loss Limit: ${self.daily_loss_limit:,.2f} (2% of balance)")
+            if self.use_topstep_rules:
+                logger.info("TopStep Mandatory Limits (Auto-Configured):")
+            else:
+                logger.info(f"Personal Account Limits (Custom {self.daily_loss_percent}%/{self.max_drawdown_percent}%):")
+            logger.info(f"  Daily Loss Limit: ${self.daily_loss_limit:,.2f} ({self.daily_loss_percent}% of balance)")
             logger.info(f"  Max Trailing Drawdown: ${max_dd_dollars:,.2f} ({self.max_drawdown_percent}% from peak)")
-            logger.info(f"  Profit Target (Eval): ${profit_target:,.2f} (6% - if in evaluation)")
+            if self.use_topstep_rules:
+                logger.info(f"  Profit Target (Eval): ${profit_target:,.2f} (6% - if in evaluation)")
             logger.info("")
             logger.info("User Configurable Settings (Not Changed):")
             logger.info(f"  Max Contracts: {self.max_contracts}")
             logger.info(f"  Max Trades/Day: {self.max_trades_per_day}")
-            logger.info("✅ TopStep compliance rules applied successfully")
+            logger.info("✅ Risk limits applied successfully")
         
         return True
     
@@ -290,7 +297,6 @@ class BotConfiguration:
         if logger:
             logger.info("✅ All TopStep compliance rules validated successfully")
         return True
-            logger.info("=" * 80)
     
     # ATR-Based Dynamic Risk Management - ITERATION 3 (PROVEN WINNER!)
     use_atr_stops: bool = True  # ATR stops enabled
@@ -558,6 +564,12 @@ def load_from_env() -> BotConfiguration:
     
     if os.getenv("BOT_MAX_DRAWDOWN_PERCENT"):
         config.max_drawdown_percent = float(os.getenv("BOT_MAX_DRAWDOWN_PERCENT"))
+    
+    if os.getenv("BOT_DAILY_LOSS_PERCENT"):
+        config.daily_loss_percent = float(os.getenv("BOT_DAILY_LOSS_PERCENT"))
+    
+    if os.getenv("BOT_USE_TOPSTEP_RULES"):
+        config.use_topstep_rules = os.getenv("BOT_USE_TOPSTEP_RULES").lower() in ("true", "1", "yes")
     
     if os.getenv("BOT_TICK_SIZE"):
         config.tick_size = float(os.getenv("BOT_TICK_SIZE"))
