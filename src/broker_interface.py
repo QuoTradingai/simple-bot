@@ -205,6 +205,11 @@ class TopStepBroker(BrokerInterface):
         self.websocket_streamer: Optional[TopStepWebSocketStreamer] = None
         self._contract_id_cache: Dict[str, str] = {}  # symbol -> contract_id mapping
         
+        # Dynamic balance tracking for auto-reconfiguration
+        self._last_configured_balance: float = 0.0
+        self._balance_change_threshold: float = 0.05  # Reconfigure if balance changes by 5%
+        self.config: Optional[Any] = None  # Store reference to config for dynamic updates
+        
         if not TOPSTEP_SDK_AVAILABLE:
             logger.error("TopStep SDK (project-x-py) not installed!")
             logger.error("Install with: pip install project-x-py")
@@ -249,6 +254,10 @@ class TopStepBroker(BrokerInterface):
                 from config import BotConfiguration
                 config = BotConfiguration()
                 config.auto_configure_for_account(account_balance, logger)
+                
+                # Store config and balance for dynamic reconfiguration
+                self.config = config
+                self._last_configured_balance = account_balance
                 
                 # Initialize WebSocket streamer for live data
                 if TOPSTEP_WEBSOCKET_AVAILABLE:
@@ -316,6 +325,10 @@ class TopStepBroker(BrokerInterface):
                 config = BotConfiguration()
                 config.auto_configure_for_account(account_balance, logger)
                 
+                # Store config and balance for dynamic reconfiguration
+                self.config = config
+                self._last_configured_balance = account_balance
+                
                 self.connected = True
                 self.failure_count = 0
                 return True
@@ -343,7 +356,10 @@ class TopStepBroker(BrokerInterface):
             logger.error(f"Error disconnecting from TopStep SDK: {e}")
     
     def get_account_equity(self) -> float:
-        """Get account equity from TopStep."""
+        """
+        Get account equity from TopStep.
+        Automatically reconfigures risk limits if balance changes significantly.
+        """
         if not self.connected or not self.sdk_client:
             logger.error("Cannot get equity: not connected")
             return 0.0
@@ -351,8 +367,28 @@ class TopStepBroker(BrokerInterface):
         try:
             account = self.sdk_client.get_account()
             if account:
-                equity = float(account.balance or 0.0)
-                return equity
+                current_balance = float(account.balance or 0.0)
+                
+                # Check if balance changed significantly (5% threshold)
+                if self._last_configured_balance > 0:
+                    balance_change_pct = abs(current_balance - self._last_configured_balance) / self._last_configured_balance
+                    
+                    if balance_change_pct >= self._balance_change_threshold:
+                        logger.info("=" * 80)
+                        logger.info("💰 BALANCE CHANGED - AUTO-RECONFIGURING RISK LIMITS")
+                        logger.info("=" * 80)
+                        logger.info(f"Previous Balance: ${self._last_configured_balance:,.2f}")
+                        logger.info(f"Current Balance: ${current_balance:,.2f}")
+                        logger.info(f"Change: {balance_change_pct * 100:.1f}%")
+                        
+                        # Reconfigure with new balance
+                        if self.config:
+                            self.config.auto_configure_for_account(current_balance, logger)
+                            self._last_configured_balance = current_balance
+                        else:
+                            logger.warning("Config not available for reconfiguration")
+                
+                return current_balance
             return 0.0
         except Exception as e:
             logger.error(f"Error getting account equity: {e}")
