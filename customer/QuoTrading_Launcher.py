@@ -517,7 +517,7 @@ class QuoTradingLauncher:
             widget.destroy()
         
         self.root.title("QuoTrading AI - Configure Trading")
-        self.root.geometry("700x550")
+        self.root.geometry("700x650")
         
         # Header
         header = tk.Frame(self.root, bg="#2C3E50", height=80)
@@ -549,11 +549,45 @@ class QuoTradingLauncher:
         settings = tk.Frame(main, bg="white")
         settings.pack(fill=tk.BOTH, expand=True)
         
-        # Row 1: Symbol and Contracts
-        tk.Label(settings, text="Trading Symbol:", font=("Arial", 11, "bold"), bg="white").grid(row=0, column=0, sticky=tk.W, pady=10)
-        self.symbol_var = tk.StringVar(value=self.config.get("symbol", "ES"))
-        symbol_combo = ttk.Combobox(settings, textvariable=self.symbol_var, width=25, state="readonly")
-        symbol_combo['values'] = (
+        # Row 1: Multi-Symbol Selection
+        tk.Label(settings, text="Trading Symbols:", font=("Arial", 11, "bold"), bg="white").grid(row=0, column=0, sticky=tk.W, pady=10)
+        
+        # Frame for multi-symbol selection
+        symbol_frame = tk.Frame(settings, bg="white")
+        symbol_frame.grid(row=0, column=1, columnspan=3, sticky=tk.W, padx=15, pady=10)
+        
+        # Instruction label
+        instruction = tk.Label(
+            symbol_frame,
+            text="✓ Hold Ctrl/Cmd and click to select multiple symbols (bot will trade all selected)",
+            font=("Arial", 8, "italic"),
+            bg="white",
+            fg="#2563EB"
+        )
+        instruction.pack(anchor=tk.W, pady=(0, 5))
+        
+        # Listbox container with scrollbar
+        listbox_container = tk.Frame(symbol_frame, bg="white")
+        listbox_container.pack(fill=tk.BOTH, expand=True)
+        
+        symbol_scroll = tk.Scrollbar(listbox_container, orient=tk.VERTICAL)
+        self.symbol_listbox = tk.Listbox(
+            listbox_container,
+            height=5,
+            selectmode=tk.MULTIPLE,
+            yscrollcommand=symbol_scroll.set,
+            font=("Arial", 9),
+            width=62,
+            selectbackground="#2563EB",
+            selectforeground="white",
+            activestyle="none"
+        )
+        symbol_scroll.config(command=self.symbol_listbox.yview)
+        symbol_scroll.pack(side=tk.RIGHT, fill=tk.Y)
+        self.symbol_listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        
+        # Available symbols
+        self.all_symbols = [
             "ES - E-mini S&P 500",
             "NQ - E-mini Nasdaq 100",
             "YM - E-mini Dow",
@@ -565,33 +599,115 @@ class QuoTradingLauncher:
             "ZN - 10-Year Treasury",
             "MES - Micro E-mini S&P 500",
             "MNQ - Micro E-mini Nasdaq 100"
+        ]
+        
+        for symbol in self.all_symbols:
+            self.symbol_listbox.insert(tk.END, symbol)
+        
+        # Select All / Clear All buttons
+        button_frame = tk.Frame(symbol_frame, bg="white")
+        button_frame.pack(fill=tk.X, pady=(5, 0))
+        
+        select_all_btn = tk.Button(
+            button_frame,
+            text="✓ Select All",
+            font=("Arial", 8),
+            bg="#10B981",
+            fg="white",
+            command=self.select_all_symbols,
+            cursor="hand2",
+            relief=tk.FLAT,
+            padx=10,
+            pady=3
         )
-        symbol_combo.grid(row=0, column=1, sticky=tk.W, padx=15, pady=10)
+        select_all_btn.pack(side=tk.LEFT, padx=(0, 5))
         
-        tk.Label(settings, text="Max Contracts:", font=("Arial", 11, "bold"), bg="white").grid(row=0, column=2, sticky=tk.W, padx=(30, 0), pady=10)
+        clear_all_btn = tk.Button(
+            button_frame,
+            text="✗ Clear All",
+            font=("Arial", 8),
+            bg="#EF4444",
+            fg="white",
+            command=self.clear_all_symbols,
+            cursor="hand2",
+            relief=tk.FLAT,
+            padx=10,
+            pady=3
+        )
+        clear_all_btn.pack(side=tk.LEFT)
+        
+        # Selected count label
+        self.symbol_count_label = tk.Label(
+            button_frame,
+            text="0 symbols selected",
+            font=("Arial", 8, "bold"),
+            bg="white",
+            fg="gray"
+        )
+        self.symbol_count_label.pack(side=tk.RIGHT, padx=(10, 0))
+        
+        # Bind selection change to update count
+        self.symbol_listbox.bind('<<ListboxSelect>>', self.update_symbol_count)
+        
+        # Pre-select saved symbols
+        saved_symbols = self.config.get("symbols", ["ES"])
+        if isinstance(saved_symbols, str):  # Legacy single symbol
+            saved_symbols = [saved_symbols]
+        
+        for i, symbol in enumerate(self.all_symbols):
+            symbol_code = symbol.split(" - ")[0]
+            if symbol_code in saved_symbols:
+                self.symbol_listbox.selection_set(i)
+        
+        # Update initial count
+        self.update_symbol_count()
+        
+        # Row 2: Position Sizing
+        tk.Label(settings, text="Max Contracts:", font=("Arial", 11, "bold"), bg="white").grid(row=1, column=0, sticky=tk.W, pady=10)
         self.contracts_var = tk.IntVar(value=self.config.get("max_contracts", 3))
-        self.contracts_spin = ttk.Spinbox(settings, from_=1, to=10, textvariable=self.contracts_var, width=10)
-        self.contracts_spin.grid(row=0, column=3, padx=15, pady=10)
-        
-        # Row 2: Daily Limits
-        tk.Label(settings, text="Max Trades/Day:", font=("Arial", 11, "bold"), bg="white").grid(row=1, column=0, sticky=tk.W, pady=10)
-        self.trades_var = tk.IntVar(value=self.config.get("max_trades", 9))
-        trades_spin = ttk.Spinbox(settings, from_=1, to=50, textvariable=self.trades_var, width=10)
-        trades_spin.grid(row=1, column=1, sticky=tk.W, padx=15, pady=10)
+        self.contracts_spin = ttk.Spinbox(settings, from_=1, to=25, textvariable=self.contracts_var, width=10)
+        self.contracts_spin.grid(row=1, column=1, sticky=tk.W, padx=15, pady=10)
         
         tk.Label(settings, text="Risk per Trade (%):", font=("Arial", 11, "bold"), bg="white").grid(row=1, column=2, sticky=tk.W, padx=(30, 0), pady=10)
         self.risk_var = tk.DoubleVar(value=self.config.get("risk_per_trade", 1.2))
         risk_spin = ttk.Spinbox(settings, from_=0.5, to=5.0, increment=0.1, textvariable=self.risk_var, width=10, format="%.1f")
         risk_spin.grid(row=1, column=3, padx=15, pady=10)
         
-        # Row 3: TopStep Rules
-        self.topstep_var = tk.BooleanVar(value=self.config.get("use_topstep_rules", True))
-        topstep_check = ttk.Checkbutton(
+        # Row 3: Risk Management
+        tk.Label(settings, text="Min Risk/Reward:", font=("Arial", 11, "bold"), bg="white").grid(row=2, column=0, sticky=tk.W, pady=10)
+        self.risk_reward_var = tk.DoubleVar(value=self.config.get("min_risk_reward", 2.0))
+        rr_spin = ttk.Spinbox(settings, from_=1.0, to=5.0, increment=0.1, textvariable=self.risk_reward_var, width=10, format="%.1f")
+        rr_spin.grid(row=2, column=1, sticky=tk.W, padx=15, pady=10)
+        
+        tk.Label(settings, text="Daily Loss Limit ($):", font=("Arial", 11, "bold"), bg="white").grid(row=2, column=2, sticky=tk.W, padx=(30, 0), pady=10)
+        self.daily_loss_var = tk.IntVar(value=self.config.get("daily_loss_limit", 2000))
+        loss_spin = ttk.Spinbox(settings, from_=500, to=10000, increment=100, textvariable=self.daily_loss_var, width=10)
+        loss_spin.grid(row=2, column=3, padx=15, pady=10)
+        
+        # Row 4: Daily Trade Limits
+        tk.Label(settings, text="Max Trades/Day:", font=("Arial", 11, "bold"), bg="white").grid(row=3, column=0, sticky=tk.W, pady=10)
+        self.trades_var = tk.IntVar(value=self.config.get("max_trades", 9))
+        trades_spin = ttk.Spinbox(settings, from_=1, to=50, textvariable=self.trades_var, width=10)
+        trades_spin.grid(row=3, column=1, sticky=tk.W, padx=15, pady=10)
+        
+        # Row 5: Auto-Calculate Protection
+        self.auto_calculate_var = tk.BooleanVar(value=self.config.get("auto_calculate_limits", True))
+        auto_check = ttk.Checkbutton(
             settings,
-            text="Use TopStep Rules (Daily loss limits, drawdown protection)",
-            variable=self.topstep_var
+            text="🤖 Auto-Calculate Limits (Bot calculates daily loss & drawdown from account size)",
+            variable=self.auto_calculate_var
         )
-        topstep_check.grid(row=2, column=0, columnspan=4, sticky=tk.W, pady=(15, 10))
+        auto_check.grid(row=4, column=0, columnspan=4, sticky=tk.W, pady=(15, 10))
+        
+        # Info label explaining auto-calculate
+        info_text = "When enabled: Bot fetches your account balance and auto-sets safe limits (2% daily, 4% max drawdown)"
+        tk.Label(
+            settings,
+            text=info_text,
+            font=("Arial", 8, "italic"),
+            bg="white",
+            fg="gray"
+        ).grid(row=5, column=0, columnspan=4, sticky=tk.W, pady=(0, 5))
         
         # Start Button
         start_btn = tk.Button(
@@ -650,8 +766,15 @@ class QuoTradingLauncher:
         
         # Save trading settings if they exist (Screen 2)
         try:
-            if hasattr(self, 'symbol_var'):
-                config["symbol"] = self.symbol_var.get().split(" - ")[0]
+            if hasattr(self, 'symbol_listbox'):
+                # Get selected symbols from listbox
+                selected_indices = self.symbol_listbox.curselection()
+                selected_symbols = []
+                for i in selected_indices:
+                    symbol_text = self.symbol_listbox.get(i)
+                    symbol_code = symbol_text.split(" - ")[0]
+                    selected_symbols.append(symbol_code)
+                config["symbols"] = selected_symbols if selected_symbols else ["ES"]
         except:
             pass
         
@@ -674,8 +797,20 @@ class QuoTradingLauncher:
             pass
         
         try:
-            if hasattr(self, 'topstep_var'):
-                config["use_topstep_rules"] = self.topstep_var.get()
+            if hasattr(self, 'risk_reward_var'):
+                config["min_risk_reward"] = self.risk_reward_var.get()
+        except:
+            pass
+        
+        try:
+            if hasattr(self, 'daily_loss_var'):
+                config["daily_loss_limit"] = self.daily_loss_var.get()
+        except:
+            pass
+        
+        try:
+            if hasattr(self, 'auto_calculate_var'):
+                config["auto_calculate_limits"] = self.auto_calculate_var.get()
         except:
             pass
         
@@ -684,6 +819,17 @@ class QuoTradingLauncher:
     
     def start_bot(self):
         """Validate broker credentials and start the trading bot in PowerShell terminal."""
+        # Step 0: Validate at least one symbol is selected
+        selected_indices = self.symbol_listbox.curselection()
+        if not selected_indices:
+            messagebox.showerror(
+                "No Symbols Selected",
+                "⚠ Please select at least one symbol to trade!\n\n"
+                "Use the symbol list to choose ES, NQ, GC, or other instruments.\n"
+                "Tip: Click 'Select All' to trade all symbols."
+            )
+            return
+        
         # Step 1: Validate broker credentials NOW (right before trading)
         broker = self.config.get("broker", "TopStep")
         broker_token = self.config.get("broker_token", "")
@@ -720,14 +866,19 @@ class QuoTradingLauncher:
         self.create_env_file()
         
         # Step 4: Show confirmation
+        selected_symbols = self.config.get("symbols", ["ES"])
+        symbols_str = ", ".join(selected_symbols) if isinstance(selected_symbols, list) else selected_symbols
+        
         result = messagebox.askyesno(
             "Launch Trading Bot?",
             f"Ready to start trading with these settings:\n\n"
             f"Broker: {broker}\n"
-            f"Symbol: {self.symbol_var.get()}\n"
+            f"Symbols: {symbols_str}\n"
             f"Max Contracts: {self.contracts_var.get()}\n"
             f"Max Trades/Day: {self.trades_var.get()}\n"
-            f"Risk/Trade: {self.risk_var.get()}%\n\n"
+            f"Risk/Trade: {self.risk_var.get()}%\n"
+            f"Min R:R Ratio: {self.risk_reward_var.get()}:1\n"
+            f"Daily Loss Limit: ${self.daily_loss_var.get()}\n\n"
             f"This will open a PowerShell terminal with live logs.\n"
             f"The bot will connect to {broker} and start trading.\n"
             f"Close the PowerShell window to stop the bot.\n\n"
@@ -778,7 +929,13 @@ class QuoTradingLauncher:
     
     def create_env_file(self):
         """Create .env file from GUI settings."""
-        symbol = self.symbol_var.get().split(" - ")[0]  # Extract symbol code (ES, NQ, etc.)
+        # Get selected symbols
+        selected_symbols = self.config.get("symbols", ["ES"])
+        if isinstance(selected_symbols, list):
+            symbols_str = ",".join(selected_symbols)
+        else:
+            symbols_str = selected_symbols
+        
         broker = self.config.get("broker", "TopStep")
         
         # Get the bot directory (parent of customer folder)
@@ -801,12 +958,14 @@ TOPSTEP_USERNAME={self.config.get("broker_username", "")}
 TRADOVATE_API_KEY={self.config.get("broker_token", "")}
 TRADOVATE_USERNAME={self.config.get("broker_username", "")}
 
-# Trading Configuration
-BOT_INSTRUMENT={symbol}
+# Trading Configuration - Multi-Symbol Support
+BOT_INSTRUMENTS={symbols_str}
 BOT_MAX_CONTRACTS={self.contracts_var.get()}
 BOT_MAX_TRADES_PER_DAY={self.trades_var.get()}
 BOT_RISK_PER_TRADE={self.risk_var.get() / 100}
-BOT_USE_TOPSTEP_RULES={str(self.topstep_var.get()).lower()}
+BOT_MIN_RISK_REWARD={self.risk_reward_var.get()}
+BOT_DAILY_LOSS_LIMIT={self.daily_loss_var.get()}
+BOT_AUTO_CALCULATE_LIMITS={str(self.auto_calculate_var.get()).lower()}
 
 # Environment
 BOT_ENVIRONMENT=production
@@ -818,6 +977,26 @@ QUOTRADING_API_URL=https://api.quotrading.com/v1/signals
         
         with open(env_path, 'w') as f:
             f.write(env_content)
+    
+    def select_all_symbols(self):
+        """Select all symbols in the listbox."""
+        self.symbol_listbox.selection_set(0, tk.END)
+        self.update_symbol_count()
+    
+    def clear_all_symbols(self):
+        """Clear all symbol selections."""
+        self.symbol_listbox.selection_clear(0, tk.END)
+        self.update_symbol_count()
+    
+    def update_symbol_count(self, event=None):
+        """Update the selected symbols count label."""
+        count = len(self.symbol_listbox.curselection())
+        if count == 0:
+            self.symbol_count_label.config(text="⚠ No symbols selected!", fg="#EF4444")
+        elif count == 1:
+            self.symbol_count_label.config(text="✓ 1 symbol selected", fg="#10B981")
+        else:
+            self.symbol_count_label.config(text=f"✓ {count} symbols selected", fg="#10B981")
     
     def run(self):
         """Start the GUI application."""

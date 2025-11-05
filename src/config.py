@@ -16,7 +16,8 @@ class BotConfiguration:
     """Type-safe configuration for the VWAP Bounce Bot."""
     
     # Instrument Configuration
-    instrument: str = "ES"
+    instrument: str = "ES"  # Single instrument (legacy support)
+    instruments: list = field(default_factory=lambda: ["ES"])  # Multi-symbol support
     timezone: str = "America/New_York"
     
     # Broker Configuration
@@ -82,9 +83,9 @@ class BotConfiguration:
     
     # Safety Parameters
     daily_loss_limit: float = 1000.0  # Default - will be calculated from account size
-    max_drawdown_percent: float = 4.0  # Default: 4% (TopStep standard, but user can override)
-    daily_loss_percent: float = 2.0  # Default: 2% (TopStep standard, but user can override)
-    use_topstep_rules: bool = True  # If False, uses custom daily_loss_percent and max_drawdown_percent
+    max_drawdown_percent: float = 4.0  # Default: 4% (standard safe limit)
+    daily_loss_percent: float = 2.0  # Default: 2% (standard safe limit)
+    auto_calculate_limits: bool = True  # If True, bot auto-calculates limits from account balance
     tick_timeout_seconds: int = 999999  # Disabled for testing
     proactive_stop_buffer_ticks: int = 2
     flatten_buffer_ticks: int = 2  # Buffer for flatten price calculation
@@ -216,13 +217,13 @@ class BotConfiguration:
         profit_target = self.get_profit_target(account_balance)
         account_type = self.get_account_type(account_balance)
         
-        # Set max drawdown percent based on account type
-        if self.use_topstep_rules:
-            self.max_drawdown_percent = 4.0  # TopStep mandatory
-            account_label = "TOPSTEP ACCOUNT"
+        # Auto-calculate limits based on account balance (standard 2%/4% rules)
+        if self.auto_calculate_limits:
+            self.max_drawdown_percent = 4.0  # Standard safe limit
+            account_label = "AUTO-CALCULATED LIMITS"
         else:
             # Keep user's custom setting (already set in config)
-            account_label = "PERSONAL ACCOUNT"
+            account_label = "MANUAL LIMITS"
         
         # NOTE: max_contracts and max_trades_per_day are NOT changed here
         # Those are user preferences that customers can configure themselves
@@ -234,14 +235,14 @@ class BotConfiguration:
             logger.info(f"Account Type: {account_type}")
             logger.info(f"Account Balance: ${account_balance:,.2f}")
             logger.info("")
-            if self.use_topstep_rules:
-                logger.info("TopStep Mandatory Limits (Auto-Configured):")
+            if self.auto_calculate_limits:
+                logger.info("Auto-Calculated Limits (Based on Account Balance):")
             else:
-                logger.info(f"Personal Account Limits (Custom {self.daily_loss_percent}%/{self.max_drawdown_percent}%):")
+                logger.info(f"Manual Limits (Custom {self.daily_loss_percent}%/{self.max_drawdown_percent}%):")
             logger.info(f"  Daily Loss Limit: ${self.daily_loss_limit:,.2f} ({self.daily_loss_percent}% of balance)")
             logger.info(f"  Max Trailing Drawdown: ${max_dd_dollars:,.2f} ({self.max_drawdown_percent}% from peak)")
-            if self.use_topstep_rules:
-                logger.info(f"  Profit Target (Eval): ${profit_target:,.2f} (6% - if in evaluation)")
+            if self.auto_calculate_limits:
+                logger.info(f"  Profit Target: ${profit_target:,.2f} (6% target)")
             logger.info("")
             logger.info("User Configurable Settings (Not Changed):")
             logger.info(f"  Max Contracts: {self.max_contracts}")
@@ -563,8 +564,16 @@ def load_from_env() -> BotConfiguration:
     config = BotConfiguration()
     
     # Load from environment variables with BOT_ prefix
-    if os.getenv("BOT_INSTRUMENT"):
+    # Multi-symbol support: BOT_INSTRUMENTS takes precedence over BOT_INSTRUMENT
+    if os.getenv("BOT_INSTRUMENTS"):
+        # Parse comma-separated list of instruments
+        instruments_str = os.getenv("BOT_INSTRUMENTS")
+        config.instruments = [s.strip() for s in instruments_str.split(",")]
+        config.instrument = config.instruments[0]  # First symbol is primary
+    elif os.getenv("BOT_INSTRUMENT"):
+        # Legacy single instrument support
         config.instrument = os.getenv("BOT_INSTRUMENT")
+        config.instruments = [config.instrument]
     
     if os.getenv("BOT_TIMEZONE"):
         config.timezone = os.getenv("BOT_TIMEZONE")
@@ -578,7 +587,10 @@ def load_from_env() -> BotConfiguration:
     if os.getenv("BOT_MAX_TRADES_PER_DAY"):
         config.max_trades_per_day = int(os.getenv("BOT_MAX_TRADES_PER_DAY"))
     
-    if os.getenv("BOT_RISK_REWARD_RATIO"):
+    # BOT_MIN_RISK_REWARD is alias for BOT_RISK_REWARD_RATIO (GUI uses MIN_RISK_REWARD)
+    if os.getenv("BOT_MIN_RISK_REWARD"):
+        config.risk_reward_ratio = float(os.getenv("BOT_MIN_RISK_REWARD"))
+    elif os.getenv("BOT_RISK_REWARD_RATIO"):
         config.risk_reward_ratio = float(os.getenv("BOT_RISK_REWARD_RATIO"))
     
     if os.getenv("BOT_DAILY_LOSS_LIMIT"):
@@ -590,8 +602,11 @@ def load_from_env() -> BotConfiguration:
     if os.getenv("BOT_DAILY_LOSS_PERCENT"):
         config.daily_loss_percent = float(os.getenv("BOT_DAILY_LOSS_PERCENT"))
     
-    if os.getenv("BOT_USE_TOPSTEP_RULES"):
-        config.use_topstep_rules = os.getenv("BOT_USE_TOPSTEP_RULES").lower() in ("true", "1", "yes")
+    # Auto-calculate limits (supports both old and new env var names)
+    if os.getenv("BOT_AUTO_CALCULATE_LIMITS"):
+        config.auto_calculate_limits = os.getenv("BOT_AUTO_CALCULATE_LIMITS").lower() in ("true", "1", "yes")
+    elif os.getenv("BOT_USE_TOPSTEP_RULES"):  # Legacy support
+        config.auto_calculate_limits = os.getenv("BOT_USE_TOPSTEP_RULES").lower() in ("true", "1", "yes")
     
     if os.getenv("BOT_TICK_SIZE"):
         config.tick_size = float(os.getenv("BOT_TICK_SIZE"))

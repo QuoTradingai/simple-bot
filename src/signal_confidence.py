@@ -347,43 +347,43 @@ class SignalConfidenceRL:
     def get_position_size_multiplier(self, confidence: float) -> float:
         """
         Get position size multiplier based on confidence.
-        Uses smooth interpolation for better sizing precision.
+        Uses smooth interpolation for aggressive scaling with high confidence.
         
         Returns a multiplier (0-1) that scales with user's max_contracts:
-        - LOW confidence (0-40%): ~33% of max_contracts
-        - MEDIUM confidence (40-70%): ~33-67% of max_contracts (interpolated)
-        - HIGH confidence (70-100%): ~67-100% of max_contracts (interpolated)
+        - VERY LOW confidence (0-20%): 20% of max_contracts (minimum viable)
+        - LOW confidence (20-40%): 20-40% of max_contracts
+        - MEDIUM confidence (40-60%): 40-60% of max_contracts
+        - HIGH confidence (60-80%): 60-80% of max_contracts
+        - VERY HIGH confidence (80-100%): 80-100% of max_contracts
         
-        Examples:
-        - max_contracts=3: LOW=1, MEDIUM=2, HIGH=3
-        - max_contracts=10: LOW=3, MEDIUM=6, HIGH=10
-        - max_contracts=1: Always 1 (confidence just validates entry)
+        Examples with max_contracts=25:
+        - 10% confidence: 5 contracts (20%)
+        - 30% confidence: 7 contracts (30%)
+        - 50% confidence: 12 contracts (50%)
+        - 70% confidence: 17 contracts (70%)
+        - 90% confidence: 22 contracts (90%)
+        - 95%+ confidence: 25 contracts (100%)
+        
+        Examples with max_contracts=3:
+        - Low confidence: 1 contract
+        - Medium confidence: 2 contracts
+        - High confidence: 3 contracts
         
         Args:
             confidence: Confidence level (0-1)
         
         Returns:
-            Multiplier value 0.33-1.0 (multiply by max_contracts to get actual size)
+            Multiplier value 0.2-1.0 (multiply by max_contracts to get actual size)
         """
-        # Smooth interpolation based on confidence tiers
-        # confidence 0-40%: 1 unit (33% of max)
-        # confidence 40-70%: 1-2 units (33-67% of max, interpolated)
-        # confidence 70-100%: 2-3 units (67-100% of max, interpolated)
+        # Smooth linear scaling: confidence directly maps to position size %
+        # Minimum 20% (even at 0% confidence, take at least something)
+        # Maximum 100% (full confidence = full position)
         
-        if confidence < 0.4:
-            # Low confidence: ~33% of max
-            contracts = 1.0
-        elif confidence < 0.7:
-            # Medium confidence: interpolate 33% → 67% of max
-            range_pct = (confidence - 0.4) / 0.3
-            contracts = 1.0 + range_pct
-        else:
-            # High confidence: interpolate 67% → 100% of max
-            range_pct = (confidence - 0.7) / 0.3
-            contracts = 2.0 + range_pct
+        # Linear interpolation: 0% conf → 20% size, 100% conf → 100% size
+        multiplier = 0.2 + (confidence * 0.8)
         
-        # Convert to multiplier (1 unit = 0.33, 2 units = 0.67, 3 units = 1.0)
-        multiplier = contracts / 3.0
+        # Cap between 0.2 and 1.0
+        multiplier = max(0.2, min(1.0, multiplier))
         
         return multiplier
     

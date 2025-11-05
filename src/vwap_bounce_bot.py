@@ -1840,11 +1840,27 @@ def calculate_position_size(symbol: str, side: str, entry_price: float, rl_confi
             size_multiplier = rl_brain.get_position_size_multiplier(rl_confidence)
             
         # Scale contracts based on confidence WITHIN user's max limit
-        # LOW confidence (0.33) = 33% of max, MEDIUM (0.67) = 67% of max, HIGH (1.0) = 100% of max
+        # DYNAMIC SCALING: Works with ANY max_contracts setting (1-25)
+        # Examples:
+        #   max=3, conf=50%  -> 2 contracts
+        #   max=10, conf=50% -> 5 contracts  
+        #   max=25, conf=50% -> 13 contracts
+        #   max=25, conf=90% -> 23 contracts
         contracts = max(1, int(round(user_max_contracts * size_multiplier)))
         
-        confidence_level = "LOW" if size_multiplier < 0.5 else ("MEDIUM" if size_multiplier < 0.9 else "HIGH")
-        logger.info(f"[RL] CONFIDENCE SIZING: {confidence_level} ({rl_confidence:.1%}) -> {contracts}/{user_max_contracts} contracts")
+        # Detailed confidence level logging
+        if rl_confidence < 0.3:
+            confidence_level = "VERY LOW"
+        elif rl_confidence < 0.5:
+            confidence_level = "LOW"
+        elif rl_confidence < 0.7:
+            confidence_level = "MEDIUM"
+        elif rl_confidence < 0.85:
+            confidence_level = "HIGH"
+        else:
+            confidence_level = "VERY HIGH"
+            
+        logger.info(f"[RL DYNAMIC SIZING] {confidence_level} confidence ({rl_confidence:.1%}) × Max {user_max_contracts} = {contracts} contracts ({size_multiplier:.1%})")
     else:
         # No RL confidence - cap at user's max
         contracts = min(contracts, user_max_contracts)
