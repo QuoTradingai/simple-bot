@@ -5212,7 +5212,7 @@ def get_trading_state(dt: datetime = None) -> str:
     24/5 trading - supports multi-user global operation with UTC-first approach.
     
     **MULTI-USER READY**: Works for users in any timezone by using UTC internally,
-    then converting to exchange timezone (Chicago for ES futures).
+    then converting to exchange timezone (Eastern Time for ES futures).
     
     Args:
         dt: Datetime to check (defaults to current time - live or backtest)
@@ -5221,9 +5221,9 @@ def get_trading_state(dt: datetime = None) -> str:
     Returns:
         Trading state:
         - 'entry_window': Market open, ready to trade
-        - 'flatten_mode': After 3 PM Chicago, close positions aggressively
+        - 'flatten_mode': 4:45-5:00 PM ET, close positions before maintenance
         - 'closed': Market closed (flatten all positions immediately)
-        - 'before_open': Before Sunday 6 PM Chicago open
+        - 'before_open': Before Sunday 6 PM ET open
     """
     # Get current time (UTC-first for multi-user)
     if dt is None:
@@ -5231,13 +5231,13 @@ def get_trading_state(dt: datetime = None) -> str:
     
     # Convert to UTC first (standardize)
     if dt.tzinfo is None:
-        # If naive datetime, assume it's Chicago time (legacy compatibility)
+        # If naive datetime, assume it's Eastern time (legacy compatibility)
         tz = pytz.timezone(CONFIG["timezone"])
         dt = tz.localize(dt)
     
-    # Convert to UTC, then to exchange timezone (Chicago for ES)
+    # Convert to UTC, then to exchange timezone (Eastern Time for ES)
     utc_time = dt.astimezone(pytz.UTC)
-    exchange_tz = pytz.timezone(CONFIG["timezone"])  # Chicago for ES
+    exchange_tz = pytz.timezone(CONFIG["timezone"])  # Eastern Time for ES
     local_time = utc_time.astimezone(exchange_tz)
     
     weekday = local_time.weekday()  # 0=Monday, 6=Sunday
