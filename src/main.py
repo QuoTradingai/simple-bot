@@ -641,6 +641,10 @@ def run_live_trading(args, bot_config):
 
 def main():
     """Main entry point"""
+    # Print a friendly greeting
+    print("Hello! Welcome to QuoTrading VWAP Bounce Bot")
+    print("=" * 50)
+    
     args = parse_arguments()
     
     # Load configuration with backtest mode flag
