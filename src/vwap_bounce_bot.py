@@ -3774,7 +3774,7 @@ def check_exit_conditions(symbol: str) -> None:
         )
         
         # Execute close order
-        close_position(symbol, "market_close", flatten_price)
+        handle_exit_orders(symbol, position, flatten_price, "market_close")
         
         logger.info("Position flattened - bot will continue running and auto-resume when market opens")
         return

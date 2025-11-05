@@ -338,7 +338,7 @@ def run_backtest_with_params(symbol, days, initial_equity, params, return_bars=F
                             'target_price': pos.get('target_price')
                         }
                     elif not pos.get('active') and engine.current_position is not None:
-                        engine._close_position(timestamp, price, 'bot_exit')
+                        engine._close_position(timestamp, bar['close'], 'bot_exit')
         
         # Run backtest
         results = engine.run_with_strategy(vwap_strategy_backtest)
