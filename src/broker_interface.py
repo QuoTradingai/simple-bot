@@ -690,6 +690,44 @@ class TopStepBroker(BrokerInterface):
             self._record_failure()
             return None
     
+    def cancel_order(self, order_id: str) -> bool:
+        """Cancel an open order using TopStep SDK."""
+        if not self.connected or self.trading_suite is None:
+            logger.error("Cannot cancel order: not connected")
+            return False
+        
+        try:
+            import asyncio
+            
+            # Define async wrapper
+            async def cancel_order_async():
+                return await self.trading_suite.orders.cancel_order(order_id=order_id)
+            
+            # Run async order cancellation - check for existing event loop
+            try:
+                loop = asyncio.get_running_loop()
+                import concurrent.futures
+                with concurrent.futures.ThreadPoolExecutor() as pool:
+                    cancel_response = pool.submit(
+                        lambda: asyncio.run(cancel_order_async())
+                    ).result()
+            except RuntimeError:
+                cancel_response = asyncio.run(cancel_order_async())
+            
+            if cancel_response and cancel_response.success:
+                logger.info(f"Order {order_id} cancelled successfully")
+                return True
+            else:
+                error_msg = cancel_response.errorMessage if cancel_response else "Unknown error"
+                logger.error(f"Order cancellation failed: {error_msg}")
+                self._record_failure()
+                return False
+                
+        except Exception as e:
+            logger.error(f"Error cancelling order: {e}")
+            self._record_failure()
+            return False
+    
     def place_stop_order(self, symbol: str, side: str, quantity: int, stop_price: float) -> Optional[Dict[str, Any]]:
         """Place stop order using TopStep SDK."""
         if not self.connected or self.trading_suite is None:

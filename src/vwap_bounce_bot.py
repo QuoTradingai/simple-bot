@@ -173,8 +173,16 @@ def initialize_broker() -> None:
     """
     Initialize the broker interface using configuration.
     Uses TopStep broker with error recovery and circuit breaker.
+    SHADOW MODE: Skips broker initialization for signal-only tracking.
     """
     global broker, recovery_manager
+    
+    # Skip broker in shadow mode
+    if CONFIG.get("shadow_mode", False):
+        logger.info("🌙 SHADOW MODE - Skipping broker initialization (signal tracking only)")
+        broker = None
+        recovery_manager = None
+        return
     
     logger.info("Initializing broker interface...")
     
@@ -240,14 +248,14 @@ def get_account_equity() -> float:
     """
     Fetch current account equity from broker.
     Returns account equity/balance with error handling.
-    In backtest mode, returns initial capital from backtest engine.
+    In backtest mode or shadow mode, returns simulated capital.
     """
-    # In backtest mode, broker is None - return default starting capital
-    if _bot_config.backtest_mode or broker is None:
-        # Backtest mode - use initial_capital from bot_status if available
+    # Shadow mode, backtest mode, or no broker - return simulated capital
+    if CONFIG.get("shadow_mode", False) or _bot_config.backtest_mode or broker is None:
+        # Use starting_equity from bot_status if available
         if bot_status.get("starting_equity") is not None:
             return bot_status["starting_equity"]
-        # Default starting capital for backtesting
+        # Default starting capital for shadow/backtest
         return 50000.0
     
     try:
@@ -268,7 +276,6 @@ def get_account_equity() -> float:
             {"error": str(e), "function": "get_account_equity"}
         )
         return 0.0
-
 
 def place_market_order(symbol: str, side: str, quantity: int) -> Optional[Dict[str, Any]]:
     """
@@ -437,6 +444,43 @@ def place_limit_order(symbol: str, side: str, quantity: int, limit_price: float)
             {"error": str(e), "function": "place_limit_order"}
         )
         return None
+
+
+def cancel_order(symbol: str, order_id: str) -> bool:
+    """
+    Cancel an open order through the broker interface.
+    
+    Args:
+        symbol: Instrument symbol
+        order_id: Order ID to cancel
+    
+    Returns:
+        True if cancelled successfully, False otherwise
+    """
+    logger.info(f"{'[DRY RUN] ' if CONFIG['dry_run'] else ''}Cancelling Order: {order_id} for {symbol}")
+    
+    if CONFIG["dry_run"]:
+        logger.info(f"[DRY RUN] Order {order_id} cancelled (simulated)")
+        return True
+    
+    if broker is None:
+        logger.error("Broker not initialized")
+        return False
+    
+    try:
+        # Use circuit breaker for order cancellation
+        breaker = recovery_manager.get_circuit_breaker("order_placement")
+        success, result = breaker.call(broker.cancel_order, order_id)
+        
+        if success and result:
+            logger.info(f"Order {order_id} cancelled successfully")
+            return True
+        else:
+            logger.error(f"Failed to cancel order {order_id}")
+            return False
+    except Exception as e:
+        logger.error(f"Error cancelling order {order_id}: {e}")
+        return False
 
 
 def get_position_quantity(symbol: str) -> int:
@@ -731,6 +775,135 @@ def on_quote(symbol: str, bid_price: float, ask_price: float, bid_size: int,
     # Also process as tick data to build bars
     # Use last_price and estimated volume of 1 (quote updates don't have volume)
     on_tick(symbol, last_price, 1, timestamp_ms)
+
+
+# ============================================================================
+# PHASE FOUR: Position State Persistence (NEVER FORGET!)
+# ============================================================================
+
+def save_position_state(symbol: str) -> None:
+    """
+    CRITICAL: Save position state to disk immediately.
+    This ensures the bot NEVER forgets what position it's in, even after:
+    - Crashes
+    - Restarts
+    - Network failures
+    - Any errors
+    
+    Args:
+        symbol: Instrument symbol
+    """
+    try:
+        from pathlib import Path
+        import json
+        
+        # Save to data/bot_state.json
+        state_file = Path("data/bot_state.json")
+        state_file.parent.mkdir(exist_ok=True)
+        
+        # Extract critical position info
+        position = state[symbol]["position"]
+        
+        # Convert datetime objects to strings for JSON serialization
+        position_state = {
+            "symbol": symbol,
+            "active": position["active"],
+            "side": position["side"],
+            "quantity": position["quantity"],
+            "entry_price": position["entry_price"],
+            "stop_price": position["stop_price"],
+            "target_price": position["target_price"],
+            "entry_time": position["entry_time"].isoformat() if position.get("entry_time") else None,
+            "order_id": position.get("order_id"),
+            "stop_order_id": position.get("stop_order_id"),
+            "last_updated": datetime.now().isoformat(),
+        }
+        
+        # Write to file with backup
+        backup_file = Path("data/bot_state.json.backup")
+        if state_file.exists():
+            # Create backup of previous state
+            state_file.rename(backup_file)
+        
+        with open(state_file, 'w') as f:
+            json.dump(position_state, f, indent=2)
+        
+        logger.debug(f"Position state saved: {position['side']} {position['quantity']} @ ${position['entry_price']:.2f}")
+        
+    except Exception as e:
+        logger.error(f"CRITICAL: Failed to save position state: {e}", exc_info=True)
+
+
+def load_position_state(symbol: str) -> bool:
+    """
+    Load position state from disk on startup.
+    Returns True if a position was restored, False otherwise.
+    
+    Args:
+        symbol: Instrument symbol
+    
+    Returns:
+        True if position was restored from disk
+    """
+    try:
+        from pathlib import Path
+        import json
+        
+        state_file = Path("data/bot_state.json")
+        if not state_file.exists():
+            logger.info("No saved position state found (clean start)")
+            return False
+        
+        with open(state_file, 'r') as f:
+            saved_state = json.load(f)
+        
+        # Check if saved state is for this symbol and has an active position
+        if saved_state.get("symbol") != symbol:
+            logger.info(f"Saved state is for different symbol: {saved_state.get('symbol')}")
+            return False
+        
+        if not saved_state.get("active"):
+            logger.info("Saved state shows no active position")
+            return False
+        
+        # CRITICAL: Verify with broker before restoring state
+        logger.warning(SEPARATOR_LINE)
+        logger.warning("RESTORING POSITION FROM SAVED STATE")
+        logger.warning(f"  Saved: {saved_state['side']} {saved_state['quantity']} @ ${saved_state['entry_price']:.2f}")
+        logger.warning("  Verifying with broker...")
+        
+        broker_position = get_position_quantity(symbol)
+        expected = saved_state['quantity'] if saved_state['side'] == "long" else -saved_state['quantity']
+        
+        if broker_position != expected:
+            logger.error(f"  MISMATCH: Broker={broker_position}, Saved={expected}")
+            logger.error("  Cannot restore - position state is stale or incorrect")
+            logger.warning(SEPARATOR_LINE)
+            return False
+        
+        # Broker confirms - restore the position state
+        logger.warning("  ✓ Broker confirms position - restoring state")
+        
+        # Restore position to state
+        state[symbol]["position"]["active"] = True
+        state[symbol]["position"]["side"] = saved_state["side"]
+        state[symbol]["position"]["quantity"] = saved_state["quantity"]
+        state[symbol]["position"]["entry_price"] = saved_state["entry_price"]
+        state[symbol]["position"]["stop_price"] = saved_state["stop_price"]
+        state[symbol]["position"]["target_price"] = saved_state["target_price"]
+        state[symbol]["position"]["order_id"] = saved_state.get("order_id")
+        state[symbol]["position"]["stop_order_id"] = saved_state.get("stop_order_id")
+        
+        if saved_state.get("entry_time"):
+            state[symbol]["position"]["entry_time"] = datetime.fromisoformat(saved_state["entry_time"])
+        
+        logger.warning(f"  Position restored successfully")
+        logger.warning(SEPARATOR_LINE)
+        return True
+        
+    except Exception as e:
+        logger.error(f"Error loading position state: {e}", exc_info=True)
+        return False
 
 
 def on_tick(symbol: str, price: float, volume: int, timestamp_ms: int) -> None:
@@ -1838,15 +2011,21 @@ def calculate_position_size(symbol: str, side: str, entry_price: float, rl_confi
         global rl_brain
         if rl_brain is not None:
             size_multiplier = rl_brain.get_position_size_multiplier(rl_confidence)
+        else:
+            size_multiplier = 1.0
             
-        # Scale contracts based on confidence WITHIN user's max limit
+        # Calculate RL-scaled max contracts
         # DYNAMIC SCALING: Works with ANY max_contracts setting (1-25)
         # Examples:
         #   max=3, conf=50%  -> 2 contracts
         #   max=10, conf=50% -> 5 contracts  
         #   max=25, conf=50% -> 13 contracts
         #   max=25, conf=90% -> 23 contracts
-        contracts = max(1, int(round(user_max_contracts * size_multiplier)))
+        rl_scaled_max = max(1, int(round(user_max_contracts * size_multiplier)))
+        
+        # Use MINIMUM of risk-based calculation and RL-scaled max
+        # This ensures we respect BOTH the risk management AND user's max limit
+        contracts = min(contracts, rl_scaled_max)
         
         # Detailed confidence level logging
         if rl_confidence < 0.3:
@@ -1860,7 +2039,7 @@ def calculate_position_size(symbol: str, side: str, entry_price: float, rl_confi
         else:
             confidence_level = "VERY HIGH"
             
-        logger.info(f"[RL DYNAMIC SIZING] {confidence_level} confidence ({rl_confidence:.1%}) × Max {user_max_contracts} = {contracts} contracts ({size_multiplier:.1%})")
+        logger.info(f"[RL DYNAMIC SIZING] {confidence_level} confidence ({rl_confidence:.1%}) × Max {user_max_contracts} = {rl_scaled_max} contracts (capped at {contracts} by risk)")
     else:
         # No RL confidence - cap at user's max
         contracts = min(contracts, user_max_contracts)
@@ -2137,14 +2316,18 @@ def place_entry_order_with_retry(symbol: str, side: str, contracts: int,
                         logger.info(f"  [QUEUE] Monitoring queue position...")
                         
                         try:
+                            # Create cancel function with symbol bound
+                            def cancel_order_func(oid):
+                                return cancel_order(symbol, oid)
+                            
                             was_filled, queue_reason = bid_ask_manager.queue_monitor.monitor_limit_order_queue(
                                 symbol=symbol,
-                                order_id=order,
+                                order_id=order.get("order_id") if isinstance(order, dict) else str(order),
                                 limit_price=limit_price,
                                 side=side,
                                 get_quote_func=bid_ask_manager.get_current_quote,
                                 is_filled_func=lambda oid: abs(get_position_quantity(symbol)) >= contracts,
-                                cancel_order_func=cancel_order
+                                cancel_order_func=cancel_order_func
                             )
                             
                             if was_filled:
@@ -2317,6 +2500,8 @@ def execute_entry(symbol: str, side: str, entry_price: float) -> None:
     Execute entry order with stop loss and target.
     Uses intelligent bid/ask order placement strategy with FULL EXECUTION RISK PROTECTION.
     
+    SHADOW MODE: Logs signal without placing actual orders.
+    
     NEW: Production-ready execution with:
     - Position state validation (prevents double positioning)
     - Price deterioration protection (max 3 ticks from signal)
@@ -2329,6 +2514,17 @@ def execute_entry(symbol: str, side: str, entry_price: float) -> None:
         side: 'long' or 'short'
         entry_price: Approximate entry price (mid or last)
     """
+    # ===== SHADOW MODE: Track signal without broker =====
+    if CONFIG.get("shadow_mode", False):
+        logger.info(SEPARATOR_LINE)
+        logger.info(f"🌙 SHADOW SIGNAL DETECTED - {side.upper()}")
+        logger.info(f"  Symbol: {symbol}")
+        logger.info(f"  Entry Price: ${entry_price:.2f}")
+        logger.info(f"  Time: {get_current_time().strftime('%Y-%m-%d %H:%M:%S %Z')}")
+        logger.info(f"  Mode: Signal tracking only (no broker orders)")
+        logger.info(SEPARATOR_LINE)
+        return
+    
     # ===== CRITICAL FIX #1: Position State Validation =====
     # Prevent double positioning if signal fires while already in trade
     current_position = get_position_quantity(symbol)
@@ -2596,6 +2792,10 @@ def execute_entry(symbol: str, side: str, entry_price: float) -> None:
         "initial_risk_ticks": stop_distance_ticks,
     }
     
+    # CRITICAL: IMMEDIATELY save position state to disk - NEVER forget we're in a trade!
+    save_position_state(symbol)
+    logger.info("  ✓ Position state saved to disk")
+    
     # ===== CRITICAL FIX #2: Stop Loss Execution Validation =====
     # Verify stop order accepted by broker - critical for capital protection
     stop_side = "SELL" if side == "long" else "BUY"
@@ -2621,9 +2821,31 @@ def execute_entry(symbol: str, side: str, entry_price: float) -> None:
         if emergency_close_order:
             logger.error(f"  ✓ Emergency close executed - Position closed")
             logger.error(f"  This trade is abandoned due to stop order failure")
+            
+            # CRITICAL FIX: Clear position state since we closed it
+            state[symbol]["position"]["active"] = False
+            state[symbol]["position"]["quantity"] = 0
+            state[symbol]["position"]["side"] = None
+            state[symbol]["position"]["entry_price"] = None
+            state[symbol]["position"]["stop_price"] = None
+            state[symbol]["position"]["target_price"] = None
+            
+            # CRITICAL: Save state to disk immediately
+            save_position_state(symbol)
+            logger.error("  ✓ Position state cleared and saved to disk")
         else:
             logger.error(f"  [FAIL] EMERGENCY CLOSE ALSO FAILED - MANUAL INTERVENTION REQUIRED!")
             logger.error(f"  Symbol: {symbol}, Side: {side}, Contracts: {contracts}")
+            
+            # CRITICAL FIX: Even if close failed, mark position as needing manual intervention
+            # Don't let bot think it can trade normally with this broken state
+            state[symbol]["position"]["active"] = False  # Prevent bot from managing this
+            bot_status["emergency_stop"] = True
+            bot_status["stop_reason"] = "stop_order_placement_failed"
+            
+            # CRITICAL: Save state to disk immediately
+            save_position_state(symbol)
+            logger.error("  ✓ Emergency stop activated and saved to disk")
         
         # Don't track this position - it's closed or needs manual handling
         logger.error(SEPARATOR_LINE)
@@ -4216,6 +4438,10 @@ def execute_exit(symbol: str, exit_price: float, reason: str) -> None:
         # Advanced Exit Management - General
         "initial_risk_ticks": None,
     }
+    
+    # CRITICAL: IMMEDIATELY save state to disk - position is now FLAT
+    save_position_state(symbol)
+    logger.info("  ✓ Position state saved to disk (FLAT)")
 
 
 def calculate_aggressive_price(base_price: float, order_side: str, attempt: int) -> float:
@@ -5282,39 +5508,55 @@ VALIDATION:
 # MAIN EXECUTION
 # ============================================================================
 
-def main() -> None:
-    """Main bot execution with event loop integration"""
+def main(symbol_override: str = None) -> None:
+    """Main bot execution with event loop integration
+    
+    Args:
+        symbol_override: Optional symbol to trade (overrides CONFIG["instrument"])
+                        Used for multi-symbol bot instances
+    """
     global event_loop, timer_manager, bid_ask_manager, live_recorder
     
+    # Use symbol override if provided (for multi-symbol support)
+    trading_symbol = symbol_override if symbol_override else CONFIG["instrument"]
+    
     logger.info(SEPARATOR_LINE)
-    logger.info("VWAP Bounce Bot Starting")
+    logger.info(f"VWAP Bounce Bot Starting [{trading_symbol}]")
     logger.info(SEPARATOR_LINE)
     
     # Log symbol specifications if loaded
     if SYMBOL_SPEC:
-        logger.info(f"Symbol: {SYMBOL_SPEC.name} ({SYMBOL_SPEC.symbol})")
-        logger.info(f"  Tick Value: ${SYMBOL_SPEC.tick_value:.2f} | Tick Size: ${SYMBOL_SPEC.tick_size}")
-        logger.info(f"  Slippage: {SYMBOL_SPEC.typical_slippage_ticks} ticks | Volatility: {SYMBOL_SPEC.volatility_factor}x")
-        logger.info(f"  Trading Hours: {SYMBOL_SPEC.session_start} - {SYMBOL_SPEC.session_end} ET")
+        logger.info(f"[{trading_symbol}] Symbol: {SYMBOL_SPEC.name} ({SYMBOL_SPEC.symbol})")
+        logger.info(f"[{trading_symbol}]   Tick Value: ${SYMBOL_SPEC.tick_value:.2f} | Tick Size: ${SYMBOL_SPEC.tick_size}")
+        logger.info(f"[{trading_symbol}]   Slippage: {SYMBOL_SPEC.typical_slippage_ticks} ticks | Volatility: {SYMBOL_SPEC.volatility_factor}x")
+        logger.info(f"[{trading_symbol}]   Trading Hours: {SYMBOL_SPEC.session_start} - {SYMBOL_SPEC.session_end} ET")
     
-    logger.info(f"Mode: {'DRY RUN' if CONFIG['dry_run'] else 'LIVE TRADING'}")
-    logger.info(f"Instrument: {CONFIG['instrument']}")
-    logger.info(f"Entry Window: {CONFIG['entry_start_time']} - {CONFIG['entry_end_time']} ET")
-    logger.info(f"Flatten Mode: {CONFIG['flatten_time']} ET")
-    logger.info(f"Force Close: {CONFIG['forced_flatten_time']} ET")
-    logger.info(f"Shutdown: {CONFIG['shutdown_time']} ET")
-    logger.info(f"Max Contracts: {CONFIG['max_contracts']}")
-    logger.info(f"Max Trades/Day: {CONFIG['max_trades_per_day']}")
-    logger.info(f"Risk Per Trade: {CONFIG['risk_per_trade'] * 100:.1f}%")
-    logger.info(f"Daily Loss Limit: ${CONFIG['daily_loss_limit']}")
-    logger.info(f"Max Drawdown: {CONFIG['max_drawdown_percent']}%")
+    # Display operating mode
+    if CONFIG.get('shadow_mode', False):
+        logger.info(f"[{trading_symbol}] Mode: 🌙 SHADOW MODE (Signal Tracking - No Broker)")
+        logger.info(f"[{trading_symbol}] ⚠️  Shadow mode: Bot will track signals without placing orders")
+    elif CONFIG['dry_run']:
+        logger.info(f"[{trading_symbol}] Mode: DRY RUN (Paper Trading)")
+    else:
+        logger.info(f"[{trading_symbol}] Mode: LIVE TRADING")
+    
+    logger.info(f"[{trading_symbol}] Instrument: {trading_symbol}")
+    logger.info(f"[{trading_symbol}] Entry Window: {CONFIG['entry_start_time']} - {CONFIG['entry_end_time']} ET")
+    logger.info(f"[{trading_symbol}] Flatten Mode: {CONFIG['flatten_time']} ET")
+    logger.info(f"[{trading_symbol}] Force Close: {CONFIG['forced_flatten_time']} ET")
+    logger.info(f"[{trading_symbol}] Shutdown: {CONFIG['shutdown_time']} ET")
+    logger.info(f"[{trading_symbol}] Max Contracts: {CONFIG['max_contracts']}")
+    logger.info(f"[{trading_symbol}] Max Trades/Day: {CONFIG['max_trades_per_day']}")
+    logger.info(f"[{trading_symbol}] Risk Per Trade: {CONFIG['risk_per_trade'] * 100:.1f}%")
+    logger.info(f"[{trading_symbol}] Daily Loss Limit: ${CONFIG['daily_loss_limit']}")
+    logger.info(f"[{trading_symbol}] Max Drawdown: {CONFIG['max_drawdown_percent']}%")
     logger.info(SEPARATOR_LINE)
     
     # Phase Fifteen: Validate timezone configuration
     validate_timezone_configuration()
     
     # Initialize bid/ask manager
-    logger.info("Initializing bid/ask manager...")
+    logger.info(f"[{trading_symbol}] Initializing bid/ask manager...")
     bid_ask_manager = BidAskManager(CONFIG)
     
     # Initialize live data recorder (if enabled)
@@ -5347,18 +5589,25 @@ def main() -> None:
     
     # Phase 12: Record starting equity for drawdown monitoring
     bot_status["starting_equity"] = get_account_equity()
-    logger.info(f"Starting Equity: ${bot_status['starting_equity']:.2f}")
+    logger.info(f"[{trading_symbol}] Starting Equity: ${bot_status['starting_equity']:.2f}")
     
-    # Initialize state for instrument
-    symbol = CONFIG["instrument"]
-    initialize_state(symbol)
+    # Initialize state for instrument (use override symbol if provided)
+    initialize_state(trading_symbol)
+    
+    # CRITICAL: Try to restore position state from disk if bot was restarted
+    logger.info(f"[{trading_symbol}] Checking for saved position state...")
+    position_restored = load_position_state(trading_symbol)
+    if position_restored:
+        logger.warning(f"[{trading_symbol}] ⚠️  BOT RESTARTED WITH ACTIVE POSITION - Managing existing trade")
+    else:
+        logger.info(f"[{trading_symbol}] No active position to restore - starting fresh")
     
     # Skip historical bars fetching in live mode - not needed for real-time trading
     # The bot will build bars from live tick data
-    logger.info("Skipping historical bars fetch - will build bars from live data")
+    logger.info(f"[{trading_symbol}] Skipping historical bars fetch - will build bars from live data")
     
     # Initialize event loop
-    logger.info("Initializing event loop...")
+    logger.info(f"[{trading_symbol}] Initializing event loop...")
     event_loop = EventLoop(bot_status, CONFIG)
     
     # Register event handlers
@@ -5378,12 +5627,12 @@ def main() -> None:
     timer_manager = TimerManager(event_loop, CONFIG, tz)
     timer_manager.start()
     
-    # Subscribe to market data (trades)
-    subscribe_market_data(symbol, on_tick)
+    # Subscribe to market data (trades) - use trading_symbol
+    subscribe_market_data(trading_symbol, on_tick)
     
     # Subscribe to bid/ask quotes if broker supports it
     if broker is not None and hasattr(broker, 'subscribe_quotes'):
-        logger.info("Subscribing to bid/ask quotes...")
+        logger.info(f"[{trading_symbol}] Subscribing to bid/ask quotes...")
         try:
             broker.subscribe_quotes(symbol, on_quote)
         except Exception as e:

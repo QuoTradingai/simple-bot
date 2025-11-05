@@ -319,6 +319,7 @@ class BotConfiguration:
     
     # Operational Parameters
     dry_run: bool = False
+    shadow_mode: bool = False  # Shadow trading - track signals without broker connection
     log_file: str = "logs/vwap_bounce_bot.log"
     max_bars_storage: int = 200
     
@@ -464,9 +465,9 @@ class BotConfiguration:
         if not 0 < self.max_drawdown_percent <= 100:
             errors.append(f"max_drawdown_percent must be between 0 and 100, got {self.max_drawdown_percent}")
         
-        # Validate broker configuration - API token is required unless in backtest mode
-        if not self.backtest_mode and not self.api_token:
-            errors.append("api_token is required for TopStep broker (not required in backtest_mode)")
+        # Validate broker configuration - API token is required unless in backtest/shadow mode
+        if not self.backtest_mode and not self.shadow_mode and not self.api_token:
+            errors.append("api_token is required for TopStep broker (not required in backtest_mode or shadow_mode)")
         
         # Validate environment
         if self.environment not in ["development", "staging", "production"]:
@@ -528,6 +529,7 @@ class BotConfiguration:
             "tick_size": self.tick_size,
             "tick_value": self.tick_value,
             "dry_run": self.dry_run,
+            "shadow_mode": self.shadow_mode,
             "log_file": self.log_file,
             "max_bars_storage": self.max_bars_storage,
             # Adaptive Exit Management
@@ -616,6 +618,9 @@ def load_from_env() -> BotConfiguration:
     
     if os.getenv("BOT_DRY_RUN"):
         config.dry_run = os.getenv("BOT_DRY_RUN").lower() in ("true", "1", "yes")
+    
+    if os.getenv("BOT_SHADOW_MODE"):
+        config.shadow_mode = os.getenv("BOT_SHADOW_MODE").lower() in ("true", "1", "yes")
     
     if os.getenv("BOT_ENVIRONMENT"):
         config.environment = os.getenv("BOT_ENVIRONMENT")

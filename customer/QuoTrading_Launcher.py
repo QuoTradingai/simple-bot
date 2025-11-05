@@ -517,219 +517,437 @@ class QuoTradingLauncher:
             widget.destroy()
         
         self.root.title("QuoTrading AI - Configure Trading")
-        self.root.geometry("700x650")
         
-        # Header
-        header = tk.Frame(self.root, bg="#2C3E50", height=80)
+        # Compact header
+        header = tk.Frame(self.root, bg=self.colors['primary'], height=50)
         header.pack(fill=tk.X)
+        header.pack_propagate(False)
         
         title = tk.Label(
             header, 
             text="QuoTrading AI - Trading Settings", 
-            font=("Arial", 20, "bold"),
-            bg="#2C3E50",
+            font=("Segoe UI", 14, "bold"),
+            bg=self.colors['primary'],
             fg="white"
         )
-        title.pack(pady=25)
+        title.pack(pady=12)
         
-        # Main container
-        main = tk.Frame(self.root, bg="white", padx=30, pady=20)
+        # Main container with dark background - minimal padding
+        main_container = tk.Frame(self.root, bg=self.colors['background'])
+        main_container.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        
+        # Main card with rounded appearance
+        main = tk.Frame(main_container, bg=self.colors['card'], relief=tk.FLAT, bd=0)
         main.pack(fill=tk.BOTH, expand=True)
+        main.configure(highlightbackground=self.colors['border'], highlightthickness=1)
         
-        # Instructions
-        instructions = tk.Label(
-            main,
-            text="Configure Your Trading Settings",
-            font=("Arial", 14, "bold"),
-            bg="white"
-        )
-        instructions.pack(pady=(0, 20))
+        # Card content - minimal padding
+        card_content = tk.Frame(main, bg=self.colors['card'])
+        card_content.pack(fill=tk.BOTH, expand=True, padx=10, pady=3)
         
-        # Trading Settings Frame
-        settings = tk.Frame(main, bg="white")
-        settings.pack(fill=tk.BOTH, expand=True)
+        # Trading Settings Frame (don't expand, just fill)
+        settings = tk.Frame(card_content, bg=self.colors['card'])
+        settings.pack(fill=tk.X, expand=False, pady=(0, 5))
         
-        # Row 1: Multi-Symbol Selection
-        tk.Label(settings, text="Trading Symbols:", font=("Arial", 11, "bold"), bg="white").grid(row=0, column=0, sticky=tk.W, pady=10)
+        # Section 1: Trading Symbols - Checkbox Grid
+        tk.Label(
+            settings, 
+            text="Trading Symbols", 
+            font=("Segoe UI", 11, "bold"), 
+            bg=self.colors['card'],
+            fg=self.colors['text']
+        ).pack(anchor=tk.W, pady=(0, 5))
         
-        # Frame for multi-symbol selection
-        symbol_frame = tk.Frame(settings, bg="white")
-        symbol_frame.grid(row=0, column=1, columnspan=3, sticky=tk.W, padx=15, pady=10)
+        # Checkbox grid for symbols
+        symbol_grid = tk.Frame(settings, bg=self.colors['card'])
+        symbol_grid.pack(fill=tk.X, pady=(0, 3))
         
-        # Instruction label
-        instruction = tk.Label(
-            symbol_frame,
-            text="✓ Hold Ctrl/Cmd and click to select multiple symbols (bot will trade all selected)",
-            font=("Arial", 8, "italic"),
-            bg="white",
-            fg="#2563EB"
-        )
-        instruction.pack(anchor=tk.W, pady=(0, 5))
-        
-        # Listbox container with scrollbar
-        listbox_container = tk.Frame(symbol_frame, bg="white")
-        listbox_container.pack(fill=tk.BOTH, expand=True)
-        
-        symbol_scroll = tk.Scrollbar(listbox_container, orient=tk.VERTICAL)
-        self.symbol_listbox = tk.Listbox(
-            listbox_container,
-            height=5,
-            selectmode=tk.MULTIPLE,
-            yscrollcommand=symbol_scroll.set,
-            font=("Arial", 9),
-            width=62,
-            selectbackground="#2563EB",
-            selectforeground="white",
-            activestyle="none"
-        )
-        symbol_scroll.config(command=self.symbol_listbox.yview)
-        symbol_scroll.pack(side=tk.RIGHT, fill=tk.Y)
-        self.symbol_listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        
-        # Available symbols
+        # Available symbols - All major futures contracts
         self.all_symbols = [
-            "ES - E-mini S&P 500",
-            "NQ - E-mini Nasdaq 100",
-            "YM - E-mini Dow",
-            "RTY - E-mini Russell 2000",
-            "CL - Crude Oil",
-            "GC - Gold",
-            "NG - Natural Gas",
-            "6E - Euro FX",
-            "ZN - 10-Year Treasury",
-            "MES - Micro E-mini S&P 500",
-            "MNQ - Micro E-mini Nasdaq 100"
+            ("ES", "E-mini S&P 500"),
+            ("NQ", "E-mini Nasdaq 100"),
+            ("YM", "E-mini Dow"),
+            ("RTY", "E-mini Russell 2000"),
+            ("CL", "Crude Oil"),
+            ("GC", "Gold"),
+            ("NG", "Natural Gas"),
+            ("6E", "Euro FX"),
+            ("ZN", "10-Year Treasury Note"),
+            ("MES", "Micro E-mini S&P 500"),
+            ("MNQ", "Micro E-mini Nasdaq 100")
         ]
         
-        for symbol in self.all_symbols:
-            self.symbol_listbox.insert(tk.END, symbol)
-        
-        # Select All / Clear All buttons
-        button_frame = tk.Frame(symbol_frame, bg="white")
-        button_frame.pack(fill=tk.X, pady=(5, 0))
-        
-        select_all_btn = tk.Button(
-            button_frame,
-            text="✓ Select All",
-            font=("Arial", 8),
-            bg="#10B981",
-            fg="white",
-            command=self.select_all_symbols,
-            cursor="hand2",
-            relief=tk.FLAT,
-            padx=10,
-            pady=3
-        )
-        select_all_btn.pack(side=tk.LEFT, padx=(0, 5))
-        
-        clear_all_btn = tk.Button(
-            button_frame,
-            text="✗ Clear All",
-            font=("Arial", 8),
-            bg="#EF4444",
-            fg="white",
-            command=self.clear_all_symbols,
-            cursor="hand2",
-            relief=tk.FLAT,
-            padx=10,
-            pady=3
-        )
-        clear_all_btn.pack(side=tk.LEFT)
-        
-        # Selected count label
-        self.symbol_count_label = tk.Label(
-            button_frame,
-            text="0 symbols selected",
-            font=("Arial", 8, "bold"),
-            bg="white",
-            fg="gray"
-        )
-        self.symbol_count_label.pack(side=tk.RIGHT, padx=(10, 0))
-        
-        # Bind selection change to update count
-        self.symbol_listbox.bind('<<ListboxSelect>>', self.update_symbol_count)
-        
-        # Pre-select saved symbols
+        # Store checkbox variables
+        self.symbol_vars = {}
         saved_symbols = self.config.get("symbols", ["ES"])
-        if isinstance(saved_symbols, str):  # Legacy single symbol
+        if isinstance(saved_symbols, str):
             saved_symbols = [saved_symbols]
         
-        for i, symbol in enumerate(self.all_symbols):
-            symbol_code = symbol.split(" - ")[0]
-            if symbol_code in saved_symbols:
-                self.symbol_listbox.selection_set(i)
+        # Create 2-column grid of checkboxes
+        for i, (code, name) in enumerate(self.all_symbols):
+            row = i // 2
+            col = i % 2
+            
+            var = tk.BooleanVar(value=(code in saved_symbols))
+            self.symbol_vars[code] = var
+            
+            cb_frame = tk.Frame(symbol_grid, bg=self.colors['card'])
+            cb_frame.grid(row=row, column=col, sticky=tk.W, padx=(0, 20), pady=1)
+            
+            cb = tk.Checkbutton(
+                cb_frame,
+                text=f"{code} - {name}",
+                variable=var,
+                font=("Segoe UI", 9),
+                bg=self.colors['card'],
+                fg=self.colors['text'],
+                selectcolor=self.colors['background'],
+                activebackground=self.colors['card'],
+                activeforeground=self.colors['secondary'],
+                cursor="hand2"
+            )
+            cb.pack(anchor=tk.W)
         
-        # Update initial count
-        self.update_symbol_count()
+        # Section 2: Account Size & Risk - Side by side
+        account_risk_frame = tk.Frame(settings, bg=self.colors['card'])
+        account_risk_frame.pack(fill=tk.X, pady=(0, 5))
         
-        # Row 2: Position Sizing
-        tk.Label(settings, text="Max Contracts:", font=("Arial", 11, "bold"), bg="white").grid(row=1, column=0, sticky=tk.W, pady=10)
-        self.contracts_var = tk.IntVar(value=self.config.get("max_contracts", 3))
-        self.contracts_spin = ttk.Spinbox(settings, from_=1, to=25, textvariable=self.contracts_var, width=10)
-        self.contracts_spin.grid(row=1, column=1, sticky=tk.W, padx=15, pady=10)
+        # Account Size (left side)
+        account_col = tk.Frame(account_risk_frame, bg=self.colors['card'])
+        account_col.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 10))
         
-        tk.Label(settings, text="Risk per Trade (%):", font=("Arial", 11, "bold"), bg="white").grid(row=1, column=2, sticky=tk.W, padx=(30, 0), pady=10)
-        self.risk_var = tk.DoubleVar(value=self.config.get("risk_per_trade", 1.2))
-        risk_spin = ttk.Spinbox(settings, from_=0.5, to=5.0, increment=0.1, textvariable=self.risk_var, width=10, format="%.1f")
-        risk_spin.grid(row=1, column=3, padx=15, pady=10)
-        
-        # Row 3: Risk Management
-        tk.Label(settings, text="Min Risk/Reward:", font=("Arial", 11, "bold"), bg="white").grid(row=2, column=0, sticky=tk.W, pady=10)
-        self.risk_reward_var = tk.DoubleVar(value=self.config.get("min_risk_reward", 2.0))
-        rr_spin = ttk.Spinbox(settings, from_=1.0, to=5.0, increment=0.1, textvariable=self.risk_reward_var, width=10, format="%.1f")
-        rr_spin.grid(row=2, column=1, sticky=tk.W, padx=15, pady=10)
-        
-        tk.Label(settings, text="Daily Loss Limit ($):", font=("Arial", 11, "bold"), bg="white").grid(row=2, column=2, sticky=tk.W, padx=(30, 0), pady=10)
-        self.daily_loss_var = tk.IntVar(value=self.config.get("daily_loss_limit", 2000))
-        loss_spin = ttk.Spinbox(settings, from_=500, to=10000, increment=100, textvariable=self.daily_loss_var, width=10)
-        loss_spin.grid(row=2, column=3, padx=15, pady=10)
-        
-        # Row 4: Daily Trade Limits
-        tk.Label(settings, text="Max Trades/Day:", font=("Arial", 11, "bold"), bg="white").grid(row=3, column=0, sticky=tk.W, pady=10)
-        self.trades_var = tk.IntVar(value=self.config.get("max_trades", 9))
-        trades_spin = ttk.Spinbox(settings, from_=1, to=50, textvariable=self.trades_var, width=10)
-        trades_spin.grid(row=3, column=1, sticky=tk.W, padx=15, pady=10)
-        
-        # Row 5: Auto-Calculate Protection
-        self.auto_calculate_var = tk.BooleanVar(value=self.config.get("auto_calculate_limits", True))
-        auto_check = ttk.Checkbutton(
-            settings,
-            text="🤖 Auto-Calculate Limits (Bot calculates daily loss & drawdown from account size)",
-            variable=self.auto_calculate_var
-        )
-        auto_check.grid(row=4, column=0, columnspan=4, sticky=tk.W, pady=(15, 10))
-        
-        # Info label explaining auto-calculate
-        info_text = "When enabled: Bot fetches your account balance and auto-sets safe limits (2% daily, 4% max drawdown)"
         tk.Label(
-            settings,
-            text=info_text,
-            font=("Arial", 8, "italic"),
-            bg="white",
-            fg="gray"
-        ).grid(row=5, column=0, columnspan=4, sticky=tk.W, pady=(0, 5))
+            account_col, 
+            text="Account Size ($)", 
+            font=("Segoe UI", 9),
+            bg=self.colors['card'],
+            fg=self.colors['text_light']
+        ).pack(anchor=tk.W)
         
-        # Start Button
-        start_btn = tk.Button(
-            main,
-            text="🚀 START TRADING",
-            font=("Arial", 14, "bold"),
-            bg="#27AE60",
+        account_entry_frame = tk.Frame(account_col, bg=self.colors['card'])
+        account_entry_frame.pack(fill=tk.X, pady=(3, 0))
+        
+        self.account_entry = tk.Entry(
+            account_entry_frame,
+            font=("Segoe UI", 9),
+            relief=tk.SOLID,
+            bd=1,
+            highlightthickness=2,
+            highlightbackground=self.colors['border'],
+            highlightcolor=self.colors['secondary']
+        )
+        self.account_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, ipady=2)
+        self.account_entry.insert(0, self.config.get("account_size", "10000"))
+        
+        fetch_btn = tk.Button(
+            account_entry_frame,
+            text="Fetch from Broker",
+            font=("Segoe UI", 7),
+            bg=self.colors['secondary'],
             fg="white",
-            command=self.start_bot,
-            width=30,
-            height=2
+            relief=tk.FLAT,
+            cursor="hand2",
+            padx=8,
+            pady=4,
+            command=self.fetch_account_size
         )
-        start_btn.pack(pady=20)
+        fetch_btn.pack(side=tk.LEFT, padx=(5, 0))
         
-        info_label = tk.Label(
-            main,
-            text="Bot will launch in PowerShell terminal with live logs",
-            font=("Arial", 9),
-            bg="white",
-            fg="gray"
+        # Risk per Trade (right side)
+        risk_col = tk.Frame(account_risk_frame, bg=self.colors['card'])
+        risk_col.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        
+        tk.Label(
+            risk_col, 
+            text="Risk per Trade (%)", 
+            font=("Segoe UI", 9),
+            bg=self.colors['card'],
+            fg=self.colors['text_light']
+        ).pack(anchor=tk.W)
+        
+        self.risk_var = tk.DoubleVar(value=self.config.get("risk_per_trade", 1.2))
+        risk_spin = ttk.Spinbox(
+            risk_col,
+            from_=0.5, 
+            to=5.0, 
+            increment=0.1, 
+            textvariable=self.risk_var,
+            width=15,
+            format="%.1f"
         )
-        info_label.pack()
+        risk_spin.pack(fill=tk.X, pady=(3, 0), ipady=0)
+        
+        # Daily Loss Limit
+        daily_loss_col = tk.Frame(account_risk_frame, bg=self.colors['card'])
+        daily_loss_col.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(10, 0))
+        
+        tk.Label(
+            daily_loss_col, 
+            text="Daily Loss Limit ($)", 
+            font=("Segoe UI", 9),
+            bg=self.colors['card'],
+            fg=self.colors['text_light']
+        ).pack(anchor=tk.W)
+        
+        self.daily_loss_var = tk.IntVar(value=self.config.get("daily_loss_limit", 2000))
+        loss_spin = ttk.Spinbox(
+            daily_loss_col,
+            from_=500, 
+            to=10000, 
+            increment=100, 
+            textvariable=self.daily_loss_var,
+            width=15
+        )
+        loss_spin.pack(fill=tk.X, pady=(3, 0), ipady=0)
+        
+        # Section 3: Strategy Settings - 3 columns - reduce padding
+        strategy_frame = tk.Frame(settings, bg=self.colors['card'])
+        strategy_frame.pack(fill=tk.X, pady=(0, 3))
+        
+        # Max Contracts
+        contracts_col = tk.Frame(strategy_frame, bg=self.colors['card'])
+        contracts_col.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 10))
+        
+        tk.Label(
+            contracts_col, 
+            text="Max Contracts", 
+            font=("Segoe UI", 9),
+            bg=self.colors['card'],
+            fg=self.colors['text_light']
+        ).pack(anchor=tk.W)
+        
+        self.contracts_var = tk.IntVar(value=self.config.get("max_contracts", 3))
+        contracts_spin = ttk.Spinbox(
+            contracts_col,
+            from_=1, 
+            to=25, 
+            textvariable=self.contracts_var,
+            width=12
+        )
+        contracts_spin.pack(fill=tk.X, pady=(3, 0), ipady=0)
+        
+        # Min Risk/Reward
+        rr_col = tk.Frame(strategy_frame, bg=self.colors['card'])
+        rr_col.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 10))
+        
+        tk.Label(
+            rr_col, 
+            text="Min Risk/Reward", 
+            font=("Segoe UI", 9),
+            bg=self.colors['card'],
+            fg=self.colors['text_light']
+        ).pack(anchor=tk.W)
+        
+        self.risk_reward_var = tk.DoubleVar(value=self.config.get("min_risk_reward", 2.0))
+        rr_spin = ttk.Spinbox(
+            rr_col,
+            from_=1.0, 
+            to=5.0, 
+            increment=0.1, 
+            textvariable=self.risk_reward_var,
+            width=12,
+            format="%.1f"
+        )
+        rr_spin.pack(fill=tk.X, pady=(3, 0), ipady=0)
+        
+        # Max Trades/Day
+        trades_col = tk.Frame(strategy_frame, bg=self.colors['card'])
+        trades_col.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        
+        tk.Label(
+            trades_col, 
+            text="Max Trades/Day", 
+            font=("Segoe UI", 9),
+            bg=self.colors['card'],
+            fg=self.colors['text_light']
+        ).pack(anchor=tk.W)
+        
+        self.trades_var = tk.IntVar(value=self.config.get("max_trades", 10))
+        trades_spin = ttk.Spinbox(
+            trades_col,
+            from_=1, 
+            to=50, 
+            textvariable=self.trades_var,
+            width=12
+        )
+        trades_spin.pack(fill=tk.X, pady=(3, 0), ipady=0)
+        
+        # Section 5: Auto-Calculate Toggle & Shadow Mode (compact row)
+        toggles_frame = tk.Frame(settings, bg=self.colors['card'])
+        toggles_frame.pack(fill=tk.X, pady=(3, 0))
+        
+        # Left column: Auto-calculate
+        self.auto_calculate_var = tk.BooleanVar(value=self.config.get("auto_calculate_limits", True))
+        auto_check = tk.Checkbutton(
+            toggles_frame,
+            text="Auto-calculate Limits",
+            variable=self.auto_calculate_var,
+            font=("Segoe UI", 9),
+            bg=self.colors['card'],
+            fg=self.colors['text'],
+            selectcolor=self.colors['background'],
+            activebackground=self.colors['card'],
+            activeforeground=self.colors['secondary'],
+            cursor="hand2"
+        )
+        auto_check.pack(side=tk.LEFT, anchor=tk.W)
+        
+        # Right column: Shadow mode (compact)
+        self.shadow_mode_var = tk.BooleanVar(value=self.config.get("shadow_mode", False))
+        shadow_check = tk.Checkbutton(
+            toggles_frame,
+            text="🌙 Shadow Mode",
+            variable=self.shadow_mode_var,
+            font=("Segoe UI", 9),
+            bg=self.colors['card'],
+            fg=self.colors['warning'],
+            selectcolor=self.colors['background'],
+            activebackground=self.colors['card'],
+            activeforeground=self.colors['warning'],
+            cursor="hand2"
+        )
+        shadow_check.pack(side=tk.LEFT, anchor=tk.W, padx=(20, 0))
+        
+        # Shadow mode explanation (small text below)
+        shadow_info = tk.Label(
+            settings,
+            text="Shadow mode = No broker, signal tracking only (perfect for testing)",
+            font=("Segoe UI", 7, "italic"),
+            bg=self.colors['card'],
+            fg=self.colors['text_secondary'],
+            justify=tk.LEFT
+        )
+        shadow_info.pack(anchor=tk.W, pady=(2, 0))
+        
+        # Separator line - reduce padding
+        separator = tk.Frame(card_content, bg=self.colors['border'], height=1)
+        separator.pack(fill=tk.X, pady=(3, 5))
+        
+        # Button Container - Side by side
+        button_container = tk.Frame(card_content, bg=self.colors['card'])
+        button_container.pack(fill=tk.X, pady=(0, 5))
+        
+        # Start Bot Button (left)
+        self.start_btn = tk.Button(
+            button_container,
+            text="▶ Start Bot",
+            font=("Segoe UI", 11, "bold"),
+            bg=self.colors['success'],
+            fg="white",
+            activebackground="#059669",
+            activeforeground="white",
+            command=self.start_bot,
+            cursor="hand2",
+            relief=tk.FLAT,
+            bd=0
+        )
+        self.start_btn.pack(side=tk.LEFT, fill=tk.X, expand=True, ipady=6, padx=(0, 5))
+        
+        # Stop Bot Button (right)
+        self.stop_btn = tk.Button(
+            button_container,
+            text="■ Stop Bot",
+            font=("Segoe UI", 11, "bold"),
+            bg="#EF4444",
+            fg="white",
+            activebackground="#DC2626",
+            activeforeground="white",
+            command=self.stop_bot,
+            cursor="hand2",
+            relief=tk.FLAT,
+            bd=0,
+            state=tk.DISABLED  # Disabled until bot starts
+        )
+        self.stop_btn.pack(side=tk.LEFT, fill=tk.X, expand=True, ipady=6, padx=(5, 0))
+        
+        # Store bot process reference
+        self.bot_process = None
+        
+        # Console/Status Frame (compact)
+        console_separator = tk.Frame(card_content, bg=self.colors['border'], height=1)
+        console_separator.pack(fill=tk.X, pady=(5, 3))
+        
+        console_label = tk.Label(
+            card_content,
+            text="📊 Status",
+            font=("Segoe UI", 9, "bold"),
+            bg=self.colors['card'],
+            fg=self.colors['text']
+        )
+        console_label.pack(anchor=tk.W, pady=(0, 3))
+        
+        # Compact console text area (3 lines)
+        console_frame = tk.Frame(card_content, bg=self.colors['background'])
+        console_frame.pack(fill=tk.X)
+        
+        self.console_text = tk.Text(
+            console_frame,
+            height=3,
+            font=("Consolas", 7),
+            bg="#1a1a1a",
+            fg="#00ff00",
+            insertbackground="#00ff00",
+            relief=tk.FLAT,
+            padx=5,
+            pady=3,
+            wrap=tk.WORD
+        )
+        self.console_text.pack(fill=tk.X)
+        
+        # Initial console message
+        self.console_log("Ready - Configure settings and click 'Start Bot'")
+        self.console_text.config(state=tk.DISABLED)
+    
+    def fetch_account_size(self):
+        """Fetch account size from broker credentials."""
+        # Get broker credentials
+        broker = self.config.get("broker", "TopStep")
+        broker_token = self.config.get("broker_token", "")
+        broker_username = self.config.get("broker_username", "")
+        
+        if not broker_token or not broker_username:
+            messagebox.showwarning(
+                "Credentials Required",
+                f"Please enter your {broker} credentials first!\n\n"
+                f"API Token and Username are required to fetch account balance."
+            )
+            return
+        
+        # Show working dialog
+        result = messagebox.showinfo(
+            "Fetching Balance...",
+            f"Connecting to {broker} to fetch account balance...\n\n"
+            f"This feature requires the bot to be running.\n"
+            f"For now, please enter your account size manually.\n\n"
+            f"Future update: Real-time balance fetching!"
+        )
+        
+        # TODO: Implement actual broker API call when bot is running
+        # For now, suggest common account sizes
+        suggested = messagebox.askyesno(
+            "Suggest Account Size?",
+            "Would you like to use a common account size?\n\n"
+            "TopStep Account Sizes:\n"
+            "• Express: $25,000\n"
+            "• Step 1: $50,000\n"
+            "• Step 2: $100,000 or $150,000\n\n"
+            "Click YES to select, NO to enter manually."
+        )
+        
+        if suggested:
+            # Show selection dialog
+            from tkinter import simpledialog
+            choice = simpledialog.askstring(
+                "Select Account Size",
+                "Enter account size:\n"
+                "25000 (Express)\n"
+                "50000 (Step 1)\n"
+                "100000 (Step 2)\n"
+                "150000 (Step 2 Large)\n"
+            )
+            if choice and choice.isdigit():
+                self.account_entry.delete(0, tk.END)
+                self.account_entry.insert(0, choice)
     
     def load_config(self):
         """Load saved configuration."""
@@ -766,15 +984,16 @@ class QuoTradingLauncher:
         
         # Save trading settings if they exist (Screen 2)
         try:
-            if hasattr(self, 'symbol_listbox'):
-                # Get selected symbols from listbox
-                selected_indices = self.symbol_listbox.curselection()
-                selected_symbols = []
-                for i in selected_indices:
-                    symbol_text = self.symbol_listbox.get(i)
-                    symbol_code = symbol_text.split(" - ")[0]
-                    selected_symbols.append(symbol_code)
+            if hasattr(self, 'symbol_vars'):
+                # Get selected symbols from checkboxes
+                selected_symbols = [code for code, var in self.symbol_vars.items() if var.get()]
                 config["symbols"] = selected_symbols if selected_symbols else ["ES"]
+        except:
+            pass
+        
+        try:
+            if hasattr(self, 'account_entry'):
+                config["account_size"] = self.account_entry.get()
         except:
             pass
         
@@ -817,62 +1036,116 @@ class QuoTradingLauncher:
         with open(self.config_file, 'w') as f:
             json.dump(config, f, indent=2)
     
-    def start_bot(self):
-        """Validate broker credentials and start the trading bot in PowerShell terminal."""
-        # Step 0: Validate at least one symbol is selected
-        selected_indices = self.symbol_listbox.curselection()
-        if not selected_indices:
-            messagebox.showerror(
-                "No Symbols Selected",
-                "⚠ Please select at least one symbol to trade!\n\n"
-                "Use the symbol list to choose ES, NQ, GC, or other instruments.\n"
-                "Tip: Click 'Select All' to trade all symbols."
+    def console_log(self, message):
+        """Add message to console with timestamp."""
+        if not hasattr(self, 'console_text'):
+            return  # Console not initialized yet
+        from datetime import datetime
+        timestamp = datetime.now().strftime("%H:%M:%S")
+        self.console_text.config(state=tk.NORMAL)
+        self.console_text.insert(tk.END, f"[{timestamp}] {message}\n")
+        self.console_text.see(tk.END)  # Auto-scroll to bottom
+        self.console_text.config(state=tk.DISABLED)
+    
+    def stop_bot(self):
+        """Stop the running bot process."""
+        if self.bot_process is None or self.bot_process.poll() is not None:
+            messagebox.showinfo(
+                "No Bot Running",
+                "No bot process is currently running."
             )
             return
         
-        # Step 1: Validate broker credentials NOW (right before trading)
+        result = messagebox.askyesno(
+            "Stop Bot?",
+            "⚠ Stop Trading Bot ⚠\n\n"
+            "This will stop the bot process.\n"
+            "Any open positions will remain open!\n\n"
+            "Are you sure?"
+        )
+        
+        if result:
+            try:
+                self.console_log("Stopping bot process...")
+                self.bot_process.terminate()
+                self.bot_process.wait(timeout=5)
+                self.bot_process = None
+                
+                # Update UI
+                self.start_btn.config(state=tk.NORMAL)
+                self.stop_btn.config(state=tk.DISABLED)
+                
+                self.console_log("✓ Bot stopped successfully")
+                messagebox.showinfo(
+                    "Bot Stopped",
+                    "✓ Bot process terminated.\n\n"
+                    "IMPORTANT: Check broker for any open positions!"
+                )
+            except Exception as e:
+                self.console_log(f"✗ Failed to stop bot: {e}")
+                messagebox.showerror(
+                    "Stop Failed",
+                    f"Failed to stop bot:\n{str(e)}"
+                )
+    
+    def kill_bot(self):
+        """Legacy method - redirects to stop_bot."""
+        self.stop_bot()
+    
+    def start_bot(self):
+        """Validate broker credentials and start the trading bot."""
+        # Step 0: Validate at least one symbol is selected
+        selected_symbols = [code for code, var in self.symbol_vars.items() if var.get()]
+        
+        if not selected_symbols:
+            self.console_log("✗ Error: No symbols selected")
+            messagebox.showerror(
+                "No Symbols Selected",
+                "⚠ Please select at least one symbol to trade!\n\n"
+                "Use the checkboxes to choose ES, NQ, GC, or other instruments."
+            )
+            return
+        
+        # Step 1: Validate broker credentials (skip in shadow mode)
         broker = self.config.get("broker", "TopStep")
         broker_token = self.config.get("broker_token", "")
         broker_username = self.config.get("broker_username", "")
         license_key = self.config.get("quotrading_license", "")
+        shadow_mode = self.shadow_mode_var.get()
         
-        # Admin key bypasses broker validation
-        if license_key != "QUOTRADING_ADMIN_MASTER_2025":
-            # Validate broker credentials are present
-            if not broker_token or not broker_username:
-                messagebox.showerror(
-                    "Missing Broker Credentials",
-                    f"Your {broker} credentials are missing!\n\n"
-                    f"Please go back and enter your API credentials."
-                )
-                return
-            
-            # TODO: When you build the API server, add real credential validation here:
-            # response = requests.post("https://api.quotrading.com/validate", 
-            #                          json={"broker": broker, "token": broker_token})
-            # For now, we just check they exist
-            
-            messagebox.showinfo(
-                "Credentials Ready",
-                f"✓ License key validated\n"
-                f"✓ {broker} credentials ready\n\n"
-                f"Broker credentials will be validated when the bot connects."
-            )
+        # Skip broker validation in shadow mode
+        if not shadow_mode:
+            # Admin key bypasses broker validation
+            if license_key != "QUOTRADING_ADMIN_MASTER_2025":
+                # Validate broker credentials are present
+                if not broker_token or not broker_username:
+                    self.console_log("✗ Error: Missing broker credentials")
+                    messagebox.showerror(
+                        "Missing Broker Credentials",
+                        f"Your {broker} credentials are missing!\n\n"
+                        f"Please go back and enter your API credentials,\n"
+                        f"or enable Shadow Mode to run without a broker."
+                    )
+                    return
+        else:
+            self.console_log("🌙 Shadow mode enabled - skipping broker validation")
         
         # Step 2: Save final config
+        self.console_log("Saving configuration...")
         self.save_config()
         
         # Step 3: Create .env file
+        self.console_log("Creating .env file...")
         self.create_env_file()
         
         # Step 4: Show confirmation
-        selected_symbols = self.config.get("symbols", ["ES"])
-        symbols_str = ", ".join(selected_symbols) if isinstance(selected_symbols, list) else selected_symbols
+        symbols_str = ", ".join(selected_symbols)
+        mode_str = "🌙 Shadow Mode (Signal Tracking)" if shadow_mode else f"{broker} Live Trading"
         
         result = messagebox.askyesno(
             "Launch Trading Bot?",
-            f"Ready to start trading with these settings:\n\n"
-            f"Broker: {broker}\n"
+            f"Ready to start bot with these settings:\n\n"
+            f"Mode: {mode_str}\n"
             f"Symbols: {symbols_str}\n"
             f"Max Contracts: {self.contracts_var.get()}\n"
             f"Max Trades/Day: {self.trades_var.get()}\n"
@@ -880,16 +1153,18 @@ class QuoTradingLauncher:
             f"Min R:R Ratio: {self.risk_reward_var.get()}:1\n"
             f"Daily Loss Limit: ${self.daily_loss_var.get()}\n\n"
             f"This will open a PowerShell terminal with live logs.\n"
-            f"The bot will connect to {broker} and start trading.\n"
-            f"Close the PowerShell window to stop the bot.\n\n"
+            f"Use the STOP BOT button to stop trading.\n\n"
             f"Continue?"
         )
         
         if not result:
+            self.console_log("Launch cancelled by user")
             return
         
         # Launch bot in PowerShell terminal
         try:
+            self.console_log(f"Launching bot for {symbols_str}...")
+            
             # Get the parent directory (where run.py is located)
             bot_dir = Path(__file__).parent.parent.absolute()
             
@@ -901,26 +1176,37 @@ class QuoTradingLauncher:
                 f"cd '{bot_dir}'; python run.py"
             ]
             
-            # Start PowerShell process in a NEW SYSTEM WINDOW (not in VS Code)
-            subprocess.Popen(
+            # Start PowerShell process in a NEW SYSTEM WINDOW
+            self.bot_process = subprocess.Popen(
                 ps_command, 
                 creationflags=subprocess.CREATE_NEW_CONSOLE,
                 cwd=str(bot_dir)
             )
             
-            # Success message
+            # Update UI
+            self.start_btn.config(state=tk.DISABLED)
+            self.stop_btn.config(state=tk.NORMAL)
+            
+            # Log success
+            self.console_log(f"✓ Bot launched successfully (PID: {self.bot_process.pid})")
+            self.console_log(f"Mode: {mode_str}")
+            self.console_log(f"Symbols: {symbols_str}")
+            self.console_log("PowerShell terminal opened - check for live logs")
+            self.console_log("Use 'Stop Bot' button to stop trading")
+            
+            # Success notification (don't close GUI)
             messagebox.showinfo(
                 "Bot Launched!",
-                "✓ QuoTrading AI bot launched successfully!\n\n"
-                "PowerShell terminal opened with live logs.\n"
-                "To stop the bot, close the PowerShell window.\n\n"
-                "You can close this setup window now."
+                f"✓ Bot launched successfully!\n\n"
+                f"Mode: {mode_str}\n"
+                f"Symbols: {symbols_str}\n\n"
+                f"PowerShell terminal opened with live logs.\n"
+                f"This window will stay open for monitoring.\n"
+                f"Use the STOP BOT button to stop trading."
             )
             
-            # Close the GUI
-            self.root.destroy()
-            
         except Exception as e:
+            self.console_log(f"✗ Launch failed: {e}")
             messagebox.showerror(
                 "Launch Error",
                 f"Failed to launch bot:\n{str(e)}\n\n"
@@ -929,12 +1215,12 @@ class QuoTradingLauncher:
     
     def create_env_file(self):
         """Create .env file from GUI settings."""
-        # Get selected symbols
-        selected_symbols = self.config.get("symbols", ["ES"])
-        if isinstance(selected_symbols, list):
-            symbols_str = ",".join(selected_symbols)
-        else:
-            symbols_str = selected_symbols
+        # Get selected symbols from checkboxes (NOT from config)
+        selected_symbols = [code for code, var in self.symbol_vars.items() if var.get()]
+        if not selected_symbols:
+            selected_symbols = ["ES"]  # Fallback
+        
+        symbols_str = ",".join(selected_symbols)
         
         broker = self.config.get("broker", "TopStep")
         
@@ -959,6 +1245,7 @@ TRADOVATE_API_KEY={self.config.get("broker_token", "")}
 TRADOVATE_USERNAME={self.config.get("broker_username", "")}
 
 # Trading Configuration - Multi-Symbol Support
+# SELECTED SYMBOLS: {symbols_str}
 BOT_INSTRUMENTS={symbols_str}
 BOT_MAX_CONTRACTS={self.contracts_var.get()}
 BOT_MAX_TRADES_PER_DAY={self.trades_var.get()}
@@ -967,9 +1254,12 @@ BOT_MIN_RISK_REWARD={self.risk_reward_var.get()}
 BOT_DAILY_LOSS_LIMIT={self.daily_loss_var.get()}
 BOT_AUTO_CALCULATE_LIMITS={str(self.auto_calculate_var.get()).lower()}
 
+# Trading Mode
+BOT_SHADOW_MODE={str(self.shadow_mode_var.get()).lower()}
+BOT_DRY_RUN=false
+
 # Environment
 BOT_ENVIRONMENT=production
-BOT_DRY_RUN=false
 CONFIRM_LIVE_TRADING=1
 BOT_LOG_LEVEL=INFO
 QUOTRADING_API_URL=https://api.quotrading.com/v1/signals
@@ -977,26 +1267,9 @@ QUOTRADING_API_URL=https://api.quotrading.com/v1/signals
         
         with open(env_path, 'w') as f:
             f.write(env_content)
-    
-    def select_all_symbols(self):
-        """Select all symbols in the listbox."""
-        self.symbol_listbox.selection_set(0, tk.END)
-        self.update_symbol_count()
-    
-    def clear_all_symbols(self):
-        """Clear all symbol selections."""
-        self.symbol_listbox.selection_clear(0, tk.END)
-        self.update_symbol_count()
-    
-    def update_symbol_count(self, event=None):
-        """Update the selected symbols count label."""
-        count = len(self.symbol_listbox.curselection())
-        if count == 0:
-            self.symbol_count_label.config(text="⚠ No symbols selected!", fg="#EF4444")
-        elif count == 1:
-            self.symbol_count_label.config(text="✓ 1 symbol selected", fg="#10B981")
-        else:
-            self.symbol_count_label.config(text=f"✓ {count} symbols selected", fg="#10B981")
+        
+        # Log which symbols were saved
+        print(f"✓ .env file created with {len(selected_symbols)} symbols: {symbols_str}")
     
     def run(self):
         """Start the GUI application."""

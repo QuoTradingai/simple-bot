@@ -596,6 +596,23 @@ def run_live_trading(args, bot_config):
             logger.error("Set this variable to confirm you understand the risks")
             return False
     
+    # Check if multiple instruments are configured
+    instruments = bot_config.instruments if hasattr(bot_config, 'instruments') else [bot_config.instrument]
+    
+    if len(instruments) > 1:
+        logger.info(f"Multi-symbol mode detected: {', '.join(instruments)}")
+        logger.info(f"Launching {len(instruments)} bot instances in parallel...")
+        return run_multi_symbol_trading(args, bot_config, instruments)
+    else:
+        # Single symbol mode
+        logger.info(f"Single-symbol mode: {instruments[0]}")
+        return run_single_symbol_bot(args, bot_config, instruments[0])
+
+
+def run_single_symbol_bot(args, bot_config, symbol):
+    """Run bot for a single symbol"""
+    logger = logging.getLogger('main')
+    
     # Import bot modules
     from vwap_bounce_bot import main as bot_main, bot_status, CONFIG
     
@@ -619,23 +636,92 @@ def run_live_trading(args, bot_config):
     audit_logger = AuditLogger()
     
     try:
-        # Run the bot
-        logger.info("Starting bot...")
-        bot_main()
+        # Run the bot with symbol
+        logger.info(f"Starting bot for {symbol}...")
+        bot_main(symbol_override=symbol)
         
     except KeyboardInterrupt:
-        logger.info("Received shutdown signal")
+        logger.info(f"[{symbol}] Received shutdown signal")
         
     except Exception as e:
-        logger.error(f"Bot error: {e}", exc_info=True)
+        logger.error(f"[{symbol}] Bot error: {e}", exc_info=True)
         
     finally:
         # Cleanup
         if health_server:
             health_server.stop()
             
-        logger.info("Bot shutdown complete")
+        logger.info(f"[{symbol}] Bot shutdown complete")
     
+    return True
+
+
+def _run_symbol_process(symbol):
+    """Process target function for each symbol (must be at module level for Windows)"""
+    # Re-import in subprocess
+    from vwap_bounce_bot import main as bot_main
+    import logging
+    import multiprocessing
+    
+    process_logger = logging.getLogger(f'bot.{symbol}')
+    process_logger.info(f"[{symbol}] Bot process starting (PID: {multiprocessing.current_process().pid})")
+    
+    try:
+        # Run bot with this symbol
+        bot_main(symbol_override=symbol)
+    except KeyboardInterrupt:
+        process_logger.info(f"[{symbol}] Shutdown signal received")
+    except Exception as e:
+        process_logger.error(f"[{symbol}] Bot error: {e}", exc_info=True)
+    finally:
+        process_logger.info(f"[{symbol}] Bot process exiting")
+
+
+def run_multi_symbol_trading(args, bot_config, instruments):
+    """Run multiple bot instances in parallel (one per symbol)"""
+    from multiprocessing import Process
+    logger = logging.getLogger('main')
+    
+    # Create a process for each symbol
+    processes = []
+    
+    # Launch a process for each symbol
+    for symbol in instruments:
+        logger.info(f"Launching bot process for {symbol}...")
+        p = Process(
+            target=_run_symbol_process,
+            args=(symbol,),
+            name=f"Bot-{symbol}"
+        )
+        p.start()
+        processes.append((symbol, p))
+        logger.info(f"  └─ {symbol} bot started (PID: {p.pid})")
+    
+    logger.info(f"\n{'='*60}")
+    logger.info(f"ALL {len(processes)} BOT INSTANCES RUNNING")
+    logger.info(f"{'='*60}")
+    for symbol, p in processes:
+        logger.info(f"  [{symbol}] PID: {p.pid}")
+    logger.info(f"{'='*60}\n")
+    
+    try:
+        # Wait for all processes
+        for symbol, p in processes:
+            p.join()
+            logger.info(f"[{symbol}] Bot process terminated (exit code: {p.exitcode})")
+    
+    except KeyboardInterrupt:
+        logger.info("\nShutdown signal received - stopping all bot instances...")
+        for symbol, p in processes:
+            if p.is_alive():
+                logger.info(f"  Terminating {symbol}...")
+                p.terminate()
+                p.join(timeout=5)
+                if p.is_alive():
+                    logger.warning(f"  Force killing {symbol}...")
+                    p.kill()
+    
+    logger.info("All bot instances stopped")
     return True
 
 
