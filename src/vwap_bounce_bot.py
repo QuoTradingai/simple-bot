@@ -830,6 +830,9 @@ def save_position_state(symbol: str) -> None:
         # Write to file with backup
         backup_file = Path("data/bot_state.json.backup")
         if state_file.exists():
+            # Delete existing backup if it exists (Windows workaround)
+            if backup_file.exists():
+                backup_file.unlink()
             # Create backup of previous state
             state_file.rename(backup_file)
         

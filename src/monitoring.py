@@ -105,6 +105,11 @@ def setup_logging(config: Dict[str, Any]) -> logging.Logger:
     # Console handler with human-readable format
     console_handler = logging.StreamHandler()
     console_handler.setLevel(logging.INFO)
+    
+    # Force UTF-8 encoding for Windows console to handle emojis
+    if hasattr(console_handler.stream, 'reconfigure'):
+        console_handler.stream.reconfigure(encoding='utf-8', errors='replace')
+    
     console_format = logging.Formatter(
         '%(asctime)s - %(name)s - %(levelname)s - %(message)s',
         datefmt='%Y-%m-%d %H:%M:%S'
