@@ -250,12 +250,12 @@ class SignalConfidenceRL:
         """
         Learn the optimal confidence threshold from past experiences.
         Strategy: For different threshold levels, calculate what the expected profit would be.
-        Choose the threshold that maximizes total expected profit.
-        BIAS TOWARDS MORE TRADES to match best-run performance.
+        Choose the threshold that maximizes profit PER TRADE (quality), not total volume.
+        SMART TRADING: Be selective, not aggressive. Quality over quantity.
         """
         if len(self.experiences) < 50:
-            # Not enough data - use conservative default
-            return 0.30
+            # Not enough data - use conservative default (50% minimum confidence)
+            return 0.50
         
         # Test different thresholds and see which gives best expected value
         # EXPANDED RANGE: Test lower thresholds (30%, 35%, 40%) to capture more trades
@@ -292,7 +292,8 @@ class SignalConfidenceRL:
             })
         
         # Now test each threshold quickly using pre-calculated confidences
-        for test_threshold in [0.0, 0.1, 0.2, 0.25, 0.3, 0.35, 0.4, 0.45, 0.5, 0.55, 0.6, 0.65, 0.7, 0.75, 0.8]:
+        # CONSERVATIVE RANGE: Start at 50% minimum (don't test low thresholds that lead to overtrading)
+        for test_threshold in [0.5, 0.55, 0.6, 0.65, 0.7, 0.75, 0.8, 0.85, 0.9]:
             trades_at_threshold = []
             
             # Would we have taken this trade with the test threshold?
@@ -313,28 +314,28 @@ class SignalConfidenceRL:
                     'avg_profit': avg_profit
                 }
         
-        # Find threshold with MAXIMUM TOTAL PROFIT (not just high win rate)
-        # We want the threshold that gives us the best balance of:
-        # - Enough trades (volume) - TARGET 20-30 trades for best-run performance
-        # - Good win rate (accuracy) - MAINTAIN 65%+ to match best run quality
-        # - Positive expected value (profitability)
+        # Find threshold that maximizes PROFIT PER TRADE (quality), not total volume
+        # We want the threshold that gives us:
+        # - SMART TRADING: ~1-2 trades/day average (not 3-5/day)
+        # - HIGH QUALITY: 70%+ win rate (not just 65%)
+        # - BEST PROFIT: Maximum average profit per trade
         
-        # BALANCED REQUIREMENTS: Quality over quantity, but not too conservative
+        # QUALITY REQUIREMENTS: High standards for signal selection
         valid_thresholds = {
             t: r for t, r in threshold_results.items() 
-            if r['trades'] >= 15 and r['win_rate'] >= 0.65  # Min 15 trades, 65%+ WR for quality
+            if r['trades'] >= 10 and r['win_rate'] >= 0.70  # Min 10 trades, 70%+ WR for quality
         }
         
         if not valid_thresholds:
-            # No threshold meets criteria - use moderate default
-            logger.info("No valid thresholds found, using default 35%")
-            return 0.35
+            # No threshold meets criteria - use conservative default (50% minimum)
+            logger.info("No valid thresholds found, using default 50%")
+            return 0.50
         
-        # Choose threshold that maximizes TOTAL expected profit (avg_profit * num_trades)
-        # Slight bonus for more trades, but prioritize profit quality
+        # Choose threshold that maximizes AVERAGE PROFIT PER TRADE (not total profit)
+        # This ensures we're selective and only take high-quality setups
         best_threshold = max(
             valid_thresholds.items(), 
-            key=lambda x: (x[1]['expected_value'] * x[1]['trades']) + (x[1]['trades'] * 20)  # Small bonus $20 per trade
+            key=lambda x: x[1]['avg_profit']  # Pure quality: best average profit per trade
         )[0]
         best_result = valid_thresholds[best_threshold]
         
