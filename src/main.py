@@ -643,7 +643,7 @@ def main():
     """Main entry point"""
     # Print a friendly greeting
     print("Hello! Welcome to QuoTrading VWAP Bounce Bot")
-    print("=" * 50)
+    print("=" * 60)
     
     args = parse_arguments()
     
