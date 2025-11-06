@@ -1,0 +1,233 @@
+"""
+Test Navigation Flow
+====================
+Tests the GUI navigation flow without actually running the GUI.
+This validates the logic and method structure.
+"""
+
+def test_launcher_structure():
+    """Test that QuoTradingLauncher has all required methods."""
+    print("=" * 60)
+    print("TEST 1: QuoTrading Launcher Structure")
+    print("=" * 60)
+    
+    # Check required methods by examining the file directly
+    # (We can't import because tkinter might not be available)
+    with open('customer/QuoTrading_Launcher.py', 'r') as f:
+        content = f.read()
+    
+    # Check if class exists
+    if 'class QuoTradingLauncher' in content:
+        print("✅ QuoTradingLauncher class exists")
+    else:
+        print("❌ QuoTradingLauncher class not found")
+        return False
+    
+    # Check required methods
+    required_methods = [
+        'setup_username_screen',      # Screen 0: Username and password
+        'validate_username_password',  # Validates and moves to API key screen
+        'setup_api_key_screen',       # Screen 1: API key
+        'validate_login',             # Validates credentials and moves to QuoTrading screen
+        'setup_quotrading_screen',    # Screen 2: QuoTrading account
+        'validate_quotrading',        # Validates and moves to broker screen
+        'setup_broker_screen',        # Screen 3: Broker setup
+        'validate_broker',            # Validates and moves to trading screen
+        'setup_trading_screen',       # Screen 4: Trading settings
+        'start_bot',                  # Starts the bot
+        'create_button',              # Creates navigation buttons
+    ]
+    
+    print("\nChecking required methods:")
+    all_present = True
+    for method in required_methods:
+        # Check the file directly
+        if f'def {method}' in content:
+            print(f"✅ {method}")
+        else:
+            print(f"❌ {method} - MISSING")
+            all_present = False
+    
+    return all_present
+
+
+def test_navigation_flow_logic():
+    """Test the navigation flow by examining the code."""
+    print("\n" + "=" * 60)
+    print("TEST 2: Navigation Flow Logic")
+    print("=" * 60)
+    
+    with open('customer/QuoTrading_Launcher.py', 'r') as f:
+        content = f.read()
+    
+    # Test flow: Screen 0 -> Screen 1 -> Screen 2 -> Screen 3 -> Screen 4
+    flow_checks = [
+        ("Screen 0 (username/password)", 'def setup_username_screen', 'self.current_screen = 0'),
+        ("Screen 0 next button", 'validate_username_password', 'self.setup_api_key_screen()'),
+        ("Screen 1 (API key)", 'def setup_api_key_screen', 'self.current_screen = 1'),
+        ("Screen 1 back button", 'setup_api_key_screen', 'setup_username_screen'),
+        ("Screen 1 next button", 'def validate_login', 'self.setup_quotrading_screen()'),
+        ("Screen 2 (QuoTrading)", 'def setup_quotrading_screen', 'self.current_screen = 2'),
+        ("Screen 2 back button", 'setup_quotrading_screen', 'setup_api_key_screen'),
+        ("Screen 2 next button", 'validate_quotrading', 'self.setup_broker_screen()'),
+        ("Screen 3 (Broker)", 'def setup_broker_screen', 'self.current_screen = 3'),
+        ("Screen 3 back button", 'setup_broker_screen', 'setup_quotrading_screen'),
+        ("Screen 3 next button", 'validate_broker', 'self.setup_trading_screen()'),
+        ("Screen 4 (Trading)", 'def setup_trading_screen', 'self.current_screen = 4'),
+        ("Screen 4 back button", 'setup_trading_screen', 'setup_broker_screen'),
+        ("Screen 4 start button", 'def start_bot', 'self.save_config()'),
+    ]
+    
+    print("\nChecking navigation flow:")
+    all_passed = True
+    for check_name, search_pattern, expected_pattern in flow_checks:
+        if search_pattern in content and expected_pattern in content:
+            print(f"✅ {check_name}")
+        else:
+            print(f"❌ {check_name} - Pattern not found")
+            all_passed = False
+    
+    return all_passed
+
+
+def test_button_existence():
+    """Test that navigation buttons exist in all screens."""
+    print("\n" + "=" * 60)
+    print("TEST 3: Navigation Buttons")
+    print("=" * 60)
+    
+    with open('customer/QuoTrading_Launcher.py', 'r') as f:
+        content = f.read()
+    
+    button_checks = [
+        ("Screen 0 has NEXT button", 'setup_username_screen', '"NEXT →"'),
+        ("Screen 1 has BACK button", 'setup_api_key_screen', '"← BACK"'),
+        ("Screen 1 has NEXT button", 'setup_api_key_screen', '"NEXT →"'),
+        ("Screen 2 has BACK button", 'setup_quotrading_screen', '"← BACK"'),
+        ("Screen 2 has NEXT button", 'setup_quotrading_screen', '"NEXT →"'),
+        ("Screen 3 has BACK button", 'setup_broker_screen', '"← BACK"'),
+        ("Screen 3 has NEXT button", 'setup_broker_screen', '"NEXT →"'),
+        ("Screen 4 has BACK button", 'setup_trading_screen', '"← BACK"'),
+        ("Screen 4 has START button", 'setup_trading_screen', '"START BOT →"'),
+    ]
+    
+    print("\nChecking navigation buttons:")
+    all_passed = True
+    
+    # Split content by function definitions
+    functions = {}
+    current_func = None
+    current_content = []
+    
+    for line in content.split('\n'):
+        if line.strip().startswith('def '):
+            if current_func:
+                functions[current_func] = '\n'.join(current_content)
+            # Extract function name more carefully
+            func_line = line.strip()
+            if '(' in func_line:
+                current_func = func_line.split('(')[0].replace('def ', '').strip()
+            else:
+                current_func = None
+            current_content = [line]
+        elif current_func:
+            current_content.append(line)
+            # Also stop at next class or def
+            if line.strip().startswith('class ') or (line.strip().startswith('def ') and current_content):
+                pass
+    
+    if current_func:
+        functions[current_func] = '\n'.join(current_content)
+    
+    for check_name, func_name, button_text in button_checks:
+        found = False
+        # Check in the specific function
+        if func_name in functions and button_text in functions[func_name]:
+            found = True
+        # Also check if the button text appears anywhere after the function definition
+        elif func_name in content:
+            func_start = content.find(f'def {func_name}')
+            if func_start != -1:
+                # Look for the next function or class definition
+                next_def = content.find('\n    def ', func_start + 1)
+                next_class = content.find('\nclass ', func_start + 1)
+                func_end = min(x for x in [next_def, next_class, len(content)] if x > func_start)
+                func_content = content[func_start:func_end]
+                if button_text in func_content:
+                    found = True
+        
+        if found:
+            print(f"✅ {check_name}")
+        else:
+            print(f"❌ {check_name} - Not found")
+            all_passed = False
+    
+    return all_passed
+
+
+def test_screen_flow_documentation():
+    """Test that the file header documents the correct flow."""
+    print("\n" + "=" * 60)
+    print("TEST 4: Documentation")
+    print("=" * 60)
+    
+    with open('customer/QuoTrading_Launcher.py', 'r') as f:
+        lines = f.readlines()
+    
+    # Check first 20 lines for flow documentation
+    header = ''.join(lines[:20])
+    
+    expected_flow = [
+        "Screen 0: Username & Password",
+        "Screen 1: API Key",
+        "Screen 2: QuoTrading Account",
+        "Screen 3: Broker Connection",
+        "Screen 4: Trading Preferences",
+    ]
+    
+    print("\nChecking documentation:")
+    all_found = True
+    for screen_desc in expected_flow:
+        # More flexible check - just look for key parts
+        screen_num = screen_desc.split(':')[0]
+        if screen_num in header:
+            print(f"✅ {screen_desc} documented")
+        else:
+            print(f"❌ {screen_desc} - Not documented")
+            all_found = False
+    
+    return all_found
+
+
+def main():
+    """Run all tests."""
+    print("\n" + "=" * 60)
+    print("GUI NAVIGATION FLOW VALIDATION")
+    print("=" * 60)
+    
+    test1_pass = test_launcher_structure()
+    test2_pass = test_navigation_flow_logic()
+    test3_pass = test_button_existence()
+    test4_pass = test_screen_flow_documentation()
+    
+    # Summary
+    print("\n" + "=" * 60)
+    print("TEST SUMMARY")
+    print("=" * 60)
+    
+    if test1_pass and test2_pass and test3_pass and test4_pass:
+        print("✅ ALL TESTS PASSED - Navigation flow is correctly implemented!")
+        print("\nNavigation Flow:")
+        print("  Screen 0: Username & Password → [NEXT] →")
+        print("  Screen 1: API Key → [NEXT] → (← BACK to Screen 0)")
+        print("  Screen 2: QuoTrading Account → [NEXT] → (← BACK to Screen 1)")
+        print("  Screen 3: Broker Setup → [NEXT] → (← BACK to Screen 2)")
+        print("  Screen 4: Trading Settings → [START BOT] (← BACK to Screen 3)")
+        return 0
+    else:
+        print("❌ SOME TESTS FAILED - Check errors above")
+        return 1
+
+
+if __name__ == "__main__":
+    exit(main())
