@@ -2082,8 +2082,11 @@ def calculate_position_size(symbol: str, side: str, entry_price: float, rl_confi
     else:
         # No RL confidence or dynamic contracts disabled - use fixed max
         contracts = min(contracts, user_max_contracts)
+        # Only log once when dynamic contracts are first disabled (avoid spamming logs)
         if not dynamic_contracts_enabled and rl_confidence is not None:
-            logger.info(f"[FIXED CONTRACTS] Using fixed max of {user_max_contracts} contracts (dynamic contracts disabled)")
+            if not hasattr(calculate_position_size, '_logged_fixed_mode'):
+                logger.info(f"[FIXED CONTRACTS] Using fixed max of {user_max_contracts} contracts (dynamic contracts disabled)")
+                calculate_position_size._logged_fixed_mode = True
     
     # RECOVERY MODE: Further reduce position size when approaching limits
     if bot_status.get("recovery_confidence_threshold") is not None:

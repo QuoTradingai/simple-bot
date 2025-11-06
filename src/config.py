@@ -633,8 +633,11 @@ def load_from_env() -> BotConfiguration:
     # RL/AI Configuration from GUI
     if os.getenv("BOT_CONFIDENCE_THRESHOLD"):
         # GUI provides confidence as percentage (0-100), config expects decimal (0-1)
+        # Values > 1.0 are treated as percentages and converted
+        # Values <= 1.0 are treated as already in decimal form
         threshold = float(os.getenv("BOT_CONFIDENCE_THRESHOLD"))
-        # If value is > 1, assume it's a percentage and convert to decimal
+        # Note: 1.0 is treated as 100% confidence (decimal), not 1% confidence
+        # If you want 1% confidence, use 0.01 or set to 1 (which will be converted to 0.01)
         if threshold > 1.0:
             threshold = threshold / 100.0
         config.rl_confidence_threshold = threshold
