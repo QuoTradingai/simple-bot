@@ -87,6 +87,7 @@ class BotConfiguration:
     tick_timeout_seconds: int = 999999  # Disabled for testing
     proactive_stop_buffer_ticks: int = 2
     flatten_buffer_ticks: int = 2  # Buffer for flatten price calculation
+    recovery_mode: bool = False  # USER CONFIGURABLE - Enable recovery mode (continue trading with high confidence when approaching limits)
     
     def get_daily_loss_limit(self, account_balance: float) -> float:
         """
@@ -613,6 +614,10 @@ def load_from_env() -> BotConfiguration:
         config.auto_calculate_limits = os.getenv("BOT_AUTO_CALCULATE_LIMITS").lower() in ("true", "1", "yes")
     elif os.getenv("BOT_USE_TOPSTEP_RULES"):  # Legacy support
         config.auto_calculate_limits = os.getenv("BOT_USE_TOPSTEP_RULES").lower() in ("true", "1", "yes")
+    
+    # Recovery Mode (All Account Types)
+    if os.getenv("BOT_RECOVERY_MODE"):
+        config.recovery_mode = os.getenv("BOT_RECOVERY_MODE").lower() in ("true", "1", "yes")
     
     if os.getenv("BOT_TICK_SIZE"):
         config.tick_size = float(os.getenv("BOT_TICK_SIZE"))

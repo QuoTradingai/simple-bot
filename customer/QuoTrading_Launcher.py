@@ -40,6 +40,7 @@ class QuoTradingLauncher:
             'success_dark': '#1E40AF',   # Darker blue for buttons/headers
             'success_darker': '#1E3A8A', # Even darker blue for depth
             'error': '#DC2626',          # Red for error messages
+            'warning': '#F59E0B',        # Orange for warnings
             'background': '#FFFFFF',     # White main background
             'card': '#F8FAFC',           # Very light gray card background
             'card_elevated': '#EFF6FF',  # Light blue tint for elevation
@@ -57,6 +58,12 @@ class QuoTradingLauncher:
         # Default fallback symbol
         self.DEFAULT_SYMBOL = 'ES'
         
+        # Account mismatch detection threshold
+        self.ACCOUNT_MISMATCH_THRESHOLD = 1000  # Dollars - warn if difference is > $1000
+        
+        # Prop firm maximum drawdown percentage (most common rule)
+        self.PROP_FIRM_MAX_DRAWDOWN = 8.0  # 8% for most prop firms (some use 10%)
+        
         # Cloud validation API URL
         self.VALIDATION_API_URL = "http://localhost:5000/api/validate"  # Update with your cloud server URL
         
@@ -65,6 +72,15 @@ class QuoTradingLauncher:
         # Load saved config
         self.config_file = Path("config.json")
         self.config = self.load_config()
+        
+        # Initialize session state manager
+        sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
+        try:
+            from session_state import SessionStateManager
+            self.session_manager = SessionStateManager()
+        except ImportError:
+            self.session_manager = None
+            print("⚠️ Session state manager not available")
         
         # Current screen tracker
         self.current_screen = 0
@@ -1044,6 +1060,77 @@ class QuoTradingLauncher:
         }
         self.validate_api_call("broker", credentials, on_success, on_error)
     
+    def _apply_smart_settings(self, smart_settings: Dict[str, Any]):
+        """Apply smart recommended settings to config."""
+        if "confidence_threshold" in smart_settings:
+            self.config["rl_confidence_threshold"] = smart_settings["confidence_threshold"] / 100
+        if "max_contracts" in smart_settings:
+            self.config["max_contracts"] = smart_settings["max_contracts"]
+        if "daily_loss_limit" in smart_settings:
+            self.config["daily_loss_limit"] = smart_settings["daily_loss_limit"]
+        self.save_config()
+    
+    def _show_session_warnings(self):
+        """Display warnings and recommendations based on session state."""
+        if not self.session_manager:
+            return
+        
+        # Get current settings
+        account_size = float(self.config.get("account_size", "50000"))
+        max_drawdown = self.config.get("max_drawdown", 8.0)
+        daily_loss_limit = self.config.get("daily_loss_limit", 1000.0)
+        confidence = self.config.get("rl_confidence_threshold", 0.65) * 100
+        max_contracts = self.config.get("max_contracts", 3)
+        recovery_mode = self.config.get("recovery_mode", False)
+        
+        # Check for warnings and recommendations
+        warnings, recommendations, smart_settings = self.session_manager.check_warnings_and_recommendations(
+            account_size=account_size,
+            max_drawdown_percent=max_drawdown,
+            daily_loss_limit=daily_loss_limit,
+            current_confidence=confidence,
+            max_contracts=max_contracts,
+            recovery_mode_enabled=recovery_mode
+        )
+        
+        # Show warnings in a dialog if critical
+        if warnings:
+            critical_warnings = [w for w in warnings if w.get("level") == "critical"]
+            if critical_warnings:
+                warning_text = "\n\n".join([w["message"] for w in warnings])
+                if recommendations:
+                    warning_text += "\n\n📋 RECOMMENDATIONS:\n"
+                    warning_text += "\n".join([f"• {r['message']}" for r in recommendations[:3]])
+                
+                # Ask if user wants to apply smart settings
+                if smart_settings:
+                    warning_text += "\n\n⚙️ Would you like to apply recommended settings automatically?"
+                    result = messagebox.askyesno(
+                        "⚠️ Account Status Warning",
+                        warning_text,
+                        icon='warning'
+                    )
+                    
+                    if result and smart_settings:
+                        # Apply smart settings
+                        self._apply_smart_settings(smart_settings)
+                        messagebox.showinfo("Settings Applied", "✓ Smart recommendations applied successfully!")
+                else:
+                    messagebox.showwarning("⚠️ Account Status Warning", warning_text)
+            elif warnings and recommendations:
+                # Non-critical warnings - show as info
+                warning_text = "📊 Session Status:\n\n"
+                warning_text += "\n".join([w["message"] for w in warnings])
+                if recommendations:
+                    warning_text += "\n\n💡 RECOMMENDATIONS:\n"
+                    warning_text += "\n".join([f"• {r['message']}" for r in recommendations[:3]])
+                
+                if smart_settings:
+                    warning_text += "\n\n⚙️ Apply recommended settings?"
+                    result = messagebox.askyesno("Session Status", warning_text)
+                    if result:
+                        self._apply_smart_settings(smart_settings)
+    
     def setup_trading_screen(self):
         """Screen 1: Trading Controls and Launch."""
         # Clear window
@@ -1055,6 +1142,10 @@ class QuoTradingLauncher:
         
         # Header
         header = self.create_header("Trading Controls", "Configure your trading strategy")
+        
+        # Check session state and show warnings/recommendations
+        if self.session_manager:
+            self._show_session_warnings()
         
         # Main container with scrollbar capability
         main = tk.Frame(self.root, bg=self.colors['background'], padx=25, pady=12)
@@ -1452,6 +1543,110 @@ class QuoTradingLauncher:
         )
         dynamic_info.pack(anchor=tk.W)
         
+        # Recovery Mode Section - Works for ALL account types
+        recovery_frame = tk.Frame(content, bg=self.colors['card_elevated'], relief=tk.FLAT, bd=0)
+        recovery_frame.pack(fill=tk.X, pady=(0, 10), padx=2)
+        recovery_frame.configure(highlightbackground=self.colors['border_subtle'], highlightthickness=1)
+        
+        recovery_content = tk.Frame(recovery_frame, bg=self.colors['card_elevated'], padx=12, pady=10)
+        recovery_content.pack(fill=tk.X)
+        
+        recovery_label = tk.Label(
+            recovery_content,
+            text="Recovery Mode (All Account Types):",
+            font=("Arial", 10, "bold"),
+            bg=self.colors['card_elevated'],
+            fg=self.colors['text']
+        )
+        recovery_label.pack(anchor=tk.W, pady=(0, 5))
+        
+        # Default: Recovery mode disabled (safest - bot stops when approaching limits)
+        # Inverted from previous logic - now the checkbox ENABLES recovery mode
+        self.recovery_mode_var = tk.BooleanVar(value=self.config.get("recovery_mode", False))
+        
+        # Checkbox for recovery mode
+        recovery_cb = tk.Checkbutton(
+            recovery_content,
+            text="Enable Recovery Mode",
+            variable=self.recovery_mode_var,
+            font=("Arial", 9, "bold"),
+            bg=self.colors['card_elevated'],
+            fg=self.colors['text'],
+            selectcolor=self.colors['secondary'],
+            activebackground=self.colors['card_elevated'],
+            activeforeground=self.colors['success'],
+            cursor="hand2"
+        )
+        recovery_cb.pack(anchor=tk.W, pady=(0, 3))
+        
+        # Add callback to update info label
+        def update_recovery_info(*args):
+            if self.recovery_mode_var.get():
+                recovery_info.config(
+                    text="⚠️ RECOVERY MODE ENABLED: Bot will continue trading when approaching limits, automatically increasing confidence "
+                         "requirements and adjusting risk. The closer to limits, the higher the confidence and the more conservative the trading. "
+                         "Use this to give the bot a chance to recover from a bad day.",
+                    fg='#FFA500'  # Orange warning
+                )
+                recovery_explanation.config(
+                    text="When Recovery Mode is ENABLED:\n"
+                         "• Bot continues trading even when close to daily loss or max drawdown limits\n"
+                         "• Confidence auto-scales: 75% @ 80% of limits, 85% @ 90%, 90% @ 95%+\n"
+                         "• Position size dynamically adjusts: reduces when approaching, increases when safe\n"
+                         "• Contracts scale: 33%→50%→75%→85%→95%→100% as you get safer\n"
+                         "• Only takes highest-quality signals when close to failure\n"
+                         "• Attempts to recover from losses with smart risk management\n"
+                         "• Applies to ALL account types (prop firms, live brokers, etc.)",
+                    fg=self.colors['text_secondary']
+                )
+            else:
+                recovery_info.config(
+                    text="ℹ️ Bot will WARN when approaching limits but NEVER lock you out. "
+                         "You maintain full control. Bot shows warnings and recommendations, but YOU decide whether to trade. "
+                         "Recommended for cautious traders who want guidance without restrictions.",
+                    fg=self.colors['text']
+                )
+                recovery_explanation.config(
+                    text="When Recovery Mode is DISABLED:\n"
+                         "• Bot WARNS at 80% of daily loss (e.g., $1600 of $2000 limit)\n"
+                         "• Bot WARNS at 80% of max drawdown with dollar amounts\n"
+                         "• Bot NEVER stops you from trading - you maintain full control\n"
+                         "• Smart recommendations provided (confidence, contracts, limits)\n"
+                         "• Bot continues running and monitoring market conditions\n"
+                         "• One-click apply recommendations if desired\n"
+                         "• User maintains full control with intelligent warnings",
+                    fg=self.colors['text_secondary']
+                )
+        
+        self.recovery_mode_var.trace_add('write', update_recovery_info)
+        
+        # Info label
+        recovery_info = tk.Label(
+            recovery_content,
+            text="",
+            font=("Arial", 7),
+            bg=self.colors['card_elevated'],
+            fg=self.colors['text_secondary'],
+            wraplength=520,
+            justify=tk.LEFT
+        )
+        recovery_info.pack(anchor=tk.W, pady=(0, 5))
+        
+        # Detailed explanation
+        recovery_explanation = tk.Label(
+            recovery_content,
+            text="",
+            font=("Arial", 7, "italic"),
+            bg=self.colors['card_elevated'],
+            fg=self.colors['text_secondary'],
+            wraplength=520,
+            justify=tk.LEFT
+        )
+        recovery_explanation.pack(anchor=tk.W, pady=(2, 0))
+        
+        # Trigger initial info update
+        update_recovery_info()
+        
         # Trailing Drawdown Section (Optional Risk Management Feature)
         trailing_dd_frame = tk.Frame(content, bg=self.colors['card_elevated'], relief=tk.FLAT, bd=0)
         trailing_dd_frame.pack(fill=tk.X, pady=(0, 10), padx=2)
@@ -1659,9 +1854,20 @@ class QuoTradingLauncher:
         )
         self.account_dropdown.pack(side=tk.LEFT, fill=tk.X, expand=True)
         
-        # Fetch button and info display
+        # Fetch button and info display - VERY IMPORTANT
         fetch_button_frame = tk.Frame(fetch_content, bg=self.colors['card_elevated'])
         fetch_button_frame.pack(fill=tk.X)
+        
+        # Add emphasis label
+        important_label = tk.Label(
+            fetch_button_frame,
+            text="⚠️ VERY IMPORTANT:",
+            font=("Arial", 9, "bold"),
+            bg=self.colors['card_elevated'],
+            fg=self.colors['error'],
+            anchor=tk.W
+        )
+        important_label.pack(side=tk.LEFT, padx=(0, 5))
         
         fetch_btn = self.create_button(fetch_button_frame, "Fetch Account Info", self.fetch_account_info, "next")
         fetch_btn.pack(side=tk.LEFT, padx=(0, 10))
@@ -1669,7 +1875,7 @@ class QuoTradingLauncher:
         # Account info display label
         self.account_info_label = tk.Label(
             fetch_button_frame,
-            text="Click to fetch account balance and details",
+            text="Fetching helps bot determine account type and provide best settings",
             font=("Arial", 8),
             bg=self.colors['card_elevated'],
             fg=self.colors['text_secondary'],
@@ -1737,6 +1943,13 @@ class QuoTradingLauncher:
         start_btn = self.create_button(button_frame, "START BOT →", self.start_bot, "next")
         start_btn.pack(side=tk.RIGHT)
     
+    def _update_account_size_from_fetched(self, balance: float):
+        """Helper method to update account size field with fetched balance."""
+        self.config["account_size"] = str(int(balance))
+        self.account_entry.delete(0, tk.END)
+        self.account_entry.insert(0, str(int(balance)))
+        self.save_config()
+    
     def fetch_account_info(self):
         """Fetch account information from the broker."""
         broker = self.config.get("broker", "TopStep")
@@ -1761,8 +1974,8 @@ class QuoTradingLauncher:
                 
                 # Mock account data - replace with actual API call
                 accounts = [
-                    {"id": "ACC001", "name": f"{broker} Account 1", "balance": 50000.00, "equity": 51234.56},
-                    {"id": "ACC002", "name": f"{broker} Account 2", "balance": 100000.00, "equity": 102456.78}
+                    {"id": "ACC001", "name": f"{broker} Account 1", "balance": 50000.00, "equity": 51234.56, "type": "prop_firm"},
+                    {"id": "ACC002", "name": f"{broker} Account 2", "balance": 100000.00, "equity": 102456.78, "type": "prop_firm"}
                 ]
                 
                 # Update UI on main thread
@@ -1777,12 +1990,29 @@ class QuoTradingLauncher:
                     # Store accounts data
                     self.config["accounts"] = accounts
                     self.config["selected_account"] = account_names[0]
+                    self.config["fetched_account_balance"] = accounts[0]['balance']
+                    self.config["fetched_account_type"] = accounts[0].get('type', 'live_broker')
                     self.save_config()
+                    
+                    # Check for mismatch between user input and fetched data
+                    user_account_size = float(self.config.get("account_size", "0"))
+                    fetched_balance = accounts[0]['balance']
+                    
+                    mismatch_warning = ""
+                    if user_account_size > 0 and abs(user_account_size - fetched_balance) > self.ACCOUNT_MISMATCH_THRESHOLD:
+                        mismatch_warning = (
+                            f"\n\n⚠️ MISMATCH DETECTED:\n"
+                            f"You entered: ${user_account_size:,.2f}\n"
+                            f"Fetched account: ${fetched_balance:,.2f}\n\n"
+                            f"Using fetched account data (more accurate)."
+                        )
+                        # Update account size to fetched value using helper method
+                        self._update_account_size_from_fetched(fetched_balance)
                     
                     # Update info label
                     selected_acc = accounts[0]
                     self.account_info_label.config(
-                        text=f"✓ Balance: ${selected_acc['balance']:,.2f} | Equity: ${selected_acc['equity']:,.2f}",
+                        text=f"✓ Balance: ${selected_acc['balance']:,.2f} | Equity: ${selected_acc['equity']:,.2f} | Type: {selected_acc.get('type', 'Unknown')}",
                         fg=self.colors['success']
                     )
                     
@@ -1791,7 +2021,9 @@ class QuoTradingLauncher:
                         f"Successfully retrieved {len(accounts)} account(s) from {broker}.\n\n"
                         f"Selected: {selected_acc['name']}\n"
                         f"Balance: ${selected_acc['balance']:,.2f}\n"
-                        f"Equity: ${selected_acc['equity']:,.2f}"
+                        f"Equity: ${selected_acc['equity']:,.2f}\n"
+                        f"Type: {selected_acc.get('type', 'Unknown')}"
+                        + (mismatch_warning if mismatch_warning else "")
                     )
                 
                 self.root.after(0, update_ui)
@@ -1811,49 +2043,63 @@ class QuoTradingLauncher:
         thread.start()
     
     def auto_adjust_parameters(self):
-        """Auto-adjust trading parameters based on account balance and type."""
+        """Auto-adjust trading parameters based on FETCHED account data (prioritized over user input)."""
+        # IMPORTANT: Prioritize fetched account data over user input
         # Check if account info has been fetched
         accounts = self.config.get("accounts", [])
-        if not accounts:
+        fetched_balance = self.config.get("fetched_account_balance")
+        fetched_type = self.config.get("fetched_account_type", "live_broker")
+        
+        if not accounts and not fetched_balance:
             messagebox.showwarning(
                 "No Account Info",
-                "Please fetch account information first using the 'Fetch Account Info' button."
+                "⚠️ IMPORTANT: Please fetch account information first using the 'Fetch Account Info' button.\n\n"
+                "Fetching helps the bot:\n"
+                "• Detect your account type (prop firm vs live broker)\n"
+                "• Determine accurate account size\n"
+                "• Provide optimal risk settings\n"
+                "• Apply broker-specific rules"
             )
             return
         
-        # Get the selected account or first account
-        selected_account = accounts[0]
-        balance = selected_account.get("balance", 10000)
-        equity = selected_account.get("equity", balance)
+        # Use FETCHED data (most accurate) - prioritize over user input
+        if fetched_balance:
+            balance = fetched_balance
+            equity = fetched_balance  # Use balance as equity if not provided
+            account_type = fetched_type
+        else:
+            # Fallback to accounts data
+            selected_account = accounts[0]
+            balance = selected_account.get("balance", 10000)
+            equity = selected_account.get("equity", balance)
+            account_type = selected_account.get("type", "live_broker")
         
-        # Get account type from config (Prop Firm or Live Broker)
-        account_type = self.config.get("broker_type", "Prop Firm")
-        account_size = self.config.get("account_size", "50k")
-        
-        # Parse account size for calculations
-        size_num = int(account_size.replace("k", "000"))
+        # Update account size with fetched data (overrides user input) using helper method
+        self._update_account_size_from_fetched(balance)
         
         # Calculate drawdown percentage (how far from starting balance)
-        drawdown_pct = ((size_num - equity) / size_num) * 100 if size_num > 0 else 0
+        drawdown_pct = ((balance - equity) / balance) * 100 if balance > 0 else 0
         drawdown_pct = max(0, drawdown_pct)  # Ensure non-negative
         
-        # Sophisticated risk management for Prop Firms
-        if account_type == "Prop Firm":
+        # Sophisticated risk management based on ACCOUNT TYPE (from fetched data)
+        if account_type == "prop_firm":
             # Prop firm rules: Be more conservative as drawdown increases
-            # Most prop firms fail traders at 10% drawdown
+            # Most prop firms fail traders at 8-10% drawdown
             
-            # Calculate distance to failure (assuming 10% max drawdown rule)
-            distance_to_failure = 10.0 - drawdown_pct
+            # Calculate distance to failure using configured max drawdown
+            max_dd = self.PROP_FIRM_MAX_DRAWDOWN
+            distance_to_failure = max_dd - drawdown_pct
             
             # Daily loss limit: Scale based on distance to failure
-            if distance_to_failure > 7:  # Safe zone (0-3% drawdown)
-                daily_loss_pct = 0.025  # 2.5% of equity
-            elif distance_to_failure > 5:  # Caution zone (3-5% drawdown)
-                daily_loss_pct = 0.02   # 2% of equity
-            elif distance_to_failure > 3:  # Warning zone (5-7% drawdown)
-                daily_loss_pct = 0.015  # 1.5% of equity
-            else:  # Danger zone (7-10% drawdown)
-                daily_loss_pct = 0.01   # 1% of equity - very conservative
+            # Use 2% rule as baseline for prop firms
+            if distance_to_failure > 6:  # Safe zone (0-2% drawdown)
+                daily_loss_pct = 0.02  # 2% of equity (standard prop firm rule)
+            elif distance_to_failure > 4:  # Caution zone (2-4% drawdown)
+                daily_loss_pct = 0.015   # 1.5% of equity
+            elif distance_to_failure > 2:  # Warning zone (4-6% drawdown)
+                daily_loss_pct = 0.01  # 1% of equity
+            else:  # Danger zone (6-8% drawdown)
+                daily_loss_pct = 0.005   # 0.5% of equity - very conservative
             
             daily_loss_limit = equity * daily_loss_pct
             
@@ -1984,6 +2230,7 @@ class QuoTradingLauncher:
         self.config["dynamic_contracts"] = self.dynamic_contracts_var.get()
         self.config["trailing_drawdown"] = self.trailing_drawdown_var.get()
         self.config["selected_account"] = self.account_dropdown_var.get()
+        self.config["recovery_mode"] = self.recovery_mode_var.get()
         self.save_config()
         
         # Create .env file
@@ -2022,6 +2269,18 @@ class QuoTradingLauncher:
             confirmation_text += f"Shadow Mode: ON (paper trading)\n"
         if self.dynamic_contracts_var.get():
             confirmation_text += f"Dynamic Contracts: ON (confidence-based sizing)\n"
+        
+        # Add Recovery Mode info
+        if self.recovery_mode_var.get():
+            confirmation_text += f"\n⚠️ Recovery Mode: ENABLED\n"
+            confirmation_text += f"  → Bot continues trading when close to limits\n"
+            confirmation_text += f"  → Auto-scales confidence (75-90%) and reduces risk dynamically\n"
+            confirmation_text += f"  → Attempts to recover from losses\n"
+        else:
+            confirmation_text += f"\nSafe Mode: Bot stops NEW trades at 80% of limits\n"
+            confirmation_text += f"  → Bot stops trading when approaching failure\n"
+            confirmation_text += f"  → Continues monitoring, resumes after daily reset\n"
+        
         confirmation_text += f"\nThis will open a PowerShell terminal with live logs.\n"
         confirmation_text += f"Use the window's close button to stop the bot.\n\n"
         confirmation_text += f"Continue?"
@@ -2117,7 +2376,7 @@ BOT_INSTRUMENTS={symbols_str}
 BOT_MAX_CONTRACTS={self.contracts_var.get()}
 BOT_MAX_TRADES_PER_DAY={self.trades_var.get()}
 # Bot stays on but will NOT execute trades after reaching max (resets daily after market maintenance)
-BOT_MAX_DRAWDOWN={self.drawdown_var.get()}
+BOT_MAX_DRAWDOWN_PERCENT={self.drawdown_var.get()}
 # Maximum drawdown percentage before bot stops trading (account type aware)
 BOT_TRAILING_DRAWDOWN={'true' if self.trailing_drawdown_var.get() else 'false'}
 # SOFT FLOOR: Optional personal protection. When enabled, floor moves UP with profits (never down).
@@ -2136,6 +2395,11 @@ BOT_DYNAMIC_CONFIDENCE={'true' if self.dynamic_confidence_var.get() else 'false'
 # When enabled, bot auto-increases confidence (never below user's setting) when performing poorly or approaching account limits
 BOT_DYNAMIC_CONTRACTS={'true' if self.dynamic_contracts_var.get() else 'false'}
 # Uses signal confidence to determine contract size dynamically (bot uses adaptive exits)
+
+# Recovery Mode (All Account Types)
+BOT_RECOVERY_MODE={'true' if self.recovery_mode_var.get() else 'false'}
+# When true (ENABLED): Bot continues trading when approaching limits with auto-scaled confidence (75-90%) and dynamic risk reduction
+# When false (DISABLED): Bot stops making NEW trades (but stays running) at 80% of daily loss or max drawdown limits, resumes after daily reset
 
 # Trading Mode
 BOT_SHADOW_MODE={'true' if self.shadow_mode_var.get() else 'false'}
