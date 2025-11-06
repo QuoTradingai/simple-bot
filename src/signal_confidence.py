@@ -38,8 +38,9 @@ class SignalConfidenceRL:
         Args:
             experience_file: Path to experience file
             backtest_mode: Whether in backtest mode
-            confidence_threshold: Optional fixed threshold (0.1-1.0). If None, uses learned optimal threshold.
-                                 If provided, this becomes the user-configured minimum confidence level.
+            confidence_threshold: Optional fixed threshold (0.1-1.0). 
+                                 - For LIVE/SHADOW mode: If None, defaults to 0.5 (50%). User's GUI setting always used.
+                                 - For BACKTEST mode: If None, calculates adaptive threshold from experiences.
         """
         self.experience_file = experience_file
         self.experiences = []  # All past (state, action, reward) tuples
@@ -54,11 +55,17 @@ class SignalConfidenceRL:
         self.min_exploration = 0.05  # Never go below 5%
         self.exploration_decay = 0.995
         
-        # User-configured threshold (if provided, overrides learned threshold)
-        self.user_threshold = confidence_threshold
+        # User-configured threshold
+        # For LIVE/SHADOW mode: Always use user threshold (default 50% if not set)
+        # For BACKTEST mode: Use user threshold if set, otherwise calculate adaptive
+        if not backtest_mode and confidence_threshold is None:
+            # LIVE/SHADOW mode with no user config - use safe default of 50%
+            self.user_threshold = 0.5
+            logger.info(" LIVE MODE: No threshold configured, using default 50%")
+        else:
+            self.user_threshold = confidence_threshold
         
-        # Cached optimal threshold (recalculate only when needed)
-        # Only used if user_threshold is None
+        # Cached optimal threshold (only used in backtest mode when user_threshold is None)
         self.cached_threshold = None
         self.last_threshold_calc_signal_count = 0
         self.last_threshold_calc_exp_count = 0
@@ -86,9 +93,13 @@ class SignalConfidenceRL:
         
         # Log threshold configuration
         if self.user_threshold is not None:
-            logger.info(f" CONFIDENCE THRESHOLD: {self.user_threshold:.1%} (USER CONFIGURED)")
+            if self.backtest_mode:
+                logger.info(f" CONFIDENCE THRESHOLD: {self.user_threshold:.1%} (USER CONFIGURED for backtest)")
+            else:
+                logger.info(f" CONFIDENCE THRESHOLD: {self.user_threshold:.1%} (LIVE/SHADOW MODE - User Setting)")
         else:
-            logger.info(f" CONFIDENCE THRESHOLD: Will be calculated from experiences (ADAPTIVE)")
+            # Only happens in backtest mode now
+            logger.info(f" CONFIDENCE THRESHOLD: Will be calculated from experiences (BACKTEST - ADAPTIVE)")
         
         # Log exploration mode
         if self.backtest_mode:
@@ -146,10 +157,11 @@ class SignalConfidenceRL:
         
         # Determine which threshold to use
         if self.user_threshold is not None:
-            # User has configured a specific threshold - use it
+            # User has configured a specific threshold (or default 50% for live mode)
             optimal_threshold = self.user_threshold
         else:
-            # No user threshold - calculate optimal from experiences
+            # No user threshold - only happens in BACKTEST mode
+            # Calculate adaptive optimal threshold from experiences
             # CACHED ADAPTIVE THRESHOLD: Only recalculate every 100 signals or when experiences grow by 50+
             should_recalc = (
                 self.cached_threshold is None or
