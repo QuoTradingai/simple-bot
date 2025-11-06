@@ -1,44 +1,24 @@
 # GUI Navigation Flow Documentation
 
 ## Overview
-The QuoTrading Launcher now has a 5-screen progressive onboarding flow with proper navigation buttons on each screen.
+The QuoTrading Launcher has a 3-screen progressive onboarding flow with proper navigation buttons on each screen.
 
 ## Screen Flow
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │                     Screen 0: Login                         │
-│                 Username & Password Entry                    │
+│           Username, Password & API Key Entry                │
 │                                                              │
 │  • Username field                                            │
 │  • Password field (hidden)                                   │
-│  • [NEXT →] button                                           │
-└──────────────────────────────┬──────────────────────────────┘
-                               │ NEXT
-                               ▼
-┌─────────────────────────────────────────────────────────────┐
-│                   Screen 1: API Key                         │
-│                    API Key Entry                             │
-│                                                              │
 │  • API Key field (hidden)                                    │
-│  • [← BACK] button                                           │
 │  • [NEXT →] button                                           │
 └──────────────────────────────┬──────────────────────────────┘
                                │ NEXT
                                ▼
 ┌─────────────────────────────────────────────────────────────┐
-│              Screen 2: QuoTrading Account                   │
-│             Email + API Key Validation                       │
-│                                                              │
-│  • Email field                                               │
-│  • QuoTrading API Key field (hidden)                         │
-│  • [← BACK] button                                           │
-│  • [NEXT →] button                                           │
-└──────────────────────────────┬──────────────────────────────┘
-                               │ NEXT
-                               ▼
-┌─────────────────────────────────────────────────────────────┐
-│               Screen 3: Broker Setup                        │
+│               Screen 1: Broker Setup                        │
 │          Prop Firm / Live Broker Selection                   │
 │                                                              │
 │  • Account Type selection (Prop Firm / Live Broker)          │
@@ -51,7 +31,7 @@ The QuoTrading Launcher now has a 5-screen progressive onboarding flow with prop
                                │ NEXT
                                ▼
 ┌─────────────────────────────────────────────────────────────┐
-│             Screen 4: Trading Settings                      │
+│             Screen 2: Trading Settings                      │
 │          Symbol Selection & Risk Parameters                  │
 │                                                              │
 │  • Trading symbols (checkboxes)                              │
@@ -84,30 +64,20 @@ The QuoTrading Launcher now has a 5-screen progressive onboarding flow with prop
 ### Screen 0 → Screen 1
 - Validates username is not empty
 - Validates password is not empty
-- Saves username and password to config
-
-### Screen 1 → Screen 2
 - Validates API key is not empty
 - Makes cloud validation call with username, password, and API key
-- On success, saves credentials and proceeds
+- On success, saves credentials and proceeds to broker screen
 - On failure, shows error message
 
-### Screen 2 → Screen 3
-- Validates email format
-- Validates QuoTrading API key length
-- Makes API validation call
-- On success, saves credentials and proceeds
-- On failure, shows error message
-
-### Screen 3 → Screen 4
+### Screen 1 → Screen 2
 - Validates broker selection
 - Validates API token is not empty
 - Validates username is not empty
 - Makes broker validation call
-- On success, saves credentials and proceeds
+- On success, saves credentials and proceeds to trading screen
 - On failure, shows error message
 
-### Screen 4 → Start Bot
+### Screen 2 → Start Bot
 - Validates at least one trading symbol is selected
 - Validates account size is a positive number
 - Validates daily loss limit is a positive number
@@ -117,7 +87,7 @@ The QuoTrading Launcher now has a 5-screen progressive onboarding flow with prop
 
 ## Key Features
 
-1. **Progressive Disclosure**: Information is collected across multiple screens, reducing cognitive load
+1. **Simplified Flow**: Only 3 screens for a streamlined setup process
 2. **Clear Navigation**: Each screen has visible navigation buttons
 3. **Data Persistence**: All entered data is saved to config.json
 4. **Validation Feedback**: Clear error messages guide the user
@@ -126,14 +96,10 @@ The QuoTrading Launcher now has a 5-screen progressive onboarding flow with prop
 
 ## Changes Made
 
-- Split the original Screen 0 (username/password/API key) into two screens:
-  - New Screen 0: Username & Password only
-  - New Screen 1: API Key only
-- Updated all screen numbers:
-  - Screen 1 (QuoTrading) → Screen 2
-  - Screen 2 (Broker) → Screen 3
-  - Screen 3 (Trading) → Screen 4
-- Added back button to Screen 1 (API Key)
-- Updated back button on Screen 2 to go to Screen 1 instead of Screen 0
-- Added validation flow between Screen 0 and Screen 1
-- Updated documentation to reflect new flow
+- Simplified to 3-screen flow (from 5 screens)
+- Removed separate API key screen - combined with username/password on Screen 0
+- Removed QuoTrading Account screen entirely
+- Screen 1 is now Broker Setup (was Screen 3)
+- Screen 2 is now Trading Settings (was Screen 4)
+- Updated all navigation and validation flow
+- Simplified .env file generation

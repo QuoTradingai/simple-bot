@@ -2,14 +2,12 @@
 QuoTrading AI - Customer Launcher
 ==================================
 Professional GUI application for easy setup and launch.
-5-Screen Progressive Onboarding Flow with Cloud Validation.
+3-Screen Progressive Onboarding Flow with Cloud Validation.
 
 Flow:
-1. Screen 0: Username & Password Entry
-2. Screen 1: API Key Entry  
-3. Screen 2: QuoTrading Account Setup (Email + API Key validation)
-4. Screen 3: Broker Connection Setup (Prop Firm/Live Broker with validation)
-5. Screen 4: Trading Preferences (Symbol selection, risk settings, launch)
+1. Screen 0: Login (username, password, API key)
+2. Screen 1: Broker Connection Setup (Broker credentials)
+3. Screen 2: Trading Preferences (Symbol selection, risk settings, launch)
 """
 
 import tkinter as tk
@@ -376,7 +374,7 @@ class QuoTradingLauncher:
         thread.start()
     
     def setup_username_screen(self):
-        """Screen 0: Username and Password screen."""
+        """Screen 0: Login screen with cloud validation."""
         # Clear window
         for widget in self.root.winfo_children():
             widget.destroy()
@@ -385,7 +383,7 @@ class QuoTradingLauncher:
         self.root.title("QuoTrading - Login")
         
         # Header
-        header = self.create_header("QuoTrading Login", "Enter your username and password")
+        header = self.create_header("QuoTrading Login", "Enter your credentials")
         
         # Main container
         main = tk.Frame(self.root, bg=self.colors['background'], padx=30, pady=15)
@@ -426,10 +424,13 @@ class QuoTradingLauncher:
         # Password input
         self.password_entry = self.create_input_field(content, "Password:", is_password=True, placeholder="Enter your password")
         
+        # API Key input
+        self.api_key_entry = self.create_input_field(content, "API Key:", is_password=True, placeholder=self.config.get("user_api_key", "Enter your API key"))
+        
         # Instructions
         instructions = tk.Label(
             content,
-            text="Enter your username and password to continue",
+            text="All fields are required for authentication",
             font=("Arial", 8),
             bg=self.colors['card'],
             fg=self.colors['text_secondary'],
@@ -442,19 +443,22 @@ class QuoTradingLauncher:
         button_frame.pack(fill=tk.X, pady=10)
         
         # Next button (with validation)
-        next_btn = self.create_button(button_frame, "NEXT →", self.validate_username_password, "next")
+        next_btn = self.create_button(button_frame, "NEXT →", self.validate_login, "next")
         next_btn.pack(side=tk.RIGHT)
     
-    def validate_username_password(self):
-        """Validate username and password, then proceed to API key screen."""
+    def validate_login(self):
+        """Validate login credentials with cloud server."""
         username = self.username_entry.get().strip()
         password = self.password_entry.get().strip()
+        api_key = self.api_key_entry.get().strip()
         
-        # Remove placeholders if present
+        # Remove placeholders if present (but don't remove actual values)
         if username == "Enter your username" or username == self.config.get("username", ""):
             username = ""
         if password == "Enter your password":
             password = ""
+        if api_key == "Enter your API key":
+            api_key = ""
         
         # Basic validation
         if not username:
@@ -468,110 +472,6 @@ class QuoTradingLauncher:
             messagebox.showerror(
                 "Password Required",
                 "Please enter your password."
-            )
-            return
-        
-        # Save username and password temporarily
-        self.config["username"] = username
-        self.config["password"] = password
-        self.save_config()
-        
-        # Proceed to API key screen
-        self.setup_api_key_screen()
-    
-    def setup_api_key_screen(self):
-        """Screen 1: API Key entry screen."""
-        # Clear window
-        for widget in self.root.winfo_children():
-            widget.destroy()
-        
-        self.current_screen = 1
-        self.root.title("QuoTrading - API Key")
-        
-        # Header
-        header = self.create_header("QuoTrading API Key", "Enter your API key")
-        
-        # Main container
-        main = tk.Frame(self.root, bg=self.colors['background'], padx=30, pady=15)
-        main.pack(fill=tk.BOTH, expand=True)
-        
-        # Card
-        card = tk.Frame(main, bg=self.colors['card'], relief=tk.FLAT, bd=0)
-        card.pack(fill=tk.BOTH, expand=True, padx=15, pady=10)
-        card.configure(highlightbackground=self.colors['border'], highlightthickness=2)
-        
-        # Card content
-        content = tk.Frame(card, bg=self.colors['card'], padx=25, pady=20)
-        content.pack(fill=tk.BOTH, expand=True)
-        
-        # Welcome message
-        welcome = tk.Label(
-            content,
-            text="API Key",
-            font=("Arial", 14, "bold"),
-            bg=self.colors['card'],
-            fg=self.colors['text']
-        )
-        welcome.pack(pady=(0, 5))
-        
-        info = tk.Label(
-            content,
-            text="Enter your API key to authenticate",
-            font=("Arial", 9),
-            bg=self.colors['card'],
-            fg=self.colors['text_light'],
-            justify=tk.CENTER
-        )
-        info.pack(pady=(0, 15))
-        
-        # API Key input
-        self.api_key_entry = self.create_input_field(content, "API Key:", is_password=True, placeholder=self.config.get("user_api_key", "Enter your API key"))
-        
-        # Instructions
-        instructions = tk.Label(
-            content,
-            text="Your API key is required for authentication",
-            font=("Arial", 8),
-            bg=self.colors['card'],
-            fg=self.colors['text_secondary'],
-            justify=tk.CENTER
-        )
-        instructions.pack(pady=(5, 15))
-        
-        # Button container
-        button_frame = tk.Frame(content, bg=self.colors['card'])
-        button_frame.pack(fill=tk.X, pady=10)
-        
-        # Back button
-        back_btn = self.create_button(button_frame, "← BACK", self.setup_username_screen, "back")
-        back_btn.pack(side=tk.LEFT, padx=(0, 10))
-        
-        # Next button (with validation)
-        next_btn = self.create_button(button_frame, "NEXT →", self.validate_login, "next")
-        next_btn.pack(side=tk.RIGHT)
-    
-    def validate_login(self):
-        """Validate login credentials with cloud server."""
-        username = self.config.get("username", "").strip()
-        password = self.config.get("password", "").strip()
-        api_key = self.api_key_entry.get().strip()
-        
-        # Remove placeholders if present
-        if api_key == "Enter your API key":
-            api_key = ""
-        
-        # Basic validation
-        if not username:
-            messagebox.showerror(
-                "Username Required",
-                "Please go back and enter your username."
-            )
-            return
-        
-        if not password:
-            messagebox.showerror(
-                "Password Required",
-                "Please go back and enter your password."
             )
             return
         
@@ -601,7 +501,7 @@ class QuoTradingLauncher:
                 "Admin Access Granted",
                 f"Welcome, {username}!\n\nAdmin access granted."
             )
-            self.setup_quotrading_screen()
+            self.setup_broker_screen()
             return
         
         # Show loading spinner
@@ -625,8 +525,8 @@ class QuoTradingLauncher:
                 f"Welcome, {username}!\n\nYour credentials have been validated."
             )
             
-            # Proceed to QuoTrading setup
-            self.setup_quotrading_screen()
+            # Proceed to Broker setup
+            self.setup_broker_screen()
         
         # Define error callback
         def on_error(error_msg):
@@ -697,12 +597,12 @@ class QuoTradingLauncher:
         thread.start()
     
     def setup_quotrading_screen(self):
-        """Screen 2: QuoTrading Account Setup with Email + API Key validation."""
+        """Screen 1: QuoTrading Account Setup with Email + API Key validation."""
         # Clear window
         for widget in self.root.winfo_children():
             widget.destroy()
         
-        self.current_screen = 2
+        self.current_screen = 1
         self.root.title("QuoTrading - Account Setup")
         
         # Header
@@ -763,7 +663,7 @@ class QuoTradingLauncher:
         button_frame.pack(fill=tk.X, pady=10)
         
         # Back button
-        back_btn = self.create_button(button_frame, "← BACK", self.setup_api_key_screen, "back")
+        back_btn = self.create_button(button_frame, "← BACK", self.setup_username_screen, "back")
         back_btn.pack(side=tk.LEFT, padx=(0, 10))
         
         # Next button
@@ -841,12 +741,12 @@ class QuoTradingLauncher:
         self.validate_api_call("quotrading", credentials, on_success, on_error)
     
     def setup_broker_screen(self):
-        """Screen 3: Broker Connection Setup (Prop Firm vs Live Broker)."""
+        """Screen 1: Broker Connection Setup (Prop Firm vs Live Broker)."""
         # Clear window
         for widget in self.root.winfo_children():
             widget.destroy()
         
-        self.current_screen = 3
+        self.current_screen = 1
         self.root.title("QuoTrading - Broker Setup")
         
         # Header
@@ -1009,7 +909,7 @@ class QuoTradingLauncher:
         button_frame.pack(fill=tk.X, pady=5)
         
         # Back button
-        back_btn = self.create_button(button_frame, "← BACK", self.setup_quotrading_screen, "back")
+        back_btn = self.create_button(button_frame, "← BACK", self.setup_username_screen, "back")
         back_btn.pack(side=tk.LEFT, padx=(0, 10))
         
         # Next button
@@ -1057,8 +957,8 @@ class QuoTradingLauncher:
             return
         
         # Check if using admin key - bypass broker validation
-        quotrading_key = self.config.get("quotrading_api_key", "")
-        if quotrading_key == "QUOTRADING_ADMIN_MASTER_2025":
+        user_key = self.config.get("user_api_key", "")
+        if user_key == "QUOTRADING_ADMIN_MASTER_2025":
             self.config["broker_type"] = self.broker_type_var.get()
             self.config["broker"] = broker
             self.config["broker_token"] = token
@@ -1105,12 +1005,12 @@ class QuoTradingLauncher:
         self.validate_api_call("broker", credentials, on_success, on_error)
     
     def setup_trading_screen(self):
-        """Screen 4: Trading Preferences and Launch."""
+        """Screen 2: Trading Preferences and Launch."""
         # Clear window
         for widget in self.root.winfo_children():
             widget.destroy()
         
-        self.current_screen = 4
+        self.current_screen = 2
         self.root.title("QuoTrading - Trading Settings")
         
         # Header
@@ -1482,10 +1382,9 @@ class QuoTradingLauncher:
 # Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
 # DO NOT EDIT MANUALLY - Use the launcher to change settings
 
-# QuoTrading Account
-QUOTRADING_EMAIL={self.config.get("quotrading_email", "")}
-QUOTRADING_API_KEY={self.config.get("quotrading_api_key", "")}
-QUOTRADING_API_URL=https://api.quotrading.com/v1/signals
+# User Account
+USERNAME={self.config.get("username", "")}
+USER_API_KEY={self.config.get("user_api_key", "")}
 
 # Broker Configuration
 BROKER={broker}
