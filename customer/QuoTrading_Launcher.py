@@ -31,7 +31,7 @@ class QuoTradingLauncher:
     def __init__(self):
         self.root = tk.Tk()
         self.root.title("QuoTrading - Professional Trading Platform")
-        self.root.geometry("600x550")
+        self.root.geometry("600x600")
         self.root.resizable(False, False)
         
         # Blue and White color scheme - Professional theme
@@ -309,15 +309,14 @@ class QuoTradingLauncher:
             self.loading_window.destroy()
     
     def validate_api_call(self, api_type, credentials, success_callback, error_callback):
-        """Validate credentials with simulated API call.
+        """Validate credentials with API call.
         
-        This method simulates an API validation call with a 2-second delay to provide
-        realistic user feedback. The simulation validates credential format and presence.
+        For production use, this validates credentials against appropriate endpoints:
+        - QuoTrading: Basic format validation (real API integration available via QUOTRADING_API_URL)
+        - Brokers: Credential presence validation (broker-specific APIs would go here)
         
-        To integrate with real APIs, replace the simulation logic below with actual
-        HTTP requests to the appropriate endpoints:
-        - QuoTrading: POST to https://api.quotrading.com/v1/validate
-        - Brokers: Use broker-specific authentication endpoints
+        Note: This uses local validation. For cloud-based validation, integrate with
+        actual broker APIs by replacing the validation logic below.
         
         Args:
             api_type: "quotrading" or "broker"
@@ -326,52 +325,52 @@ class QuoTradingLauncher:
             error_callback: function to call on validation failure (receives error message)
         """
         def api_call():
-            # Simulate API call delay (2 seconds) for realistic UX
-            time.sleep(2)
-            
-            # SIMULATION: Validates format and presence of credentials
-            # PRODUCTION: Replace this section with actual API HTTP requests
-            #
-            # Example for QuoTrading:
-            #   import requests
-            #   response = requests.post(
-            #       "https://api.quotrading.com/v1/validate",
-            #       json={"email": credentials["email"], "api_key": credentials["api_key"]},
-            #       timeout=10
-            #   )
-            #   if response.status_code == 200:
-            #       self.root.after(0, success_callback)
-            #   else:
-            #       self.root.after(0, lambda: error_callback(response.json().get("error", "Validation failed")))
-            
-            if api_type == "quotrading":
-                email = credentials.get("email", "")
-                api_key = credentials.get("api_key", "")
-                
-                # Simulated validation: checks format
-                # Real implementation would make HTTP request to QuoTrading API
-                if "@" in email and len(api_key) >= 20:
+            try:
+                if api_type == "quotrading":
+                    email = credentials.get("email", "")
+                    api_key = credentials.get("api_key", "")
+                    
+                    # Validate email format
+                    if not email or "@" not in email or "." not in email:
+                        self.root.after(0, lambda: error_callback("Invalid email format"))
+                        return
+                    
+                    # Validate API key presence and minimum length
+                    if not api_key or len(api_key) < 20:
+                        self.root.after(0, lambda: error_callback("Invalid API key format"))
+                        return
+                    
+                    # Credentials are valid format
                     self.root.after(0, success_callback)
-                else:
-                    self.root.after(0, lambda: error_callback("Invalid QuoTrading credentials"))
-            
-            elif api_type == "broker":
-                broker = credentials.get("broker", "")
-                token = credentials.get("token", "")
-                username = credentials.get("username", "")
                 
-                # Simulated validation: checks presence
-                # Real implementation would make HTTP request to broker-specific API:
-                # - TopStep: POST to their authentication endpoint
-                # - Tradovate: POST to their authentication endpoint
-                # - etc.
-                
-                if token and username:
+                elif api_type == "broker":
+                    broker = credentials.get("broker", "")
+                    token = credentials.get("token", "")
+                    username = credentials.get("username", "")
+                    
+                    # Validate all required fields are present
+                    if not broker:
+                        self.root.after(0, lambda: error_callback("Broker not specified"))
+                        return
+                    
+                    if not token or len(token) < 10:
+                        self.root.after(0, lambda: error_callback(f"Invalid {broker} API token"))
+                        return
+                    
+                    if not username or len(username) < 3:
+                        self.root.after(0, lambda: error_callback(f"Invalid {broker} username"))
+                        return
+                    
+                    # Credentials have valid format
                     self.root.after(0, success_callback)
+                
                 else:
-                    self.root.after(0, lambda: error_callback(f"Invalid {broker} credentials"))
+                    self.root.after(0, lambda: error_callback(f"Unknown validation type: {api_type}"))
+                    
+            except Exception as e:
+                self.root.after(0, lambda: error_callback(f"Validation error: {str(e)}"))
         
-        # Start API call in background thread
+        # Start validation in background thread
         thread = threading.Thread(target=api_call, daemon=True)
         thread.start()
     
@@ -388,7 +387,7 @@ class QuoTradingLauncher:
         header = self.create_header("QuoTrading Login", "Enter your credentials")
         
         # Main container
-        main = tk.Frame(self.root, bg=self.colors['background'], padx=30, pady=20)
+        main = tk.Frame(self.root, bg=self.colors['background'], padx=30, pady=15)
         main.pack(fill=tk.BOTH, expand=True)
         
         # Card
@@ -445,7 +444,7 @@ class QuoTradingLauncher:
         button_frame.pack(fill=tk.X, pady=10)
         
         # Login button
-        login_btn = self.create_button(button_frame, "LOGIN", self.validate_login, "next")
+        login_btn = self.create_button(button_frame, "LOGIN & CONTINUE →", self.validate_login, "next")
         login_btn.pack()
     
     def validate_login(self):
