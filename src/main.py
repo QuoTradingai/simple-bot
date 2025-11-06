@@ -383,6 +383,21 @@ def run_backtest_with_params(
         
         logger.info(f"Backtest completed: {result_dict['total_trades']} trades, ${result_dict['total_pnl']:+,.2f}")
         
+        # Save RL experiences after backtest completion
+        try:
+            if rl_brain is not None and hasattr(rl_brain, 'save_experience'):
+                rl_brain.save_experience()
+                logger.debug("Signal RL experiences saved")
+        except Exception as save_error:
+            logger.warning(f"Failed to save signal RL experiences: {save_error}")
+        
+        try:
+            if adaptive_manager is not None and hasattr(adaptive_manager, 'save_experiences'):
+                adaptive_manager.save_experiences()
+                logger.debug("Adaptive exit experiences saved")
+        except Exception as save_error:
+            logger.warning(f"Failed to save adaptive exit experiences: {save_error}")
+        
         if return_bars:
             return result_dict, all_bars
         else:
@@ -558,6 +573,22 @@ def run_backtest(args: argparse.Namespace, bot_config: Any) -> Dict[str, Any]:
                     logger.info(f"Backtest: Position closed at {exit_price}, reason: {exit_reason}")
         
     results = engine.run_with_strategy(vwap_strategy_backtest)
+    
+    # Save RL experiences after backtest completion
+    print("\nSaving RL experiences...")
+    try:
+        if rl_brain is not None and hasattr(rl_brain, 'save_experience'):
+            rl_brain.save_experience()
+            print("✓ Signal RL experiences saved")
+    except Exception as e:
+        print(f"✗ Failed to save signal RL experiences: {e}")
+    
+    try:
+        if adaptive_manager is not None and hasattr(adaptive_manager, 'save_experiences'):
+            adaptive_manager.save_experiences()
+            print("✓ Adaptive exit experiences saved")
+    except Exception as e:
+        print(f"✗ Failed to save adaptive exit experiences: {e}")
     
     # Generate report
     report_gen = ReportGenerator(engine.metrics)

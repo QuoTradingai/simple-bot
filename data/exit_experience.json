@@ -93042,6 +93042,2794 @@
         "volatility_atr": 0,
         "trend_strength": 0
       }
+    },
+    {
+      "timestamp": "2025-11-06T00:51:09.666180",
+      "regime": "NORMAL",
+      "exit_params": {
+        "breakeven_threshold_ticks": 9,
+        "breakeven_offset_ticks": 1,
+        "trailing_distance_ticks": 10,
+        "trailing_min_profit_ticks": 16,
+        "market_regime": "NORMAL",
+        "current_volatility_atr": 2.0,
+        "is_aggressive_mode": false,
+        "situation_factors": {
+          "is_choppy": false,
+          "is_high_vol": false,
+          "is_trending": false,
+          "is_morning": false,
+          "is_lunch": false,
+          "is_close": false,
+          "is_old_trade": false,
+          "is_quick_trade": false
+        },
+        "decision_reasons": [
+          "balanced"
+        ],
+        "duration_minutes": 9.0,
+        "learned_multiplier": 1.0
+      },
+      "outcome": {
+        "pnl": -2.5,
+        "duration": 3963.161101416667,
+        "exit_reason": "stop_loss",
+        "side": "long",
+        "contracts": 1,
+        "win": false
+      },
+      "situation": {
+        "time_of_day": "00:51",
+        "volatility_atr": 0,
+        "trend_strength": 0
+      }
+    },
+    {
+      "timestamp": "2025-11-06T00:51:09.703512",
+      "regime": "NORMAL_TRENDING",
+      "exit_params": {
+        "breakeven_threshold_ticks": 7,
+        "breakeven_offset_ticks": 1,
+        "trailing_distance_ticks": 8,
+        "trailing_min_profit_ticks": 13,
+        "market_regime": "NORMAL_TRENDING",
+        "current_volatility_atr": 2.0,
+        "is_aggressive_mode": true,
+        "situation_factors": {
+          "is_choppy": false,
+          "is_high_vol": false,
+          "is_trending": true,
+          "is_morning": false,
+          "is_lunch": false,
+          "is_close": false,
+          "is_old_trade": true,
+          "is_quick_trade": false
+        },
+        "decision_reasons": [
+          "OLD_TRADE"
+        ],
+        "duration_minutes": 33.0,
+        "learned_multiplier": 1.0
+      },
+      "outcome": {
+        "pnl": -177.5,
+        "duration": 3941.16172425,
+        "exit_reason": "stop_loss",
+        "side": "long",
+        "contracts": 1,
+        "win": false
+      },
+      "situation": {
+        "time_of_day": "00:51",
+        "volatility_atr": 0,
+        "trend_strength": 0
+      }
+    },
+    {
+      "timestamp": "2025-11-06T00:51:30.542596",
+      "regime": "NORMAL_TRENDING",
+      "exit_params": {
+        "breakeven_threshold_ticks": 7,
+        "breakeven_offset_ticks": 1,
+        "trailing_distance_ticks": 8,
+        "trailing_min_profit_ticks": 13,
+        "market_regime": "NORMAL_TRENDING",
+        "current_volatility_atr": 2.0,
+        "is_aggressive_mode": true,
+        "situation_factors": {
+          "is_choppy": false,
+          "is_high_vol": false,
+          "is_trending": true,
+          "is_morning": false,
+          "is_lunch": false,
+          "is_close": false,
+          "is_old_trade": true,
+          "is_quick_trade": false
+        },
+        "decision_reasons": [
+          "OLD_TRADE"
+        ],
+        "duration_minutes": 36.0,
+        "learned_multiplier": 1.0
+      },
+      "outcome": {
+        "pnl": -177.5,
+        "duration": 3944.5065582,
+        "exit_reason": "stop_loss",
+        "side": "long",
+        "contracts": 1,
+        "win": false
+      },
+      "situation": {
+        "time_of_day": "00:51",
+        "volatility_atr": 0,
+        "trend_strength": 0
+      }
+    },
+    {
+      "timestamp": "2025-11-06T00:51:52.237973",
+      "regime": "NORMAL_TRENDING",
+      "exit_params": {
+        "breakeven_threshold_ticks": 7,
+        "breakeven_offset_ticks": 1,
+        "trailing_distance_ticks": 8,
+        "trailing_min_profit_ticks": 13,
+        "market_regime": "NORMAL_TRENDING",
+        "current_volatility_atr": 2.0,
+        "is_aggressive_mode": true,
+        "situation_factors": {
+          "is_choppy": false,
+          "is_high_vol": false,
+          "is_trending": true,
+          "is_morning": false,
+          "is_lunch": false,
+          "is_close": false,
+          "is_old_trade": true,
+          "is_quick_trade": false
+        },
+        "decision_reasons": [
+          "OLD_TRADE"
+        ],
+        "duration_minutes": 51.0,
+        "learned_multiplier": 1.0
+      },
+      "outcome": {
+        "pnl": -2.5,
+        "duration": 42977.87063191667,
+        "exit_reason": "stop_loss",
+        "side": "short",
+        "contracts": 1,
+        "win": false
+      },
+      "situation": {
+        "time_of_day": "00:51",
+        "volatility_atr": 0,
+        "trend_strength": 0
+      }
+    },
+    {
+      "timestamp": "2025-11-06T00:51:52.468251",
+      "regime": "NORMAL_TRENDING",
+      "exit_params": {
+        "breakeven_threshold_ticks": 7,
+        "breakeven_offset_ticks": 1,
+        "trailing_distance_ticks": 8,
+        "trailing_min_profit_ticks": 13,
+        "market_regime": "NORMAL_TRENDING",
+        "current_volatility_atr": 2.0,
+        "is_aggressive_mode": true,
+        "situation_factors": {
+          "is_choppy": false,
+          "is_high_vol": false,
+          "is_trending": true,
+          "is_morning": false,
+          "is_lunch": false,
+          "is_close": false,
+          "is_old_trade": true,
+          "is_quick_trade": false
+        },
+        "decision_reasons": [
+          "OLD_TRADE"
+        ],
+        "duration_minutes": 39.0,
+        "learned_multiplier": 1.0
+      },
+      "outcome": {
+        "pnl": -177.5,
+        "duration": 42528.87202825,
+        "exit_reason": "stop_loss",
+        "side": "short",
+        "contracts": 1,
+        "win": false
+      },
+      "situation": {
+        "time_of_day": "00:51",
+        "volatility_atr": 0,
+        "trend_strength": 0
+      }
+    },
+    {
+      "timestamp": "2025-11-06T00:51:52.663391",
+      "regime": "NORMAL_TRENDING",
+      "exit_params": {
+        "breakeven_threshold_ticks": 9,
+        "breakeven_offset_ticks": 1,
+        "trailing_distance_ticks": 13,
+        "trailing_min_profit_ticks": 16,
+        "market_regime": "NORMAL_TRENDING",
+        "current_volatility_atr": 2.0,
+        "is_aggressive_mode": false,
+        "situation_factors": {
+          "is_choppy": false,
+          "is_high_vol": false,
+          "is_trending": true,
+          "is_morning": false,
+          "is_lunch": false,
+          "is_close": false,
+          "is_old_trade": false,
+          "is_quick_trade": true
+        },
+        "decision_reasons": [
+          "balanced"
+        ],
+        "duration_minutes": 3.0,
+        "learned_multiplier": 1.0
+      },
+      "outcome": {
+        "pnl": -177.5,
+        "duration": 41449.87772223333,
+        "exit_reason": "stop_loss",
+        "side": "long",
+        "contracts": 1,
+        "win": false
+      },
+      "situation": {
+        "time_of_day": "00:51",
+        "volatility_atr": 0,
+        "trend_strength": 0
+      }
+    },
+    {
+      "timestamp": "2025-11-06T00:51:52.853975",
+      "regime": "NORMAL",
+      "exit_params": {
+        "breakeven_threshold_ticks": 9,
+        "breakeven_offset_ticks": 1,
+        "trailing_distance_ticks": 10,
+        "trailing_min_profit_ticks": 16,
+        "market_regime": "NORMAL",
+        "current_volatility_atr": 2.0,
+        "is_aggressive_mode": false,
+        "situation_factors": {
+          "is_choppy": false,
+          "is_high_vol": false,
+          "is_trending": false,
+          "is_morning": true,
+          "is_lunch": false,
+          "is_close": false,
+          "is_old_trade": false,
+          "is_quick_trade": false
+        },
+        "decision_reasons": [
+          "balanced"
+        ],
+        "duration_minutes": 10.0,
+        "learned_multiplier": 1.0
+      },
+      "outcome": {
+        "pnl": -2.5,
+        "duration": 40956.88089853334,
+        "exit_reason": "stop_loss",
+        "side": "short",
+        "contracts": 1,
+        "win": false
+      },
+      "situation": {
+        "time_of_day": "00:51",
+        "volatility_atr": 0,
+        "trend_strength": 0
+      }
+    },
+    {
+      "timestamp": "2025-11-06T00:51:53.291312",
+      "regime": "NORMAL_TRENDING",
+      "exit_params": {
+        "breakeven_threshold_ticks": 7,
+        "breakeven_offset_ticks": 1,
+        "trailing_distance_ticks": 8,
+        "trailing_min_profit_ticks": 13,
+        "market_regime": "NORMAL_TRENDING",
+        "current_volatility_atr": 2.0,
+        "is_aggressive_mode": true,
+        "situation_factors": {
+          "is_choppy": false,
+          "is_high_vol": false,
+          "is_trending": true,
+          "is_morning": false,
+          "is_lunch": false,
+          "is_close": false,
+          "is_old_trade": true,
+          "is_quick_trade": false
+        },
+        "decision_reasons": [
+          "OLD_TRADE"
+        ],
+        "duration_minutes": 49.0,
+        "learned_multiplier": 1.0
+      },
+      "outcome": {
+        "pnl": 517.5,
+        "duration": 40001.88818756666,
+        "exit_reason": "stop_loss",
+        "side": "short",
+        "contracts": 3,
+        "win": true
+      },
+      "situation": {
+        "time_of_day": "00:51",
+        "volatility_atr": 0,
+        "trend_strength": 0
+      }
+    },
+    {
+      "timestamp": "2025-11-06T00:51:53.338128",
+      "regime": "NORMAL",
+      "exit_params": {
+        "breakeven_threshold_ticks": 7,
+        "breakeven_offset_ticks": 1,
+        "trailing_distance_ticks": 8,
+        "trailing_min_profit_ticks": 13,
+        "market_regime": "NORMAL",
+        "current_volatility_atr": 2.0,
+        "is_aggressive_mode": true,
+        "situation_factors": {
+          "is_choppy": false,
+          "is_high_vol": false,
+          "is_trending": false,
+          "is_morning": false,
+          "is_lunch": false,
+          "is_close": false,
+          "is_old_trade": true,
+          "is_quick_trade": false
+        },
+        "decision_reasons": [
+          "OLD_TRADE"
+        ],
+        "duration_minutes": 58.0,
+        "learned_multiplier": 1.0
+      },
+      "outcome": {
+        "pnl": 367.5,
+        "duration": 39843.88896785,
+        "exit_reason": "stop_loss",
+        "side": "long",
+        "contracts": 3,
+        "win": true
+      },
+      "situation": {
+        "time_of_day": "00:51",
+        "volatility_atr": 0,
+        "trend_strength": 0
+      }
+    },
+    {
+      "timestamp": "2025-11-06T00:51:53.513826",
+      "regime": "NORMAL",
+      "exit_params": {
+        "breakeven_threshold_ticks": 9,
+        "breakeven_offset_ticks": 1,
+        "trailing_distance_ticks": 10,
+        "trailing_min_profit_ticks": 16,
+        "market_regime": "NORMAL",
+        "current_volatility_atr": 2.0,
+        "is_aggressive_mode": false,
+        "situation_factors": {
+          "is_choppy": false,
+          "is_high_vol": false,
+          "is_trending": false,
+          "is_morning": false,
+          "is_lunch": true,
+          "is_close": false,
+          "is_old_trade": false,
+          "is_quick_trade": true
+        },
+        "decision_reasons": [
+          "balanced"
+        ],
+        "duration_minutes": 2.0,
+        "learned_multiplier": 1.0
+      },
+      "outcome": {
+        "pnl": -7.5,
+        "duration": 39344.89189583333,
+        "exit_reason": "stop_loss",
+        "side": "long",
+        "contracts": 3,
+        "win": false
+      },
+      "situation": {
+        "time_of_day": "00:51",
+        "volatility_atr": 0,
+        "trend_strength": 0
+      }
+    },
+    {
+      "timestamp": "2025-11-06T00:51:53.523325",
+      "regime": "NORMAL",
+      "exit_params": {
+        "breakeven_threshold_ticks": 9,
+        "breakeven_offset_ticks": 1,
+        "trailing_distance_ticks": 10,
+        "trailing_min_profit_ticks": 16,
+        "market_regime": "NORMAL",
+        "current_volatility_atr": 2.0,
+        "is_aggressive_mode": false,
+        "situation_factors": {
+          "is_choppy": false,
+          "is_high_vol": false,
+          "is_trending": false,
+          "is_morning": false,
+          "is_lunch": true,
+          "is_close": false,
+          "is_old_trade": false,
+          "is_quick_trade": true
+        },
+        "decision_reasons": [
+          "balanced"
+        ],
+        "duration_minutes": 1.0,
+        "learned_multiplier": 1.0
+      },
+      "outcome": {
+        "pnl": -7.5,
+        "duration": 39332.89205455,
+        "exit_reason": "stop_loss",
+        "side": "long",
+        "contracts": 3,
+        "win": false
+      },
+      "situation": {
+        "time_of_day": "00:51",
+        "volatility_atr": 0,
+        "trend_strength": 0
+      }
+    },
+    {
+      "timestamp": "2025-11-06T00:51:53.824306",
+      "regime": "NORMAL_TRENDING",
+      "exit_params": {
+        "breakeven_threshold_ticks": 9,
+        "breakeven_offset_ticks": 1,
+        "trailing_distance_ticks": 13,
+        "trailing_min_profit_ticks": 16,
+        "market_regime": "NORMAL_TRENDING",
+        "current_volatility_atr": 2.0,
+        "is_aggressive_mode": false,
+        "situation_factors": {
+          "is_choppy": false,
+          "is_high_vol": false,
+          "is_trending": true,
+          "is_morning": false,
+          "is_lunch": false,
+          "is_close": false,
+          "is_old_trade": false,
+          "is_quick_trade": false
+        },
+        "decision_reasons": [
+          "balanced"
+        ],
+        "duration_minutes": 22.0,
+        "learned_multiplier": 1.0
+      },
+      "outcome": {
+        "pnl": 595.0,
+        "duration": 38555.8945905,
+        "exit_reason": "stop_loss",
+        "side": "short",
+        "contracts": 2,
+        "win": true
+      },
+      "situation": {
+        "time_of_day": "00:51",
+        "volatility_atr": 0,
+        "trend_strength": 0
+      }
+    },
+    {
+      "timestamp": "2025-11-06T00:51:54.075720",
+      "regime": "NORMAL_TRENDING",
+      "exit_params": {
+        "breakeven_threshold_ticks": 9,
+        "breakeven_offset_ticks": 1,
+        "trailing_distance_ticks": 13,
+        "trailing_min_profit_ticks": 16,
+        "market_regime": "NORMAL_TRENDING",
+        "current_volatility_atr": 2.0,
+        "is_aggressive_mode": false,
+        "situation_factors": {
+          "is_choppy": false,
+          "is_high_vol": false,
+          "is_trending": true,
+          "is_morning": false,
+          "is_lunch": false,
+          "is_close": false,
+          "is_old_trade": false,
+          "is_quick_trade": true
+        },
+        "decision_reasons": [
+          "balanced"
+        ],
+        "duration_minutes": -1.0,
+        "learned_multiplier": 1.0
+      },
+      "outcome": {
+        "pnl": -27.5,
+        "duration": 37795.90126055,
+        "exit_reason": "friday_profit_protection",
+        "side": "long",
+        "contracts": 1,
+        "win": false
+      },
+      "situation": {
+        "time_of_day": "00:51",
+        "volatility_atr": 0,
+        "trend_strength": 0
+      }
+    },
+    {
+      "timestamp": "2025-11-06T00:51:54.399757",
+      "regime": "NORMAL_TRENDING",
+      "exit_params": {
+        "breakeven_threshold_ticks": 9,
+        "breakeven_offset_ticks": 1,
+        "trailing_distance_ticks": 13,
+        "trailing_min_profit_ticks": 16,
+        "market_regime": "NORMAL_TRENDING",
+        "current_volatility_atr": 2.0,
+        "is_aggressive_mode": false,
+        "situation_factors": {
+          "is_choppy": false,
+          "is_high_vol": false,
+          "is_trending": true,
+          "is_morning": false,
+          "is_lunch": true,
+          "is_close": false,
+          "is_old_trade": false,
+          "is_quick_trade": false
+        },
+        "decision_reasons": [
+          "balanced"
+        ],
+        "duration_minutes": 16.0,
+        "learned_multiplier": 1.0
+      },
+      "outcome": {
+        "pnl": 995.0,
+        "duration": 33586.90666158333,
+        "exit_reason": "stop_loss",
+        "side": "short",
+        "contracts": 2,
+        "win": true
+      },
+      "situation": {
+        "time_of_day": "00:51",
+        "volatility_atr": 0,
+        "trend_strength": 0
+      }
+    },
+    {
+      "timestamp": "2025-11-06T00:51:54.605842",
+      "regime": "NORMAL_TRENDING",
+      "exit_params": {
+        "breakeven_threshold_ticks": 9,
+        "breakeven_offset_ticks": 1,
+        "trailing_distance_ticks": 13,
+        "trailing_min_profit_ticks": 16,
+        "market_regime": "NORMAL_TRENDING",
+        "current_volatility_atr": 2.0,
+        "is_aggressive_mode": false,
+        "situation_factors": {
+          "is_choppy": false,
+          "is_high_vol": false,
+          "is_trending": true,
+          "is_morning": false,
+          "is_lunch": false,
+          "is_close": false,
+          "is_old_trade": false,
+          "is_quick_trade": true
+        },
+        "decision_reasons": [
+          "balanced"
+        ],
+        "duration_minutes": -1.0,
+        "learned_multiplier": 1.0
+      },
+      "outcome": {
+        "pnl": -177.5,
+        "duration": 32527.910095666666,
+        "exit_reason": "stop_loss",
+        "side": "long",
+        "contracts": 1,
+        "win": false
+      },
+      "situation": {
+        "time_of_day": "00:51",
+        "volatility_atr": 0,
+        "trend_strength": 0
+      }
+    },
+    {
+      "timestamp": "2025-11-06T00:51:55.146553",
+      "regime": "NORMAL",
+      "exit_params": {
+        "breakeven_threshold_ticks": 7,
+        "breakeven_offset_ticks": 1,
+        "trailing_distance_ticks": 8,
+        "trailing_min_profit_ticks": 13,
+        "market_regime": "NORMAL",
+        "current_volatility_atr": 2.0,
+        "is_aggressive_mode": true,
+        "situation_factors": {
+          "is_choppy": false,
+          "is_high_vol": false,
+          "is_trending": false,
+          "is_morning": false,
+          "is_lunch": false,
+          "is_close": false,
+          "is_old_trade": true,
+          "is_quick_trade": false
+        },
+        "decision_reasons": [
+          "OLD_TRADE"
+        ],
+        "duration_minutes": 42.0,
+        "learned_multiplier": 1.0
+      },
+      "outcome": {
+        "pnl": -152.5,
+        "duration": 31232.919108183334,
+        "exit_reason": "stop_loss",
+        "side": "short",
+        "contracts": 1,
+        "win": false
+      },
+      "situation": {
+        "time_of_day": "00:51",
+        "volatility_atr": 0,
+        "trend_strength": 0
+      }
+    },
+    {
+      "timestamp": "2025-11-06T00:51:55.161522",
+      "regime": "NORMAL_TRENDING",
+      "exit_params": {
+        "breakeven_threshold_ticks": 9,
+        "breakeven_offset_ticks": 1,
+        "trailing_distance_ticks": 13,
+        "trailing_min_profit_ticks": 16,
+        "market_regime": "NORMAL_TRENDING",
+        "current_volatility_atr": 2.0,
+        "is_aggressive_mode": false,
+        "situation_factors": {
+          "is_choppy": false,
+          "is_high_vol": false,
+          "is_trending": true,
+          "is_morning": false,
+          "is_lunch": false,
+          "is_close": false,
+          "is_old_trade": false,
+          "is_quick_trade": false
+        },
+        "decision_reasons": [
+          "balanced"
+        ],
+        "duration_minutes": 13.0,
+        "learned_multiplier": 1.0
+      },
+      "outcome": {
+        "pnl": 367.5,
+        "duration": 31172.91935773333,
+        "exit_reason": "stop_loss",
+        "side": "short",
+        "contracts": 3,
+        "win": true
+      },
+      "situation": {
+        "time_of_day": "00:51",
+        "volatility_atr": 0,
+        "trend_strength": 0
+      }
+    },
+    {
+      "timestamp": "2025-11-06T00:51:55.215889",
+      "regime": "NORMAL",
+      "exit_params": {
+        "breakeven_threshold_ticks": 9,
+        "breakeven_offset_ticks": 1,
+        "trailing_distance_ticks": 10,
+        "trailing_min_profit_ticks": 16,
+        "market_regime": "NORMAL",
+        "current_volatility_atr": 2.0,
+        "is_aggressive_mode": false,
+        "situation_factors": {
+          "is_choppy": false,
+          "is_high_vol": false,
+          "is_trending": false,
+          "is_morning": false,
+          "is_lunch": false,
+          "is_close": false,
+          "is_old_trade": false,
+          "is_quick_trade": true
+        },
+        "decision_reasons": [
+          "balanced"
+        ],
+        "duration_minutes": 2.0,
+        "learned_multiplier": 1.0
+      },
+      "outcome": {
+        "pnl": -177.5,
+        "duration": 30990.920263766668,
+        "exit_reason": "stop_loss",
+        "side": "short",
+        "contracts": 1,
+        "win": false
+      },
+      "situation": {
+        "time_of_day": "00:51",
+        "volatility_atr": 0,
+        "trend_strength": 0
+      }
+    },
+    {
+      "timestamp": "2025-11-06T00:51:55.332619",
+      "regime": "NORMAL",
+      "exit_params": {
+        "breakeven_threshold_ticks": 9,
+        "breakeven_offset_ticks": 1,
+        "trailing_distance_ticks": 10,
+        "trailing_min_profit_ticks": 16,
+        "market_regime": "NORMAL",
+        "current_volatility_atr": 2.0,
+        "is_aggressive_mode": false,
+        "situation_factors": {
+          "is_choppy": false,
+          "is_high_vol": false,
+          "is_trending": false,
+          "is_morning": true,
+          "is_lunch": false,
+          "is_close": false,
+          "is_old_trade": false,
+          "is_quick_trade": false
+        },
+        "decision_reasons": [
+          "balanced"
+        ],
+        "duration_minutes": 7.0,
+        "learned_multiplier": 1.0
+      },
+      "outcome": {
+        "pnl": -2.5,
+        "duration": 30879.922209333334,
+        "exit_reason": "stop_loss",
+        "side": "short",
+        "contracts": 1,
+        "win": false
+      },
+      "situation": {
+        "time_of_day": "00:51",
+        "volatility_atr": 0,
+        "trend_strength": 0
+      }
+    },
+    {
+      "timestamp": "2025-11-06T00:51:55.546655",
+      "regime": "NORMAL_TRENDING",
+      "exit_params": {
+        "breakeven_threshold_ticks": 9,
+        "breakeven_offset_ticks": 1,
+        "trailing_distance_ticks": 13,
+        "trailing_min_profit_ticks": 16,
+        "market_regime": "NORMAL_TRENDING",
+        "current_volatility_atr": 2.0,
+        "is_aggressive_mode": false,
+        "situation_factors": {
+          "is_choppy": false,
+          "is_high_vol": false,
+          "is_trending": true,
+          "is_morning": false,
+          "is_lunch": true,
+          "is_close": false,
+          "is_old_trade": false,
+          "is_quick_trade": true
+        },
+        "decision_reasons": [
+          "balanced"
+        ],
+        "duration_minutes": -1.0,
+        "learned_multiplier": 1.0
+      },
+      "outcome": {
+        "pnl": -177.5,
+        "duration": 30706.923303983334,
+        "exit_reason": "stop_loss",
+        "side": "long",
+        "contracts": 1,
+        "win": false
+      },
+      "situation": {
+        "time_of_day": "00:51",
+        "volatility_atr": 0,
+        "trend_strength": 0
+      }
+    },
+    {
+      "timestamp": "2025-11-06T00:52:02.381294",
+      "regime": "NORMAL",
+      "exit_params": {
+        "breakeven_threshold_ticks": 9,
+        "breakeven_offset_ticks": 1,
+        "trailing_distance_ticks": 10,
+        "trailing_min_profit_ticks": 16,
+        "market_regime": "NORMAL",
+        "current_volatility_atr": 2.0,
+        "is_aggressive_mode": false,
+        "situation_factors": {
+          "is_choppy": false,
+          "is_high_vol": false,
+          "is_trending": false,
+          "is_morning": false,
+          "is_lunch": false,
+          "is_close": false,
+          "is_old_trade": false,
+          "is_quick_trade": false
+        },
+        "decision_reasons": [
+          "balanced"
+        ],
+        "duration_minutes": 29.0,
+        "learned_multiplier": 1.0
+      },
+      "outcome": {
+        "pnl": 22.5,
+        "duration": 29657.039687216668,
+        "exit_reason": "stop_loss",
+        "side": "short",
+        "contracts": 1,
+        "win": true
+      },
+      "situation": {
+        "time_of_day": "00:52",
+        "volatility_atr": 0,
+        "trend_strength": 0
+      }
+    },
+    {
+      "timestamp": "2025-11-06T00:52:02.507574",
+      "regime": "NORMAL",
+      "exit_params": {
+        "breakeven_threshold_ticks": 9,
+        "breakeven_offset_ticks": 1,
+        "trailing_distance_ticks": 10,
+        "trailing_min_profit_ticks": 16,
+        "market_regime": "NORMAL",
+        "current_volatility_atr": 2.0,
+        "is_aggressive_mode": false,
+        "situation_factors": {
+          "is_choppy": false,
+          "is_high_vol": false,
+          "is_trending": false,
+          "is_morning": true,
+          "is_lunch": false,
+          "is_close": false,
+          "is_old_trade": false,
+          "is_quick_trade": false
+        },
+        "decision_reasons": [
+          "balanced"
+        ],
+        "duration_minutes": 8.0,
+        "learned_multiplier": 1.0
+      },
+      "outcome": {
+        "pnl": 1195.0,
+        "duration": 29437.041791866664,
+        "exit_reason": "stop_loss",
+        "side": "long",
+        "contracts": 2,
+        "win": true
+      },
+      "situation": {
+        "time_of_day": "00:52",
+        "volatility_atr": 0,
+        "trend_strength": 0
+      }
+    },
+    {
+      "timestamp": "2025-11-06T00:52:02.533127",
+      "regime": "NORMAL",
+      "exit_params": {
+        "breakeven_threshold_ticks": 9,
+        "breakeven_offset_ticks": 1,
+        "trailing_distance_ticks": 10,
+        "trailing_min_profit_ticks": 16,
+        "market_regime": "NORMAL",
+        "current_volatility_atr": 2.0,
+        "is_aggressive_mode": false,
+        "situation_factors": {
+          "is_choppy": false,
+          "is_high_vol": false,
+          "is_trending": false,
+          "is_morning": false,
+          "is_lunch": true,
+          "is_close": false,
+          "is_old_trade": false,
+          "is_quick_trade": true
+        },
+        "decision_reasons": [
+          "balanced"
+        ],
+        "duration_minutes": 1.0,
+        "learned_multiplier": 1.0
+      },
+      "outcome": {
+        "pnl": 97.5,
+        "duration": 29327.042217849998,
+        "exit_reason": "stop_loss",
+        "side": "long",
+        "contracts": 1,
+        "win": true
+      },
+      "situation": {
+        "time_of_day": "00:52",
+        "volatility_atr": 0,
+        "trend_strength": 0
+      }
+    },
+    {
+      "timestamp": "2025-11-06T00:52:02.762235",
+      "regime": "NORMAL_TRENDING",
+      "exit_params": {
+        "breakeven_threshold_ticks": 9,
+        "breakeven_offset_ticks": 1,
+        "trailing_distance_ticks": 13,
+        "trailing_min_profit_ticks": 16,
+        "market_regime": "NORMAL_TRENDING",
+        "current_volatility_atr": 2.0,
+        "is_aggressive_mode": false,
+        "situation_factors": {
+          "is_choppy": false,
+          "is_high_vol": false,
+          "is_trending": true,
+          "is_morning": false,
+          "is_lunch": false,
+          "is_close": false,
+          "is_old_trade": false,
+          "is_quick_trade": true
+        },
+        "decision_reasons": [
+          "balanced"
+        ],
+        "duration_minutes": 0.0,
+        "learned_multiplier": 1.0
+      },
+      "outcome": {
+        "pnl": -177.5,
+        "duration": 28511.0460362,
+        "exit_reason": "stop_loss",
+        "side": "long",
+        "contracts": 1,
+        "win": false
+      },
+      "situation": {
+        "time_of_day": "00:52",
+        "volatility_atr": 0,
+        "trend_strength": 0
+      }
+    },
+    {
+      "timestamp": "2025-11-06T00:52:03.088778",
+      "regime": "NORMAL_TRENDING",
+      "exit_params": {
+        "breakeven_threshold_ticks": 9,
+        "breakeven_offset_ticks": 1,
+        "trailing_distance_ticks": 13,
+        "trailing_min_profit_ticks": 16,
+        "market_regime": "NORMAL_TRENDING",
+        "current_volatility_atr": 2.0,
+        "is_aggressive_mode": false,
+        "situation_factors": {
+          "is_choppy": false,
+          "is_high_vol": false,
+          "is_trending": true,
+          "is_morning": false,
+          "is_lunch": false,
+          "is_close": false,
+          "is_old_trade": false,
+          "is_quick_trade": false
+        },
+        "decision_reasons": [
+          "balanced"
+        ],
+        "duration_minutes": 6.0,
+        "learned_multiplier": 1.0
+      },
+      "outcome": {
+        "pnl": 197.5,
+        "duration": 28176.04898485,
+        "exit_reason": "stop_loss",
+        "side": "short",
+        "contracts": 1,
+        "win": true
+      },
+      "situation": {
+        "time_of_day": "00:52",
+        "volatility_atr": 0,
+        "trend_strength": 0
+      }
+    },
+    {
+      "timestamp": "2025-11-06T00:52:03.128791",
+      "regime": "NORMAL_TRENDING",
+      "exit_params": {
+        "breakeven_threshold_ticks": 9,
+        "breakeven_offset_ticks": 1,
+        "trailing_distance_ticks": 13,
+        "trailing_min_profit_ticks": 16,
+        "market_regime": "NORMAL_TRENDING",
+        "current_volatility_atr": 2.0,
+        "is_aggressive_mode": false,
+        "situation_factors": {
+          "is_choppy": false,
+          "is_high_vol": false,
+          "is_trending": true,
+          "is_morning": true,
+          "is_lunch": false,
+          "is_close": false,
+          "is_old_trade": false,
+          "is_quick_trade": true
+        },
+        "decision_reasons": [
+          "balanced"
+        ],
+        "duration_minutes": 2.0,
+        "learned_multiplier": 1.0
+      },
+      "outcome": {
+        "pnl": 495.0,
+        "duration": 27995.052145250003,
+        "exit_reason": "stop_loss",
+        "side": "short",
+        "contracts": 2,
+        "win": true
+      },
+      "situation": {
+        "time_of_day": "00:52",
+        "volatility_atr": 0,
+        "trend_strength": 0
+      }
+    },
+    {
+      "timestamp": "2025-11-06T00:52:03.187195",
+      "regime": "NORMAL_TRENDING",
+      "exit_params": {
+        "breakeven_threshold_ticks": 9,
+        "breakeven_offset_ticks": 1,
+        "trailing_distance_ticks": 13,
+        "trailing_min_profit_ticks": 16,
+        "market_regime": "NORMAL_TRENDING",
+        "current_volatility_atr": 2.0,
+        "is_aggressive_mode": false,
+        "situation_factors": {
+          "is_choppy": false,
+          "is_high_vol": false,
+          "is_trending": true,
+          "is_morning": false,
+          "is_lunch": false,
+          "is_close": false,
+          "is_old_trade": false,
+          "is_quick_trade": false
+        },
+        "decision_reasons": [
+          "balanced"
+        ],
+        "duration_minutes": 7.0,
+        "learned_multiplier": 1.0
+      },
+      "outcome": {
+        "pnl": 145.0,
+        "duration": 27747.053118533335,
+        "exit_reason": "friday_profit_protection",
+        "side": "short",
+        "contracts": 2,
+        "win": true
+      },
+      "situation": {
+        "time_of_day": "00:52",
+        "volatility_atr": 0,
+        "trend_strength": 0
+      }
+    },
+    {
+      "timestamp": "2025-11-06T00:52:03.609866",
+      "regime": "NORMAL",
+      "exit_params": {
+        "breakeven_threshold_ticks": 9,
+        "breakeven_offset_ticks": 1,
+        "trailing_distance_ticks": 10,
+        "trailing_min_profit_ticks": 16,
+        "market_regime": "NORMAL",
+        "current_volatility_atr": 2.0,
+        "is_aggressive_mode": false,
+        "situation_factors": {
+          "is_choppy": false,
+          "is_high_vol": false,
+          "is_trending": false,
+          "is_morning": false,
+          "is_lunch": false,
+          "is_close": false,
+          "is_old_trade": false,
+          "is_quick_trade": false
+        },
+        "decision_reasons": [
+          "balanced"
+        ],
+        "duration_minutes": 16.0,
+        "learned_multiplier": 1.0
+      },
+      "outcome": {
+        "pnl": -177.5,
+        "duration": 24283.0576148,
+        "exit_reason": "stop_loss",
+        "side": "short",
+        "contracts": 1,
+        "win": false
+      },
+      "situation": {
+        "time_of_day": "00:52",
+        "volatility_atr": 0,
+        "trend_strength": 0
+      }
+    },
+    {
+      "timestamp": "2025-11-06T00:52:03.706858",
+      "regime": "NORMAL",
+      "exit_params": {
+        "breakeven_threshold_ticks": 7,
+        "breakeven_offset_ticks": 1,
+        "trailing_distance_ticks": 8,
+        "trailing_min_profit_ticks": 13,
+        "market_regime": "NORMAL",
+        "current_volatility_atr": 2.0,
+        "is_aggressive_mode": true,
+        "situation_factors": {
+          "is_choppy": false,
+          "is_high_vol": false,
+          "is_trending": false,
+          "is_morning": false,
+          "is_lunch": false,
+          "is_close": false,
+          "is_old_trade": true,
+          "is_quick_trade": false
+        },
+        "decision_reasons": [
+          "OLD_TRADE"
+        ],
+        "duration_minutes": 32.0,
+        "learned_multiplier": 1.0
+      },
+      "outcome": {
+        "pnl": 247.5,
+        "duration": 24071.06177996667,
+        "exit_reason": "stop_loss",
+        "side": "short",
+        "contracts": 1,
+        "win": true
+      },
+      "situation": {
+        "time_of_day": "00:52",
+        "volatility_atr": 0,
+        "trend_strength": 0
+      }
+    },
+    {
+      "timestamp": "2025-11-06T00:52:03.820423",
+      "regime": "NORMAL",
+      "exit_params": {
+        "breakeven_threshold_ticks": 9,
+        "breakeven_offset_ticks": 1,
+        "trailing_distance_ticks": 10,
+        "trailing_min_profit_ticks": 16,
+        "market_regime": "NORMAL",
+        "current_volatility_atr": 2.0,
+        "is_aggressive_mode": false,
+        "situation_factors": {
+          "is_choppy": false,
+          "is_high_vol": false,
+          "is_trending": false,
+          "is_morning": false,
+          "is_lunch": true,
+          "is_close": false,
+          "is_old_trade": false,
+          "is_quick_trade": false
+        },
+        "decision_reasons": [
+          "balanced"
+        ],
+        "duration_minutes": 15.0,
+        "learned_multiplier": 1.0
+      },
+      "outcome": {
+        "pnl": -177.5,
+        "duration": 23486.063672733333,
+        "exit_reason": "stop_loss",
+        "side": "short",
+        "contracts": 1,
+        "win": false
+      },
+      "situation": {
+        "time_of_day": "00:52",
+        "volatility_atr": 0,
+        "trend_strength": 0
+      }
+    },
+    {
+      "timestamp": "2025-11-06T00:52:03.942851",
+      "regime": "NORMAL_TRENDING",
+      "exit_params": {
+        "breakeven_threshold_ticks": 7,
+        "breakeven_offset_ticks": 1,
+        "trailing_distance_ticks": 8,
+        "trailing_min_profit_ticks": 13,
+        "market_regime": "NORMAL_TRENDING",
+        "current_volatility_atr": 2.0,
+        "is_aggressive_mode": true,
+        "situation_factors": {
+          "is_choppy": false,
+          "is_high_vol": false,
+          "is_trending": true,
+          "is_morning": false,
+          "is_lunch": false,
+          "is_close": false,
+          "is_old_trade": true,
+          "is_quick_trade": false
+        },
+        "decision_reasons": [
+          "OLD_TRADE"
+        ],
+        "duration_minutes": 43.0,
+        "learned_multiplier": 1.0
+      },
+      "outcome": {
+        "pnl": 545.0,
+        "duration": 23441.065713133332,
+        "exit_reason": "stop_loss",
+        "side": "short",
+        "contracts": 2,
+        "win": true
+      },
+      "situation": {
+        "time_of_day": "00:52",
+        "volatility_atr": 0,
+        "trend_strength": 0
+      }
+    },
+    {
+      "timestamp": "2025-11-06T00:52:04.181605",
+      "regime": "NORMAL_TRENDING",
+      "exit_params": {
+        "breakeven_threshold_ticks": 9,
+        "breakeven_offset_ticks": 1,
+        "trailing_distance_ticks": 13,
+        "trailing_min_profit_ticks": 16,
+        "market_regime": "NORMAL_TRENDING",
+        "current_volatility_atr": 2.0,
+        "is_aggressive_mode": false,
+        "situation_factors": {
+          "is_choppy": false,
+          "is_high_vol": false,
+          "is_trending": true,
+          "is_morning": false,
+          "is_lunch": true,
+          "is_close": false,
+          "is_old_trade": false,
+          "is_quick_trade": false
+        },
+        "decision_reasons": [
+          "balanced"
+        ],
+        "duration_minutes": 5.0,
+        "learned_multiplier": 1.0
+      },
+      "outcome": {
+        "pnl": -177.5,
+        "duration": 22187.0696924,
+        "exit_reason": "stop_loss",
+        "side": "short",
+        "contracts": 1,
+        "win": false
+      },
+      "situation": {
+        "time_of_day": "00:52",
+        "volatility_atr": 0,
+        "trend_strength": 0
+      }
+    },
+    {
+      "timestamp": "2025-11-06T00:52:04.344242",
+      "regime": "NORMAL",
+      "exit_params": {
+        "breakeven_threshold_ticks": 9,
+        "breakeven_offset_ticks": 1,
+        "trailing_distance_ticks": 10,
+        "trailing_min_profit_ticks": 16,
+        "market_regime": "NORMAL",
+        "current_volatility_atr": 2.0,
+        "is_aggressive_mode": false,
+        "situation_factors": {
+          "is_choppy": false,
+          "is_high_vol": false,
+          "is_trending": false,
+          "is_morning": false,
+          "is_lunch": true,
+          "is_close": false,
+          "is_old_trade": false,
+          "is_quick_trade": false
+        },
+        "decision_reasons": [
+          "balanced"
+        ],
+        "duration_minutes": 14.0,
+        "learned_multiplier": 1.0
+      },
+      "outcome": {
+        "pnl": 495.0,
+        "duration": 22179.069906083332,
+        "exit_reason": "stop_loss",
+        "side": "short",
+        "contracts": 2,
+        "win": true
+      },
+      "situation": {
+        "time_of_day": "00:52",
+        "volatility_atr": 0,
+        "trend_strength": 0
+      }
+    },
+    {
+      "timestamp": "2025-11-06T00:52:04.755060",
+      "regime": "NORMAL_TRENDING",
+      "exit_params": {
+        "breakeven_threshold_ticks": 9,
+        "breakeven_offset_ticks": 1,
+        "trailing_distance_ticks": 13,
+        "trailing_min_profit_ticks": 16,
+        "market_regime": "NORMAL_TRENDING",
+        "current_volatility_atr": 2.0,
+        "is_aggressive_mode": false,
+        "situation_factors": {
+          "is_choppy": false,
+          "is_high_vol": false,
+          "is_trending": true,
+          "is_morning": true,
+          "is_lunch": false,
+          "is_close": false,
+          "is_old_trade": false,
+          "is_quick_trade": true
+        },
+        "decision_reasons": [
+          "balanced"
+        ],
+        "duration_minutes": 3.0,
+        "learned_multiplier": 1.0
+      },
+      "outcome": {
+        "pnl": -2.5,
+        "duration": 20778.079249950002,
+        "exit_reason": "stop_loss",
+        "side": "long",
+        "contracts": 1,
+        "win": false
+      },
+      "situation": {
+        "time_of_day": "00:52",
+        "volatility_atr": 0,
+        "trend_strength": 0
+      }
+    },
+    {
+      "timestamp": "2025-11-06T00:52:04.789717",
+      "regime": "NORMAL",
+      "exit_params": {
+        "breakeven_threshold_ticks": 9,
+        "breakeven_offset_ticks": 1,
+        "trailing_distance_ticks": 10,
+        "trailing_min_profit_ticks": 16,
+        "market_regime": "NORMAL",
+        "current_volatility_atr": 2.0,
+        "is_aggressive_mode": false,
+        "situation_factors": {
+          "is_choppy": false,
+          "is_high_vol": false,
+          "is_trending": false,
+          "is_morning": false,
+          "is_lunch": true,
+          "is_close": false,
+          "is_old_trade": false,
+          "is_quick_trade": true
+        },
+        "decision_reasons": [
+          "balanced"
+        ],
+        "duration_minutes": 2.0,
+        "learned_multiplier": 1.0
+      },
+      "outcome": {
+        "pnl": 795.0,
+        "duration": 20658.07982765,
+        "exit_reason": "stop_loss",
+        "side": "long",
+        "contracts": 2,
+        "win": true
+      },
+      "situation": {
+        "time_of_day": "00:52",
+        "volatility_atr": 0,
+        "trend_strength": 0
+      }
+    },
+    {
+      "timestamp": "2025-11-06T00:52:04.811398",
+      "regime": "NORMAL",
+      "exit_params": {
+        "breakeven_threshold_ticks": 9,
+        "breakeven_offset_ticks": 1,
+        "trailing_distance_ticks": 10,
+        "trailing_min_profit_ticks": 16,
+        "market_regime": "NORMAL",
+        "current_volatility_atr": 2.0,
+        "is_aggressive_mode": false,
+        "situation_factors": {
+          "is_choppy": false,
+          "is_high_vol": false,
+          "is_trending": false,
+          "is_morning": false,
+          "is_lunch": true,
+          "is_close": false,
+          "is_old_trade": false,
+          "is_quick_trade": true
+        },
+        "decision_reasons": [
+          "balanced"
+        ],
+        "duration_minutes": -1.0,
+        "learned_multiplier": 1.0
+      },
+      "outcome": {
+        "pnl": -177.5,
+        "duration": 20604.08018905,
+        "exit_reason": "stop_loss",
+        "side": "long",
+        "contracts": 1,
+        "win": false
+      },
+      "situation": {
+        "time_of_day": "00:52",
+        "volatility_atr": 0,
+        "trend_strength": 0
+      }
+    },
+    {
+      "timestamp": "2025-11-06T00:52:04.909420",
+      "regime": "NORMAL",
+      "exit_params": {
+        "breakeven_threshold_ticks": 9,
+        "breakeven_offset_ticks": 1,
+        "trailing_distance_ticks": 10,
+        "trailing_min_profit_ticks": 16,
+        "market_regime": "NORMAL",
+        "current_volatility_atr": 2.0,
+        "is_aggressive_mode": false,
+        "situation_factors": {
+          "is_choppy": false,
+          "is_high_vol": false,
+          "is_trending": false,
+          "is_morning": false,
+          "is_lunch": true,
+          "is_close": false,
+          "is_old_trade": false,
+          "is_quick_trade": true
+        },
+        "decision_reasons": [
+          "balanced"
+        ],
+        "duration_minutes": 1.0,
+        "learned_multiplier": 1.0
+      },
+      "outcome": {
+        "pnl": -177.5,
+        "duration": 20584.08182275,
+        "exit_reason": "stop_loss",
+        "side": "long",
+        "contracts": 1,
+        "win": false
+      },
+      "situation": {
+        "time_of_day": "00:52",
+        "volatility_atr": 0,
+        "trend_strength": 0
+      }
+    },
+    {
+      "timestamp": "2025-11-06T00:52:05.295966",
+      "regime": "NORMAL_TRENDING",
+      "exit_params": {
+        "breakeven_threshold_ticks": 9,
+        "breakeven_offset_ticks": 1,
+        "trailing_distance_ticks": 13,
+        "trailing_min_profit_ticks": 16,
+        "market_regime": "NORMAL_TRENDING",
+        "current_volatility_atr": 2.0,
+        "is_aggressive_mode": false,
+        "situation_factors": {
+          "is_choppy": false,
+          "is_high_vol": false,
+          "is_trending": true,
+          "is_morning": false,
+          "is_lunch": false,
+          "is_close": false,
+          "is_old_trade": false,
+          "is_quick_trade": false
+        },
+        "decision_reasons": [
+          "balanced"
+        ],
+        "duration_minutes": 10.0,
+        "learned_multiplier": 1.0
+      },
+      "outcome": {
+        "pnl": -177.5,
+        "duration": 19499.085771550002,
+        "exit_reason": "stop_loss",
+        "side": "long",
+        "contracts": 1,
+        "win": false
+      },
+      "situation": {
+        "time_of_day": "00:52",
+        "volatility_atr": 0,
+        "trend_strength": 0
+      }
+    },
+    {
+      "timestamp": "2025-11-06T00:52:12.255639",
+      "regime": "NORMAL",
+      "exit_params": {
+        "breakeven_threshold_ticks": 7,
+        "breakeven_offset_ticks": 1,
+        "trailing_distance_ticks": 8,
+        "trailing_min_profit_ticks": 13,
+        "market_regime": "NORMAL",
+        "current_volatility_atr": 2.0,
+        "is_aggressive_mode": true,
+        "situation_factors": {
+          "is_choppy": false,
+          "is_high_vol": false,
+          "is_trending": false,
+          "is_morning": false,
+          "is_lunch": false,
+          "is_close": false,
+          "is_old_trade": true,
+          "is_quick_trade": false
+        },
+        "decision_reasons": [
+          "OLD_TRADE"
+        ],
+        "duration_minutes": 64.0,
+        "learned_multiplier": 1.0
+      },
+      "outcome": {
+        "pnl": 495.0,
+        "duration": 18386.204259633334,
+        "exit_reason": "stop_loss",
+        "side": "short",
+        "contracts": 2,
+        "win": true
+      },
+      "situation": {
+        "time_of_day": "00:52",
+        "volatility_atr": 0,
+        "trend_strength": 0
+      }
+    },
+    {
+      "timestamp": "2025-11-06T00:52:12.675496",
+      "regime": "NORMAL_TRENDING",
+      "exit_params": {
+        "breakeven_threshold_ticks": 7,
+        "breakeven_offset_ticks": 1,
+        "trailing_distance_ticks": 8,
+        "trailing_min_profit_ticks": 13,
+        "market_regime": "NORMAL_TRENDING",
+        "current_volatility_atr": 2.0,
+        "is_aggressive_mode": true,
+        "situation_factors": {
+          "is_choppy": false,
+          "is_high_vol": false,
+          "is_trending": true,
+          "is_morning": false,
+          "is_lunch": false,
+          "is_close": false,
+          "is_old_trade": true,
+          "is_quick_trade": false
+        },
+        "decision_reasons": [
+          "OLD_TRADE"
+        ],
+        "duration_minutes": 36.0,
+        "learned_multiplier": 1.0
+      },
+      "outcome": {
+        "pnl": 47.5,
+        "duration": 14064.21125725,
+        "exit_reason": "stop_loss",
+        "side": "short",
+        "contracts": 1,
+        "win": true
+      },
+      "situation": {
+        "time_of_day": "00:52",
+        "volatility_atr": 0,
+        "trend_strength": 0
+      }
+    },
+    {
+      "timestamp": "2025-11-06T00:52:13.588214",
+      "regime": "NORMAL_TRENDING",
+      "exit_params": {
+        "breakeven_threshold_ticks": 7,
+        "breakeven_offset_ticks": 1,
+        "trailing_distance_ticks": 8,
+        "trailing_min_profit_ticks": 13,
+        "market_regime": "NORMAL_TRENDING",
+        "current_volatility_atr": 2.0,
+        "is_aggressive_mode": true,
+        "situation_factors": {
+          "is_choppy": false,
+          "is_high_vol": false,
+          "is_trending": true,
+          "is_morning": false,
+          "is_lunch": false,
+          "is_close": false,
+          "is_old_trade": true,
+          "is_quick_trade": false
+        },
+        "decision_reasons": [
+          "OLD_TRADE"
+        ],
+        "duration_minutes": 36.0,
+        "learned_multiplier": 1.0
+      },
+      "outcome": {
+        "pnl": 297.5,
+        "duration": 11086.22398675,
+        "exit_reason": "stop_loss",
+        "side": "short",
+        "contracts": 1,
+        "win": true
+      },
+      "situation": {
+        "time_of_day": "00:52",
+        "volatility_atr": 0,
+        "trend_strength": 0
+      }
+    },
+    {
+      "timestamp": "2025-11-06T00:52:13.715175",
+      "regime": "NORMAL",
+      "exit_params": {
+        "breakeven_threshold_ticks": 9,
+        "breakeven_offset_ticks": 1,
+        "trailing_distance_ticks": 10,
+        "trailing_min_profit_ticks": 16,
+        "market_regime": "NORMAL",
+        "current_volatility_atr": 2.0,
+        "is_aggressive_mode": false,
+        "situation_factors": {
+          "is_choppy": false,
+          "is_high_vol": false,
+          "is_trending": false,
+          "is_morning": false,
+          "is_lunch": false,
+          "is_close": false,
+          "is_old_trade": false,
+          "is_quick_trade": true
+        },
+        "decision_reasons": [
+          "balanced"
+        ],
+        "duration_minutes": 2.0,
+        "learned_multiplier": 1.0
+      },
+      "outcome": {
+        "pnl": -2.5,
+        "duration": 10475.22858525,
+        "exit_reason": "stop_loss",
+        "side": "long",
+        "contracts": 1,
+        "win": false
+      },
+      "situation": {
+        "time_of_day": "00:52",
+        "volatility_atr": 0,
+        "trend_strength": 0
+      }
+    },
+    {
+      "timestamp": "2025-11-06T00:52:14.060606",
+      "regime": "NORMAL_TRENDING",
+      "exit_params": {
+        "breakeven_threshold_ticks": 7,
+        "breakeven_offset_ticks": 1,
+        "trailing_distance_ticks": 8,
+        "trailing_min_profit_ticks": 13,
+        "market_regime": "NORMAL_TRENDING",
+        "current_volatility_atr": 2.0,
+        "is_aggressive_mode": true,
+        "situation_factors": {
+          "is_choppy": false,
+          "is_high_vol": false,
+          "is_trending": true,
+          "is_morning": false,
+          "is_lunch": false,
+          "is_close": true,
+          "is_old_trade": false,
+          "is_quick_trade": true
+        },
+        "decision_reasons": [
+          "NEAR_CLOSE"
+        ],
+        "duration_minutes": 0.0,
+        "learned_multiplier": 1.0
+      },
+      "outcome": {
+        "pnl": -177.5,
+        "duration": 8973.234342383334,
+        "exit_reason": "stop_loss",
+        "side": "long",
+        "contracts": 1,
+        "win": false
+      },
+      "situation": {
+        "time_of_day": "00:52",
+        "volatility_atr": 0,
+        "trend_strength": 0
+      }
+    },
+    {
+      "timestamp": "2025-11-06T00:52:14.256100",
+      "regime": "NORMAL_TRENDING",
+      "exit_params": {
+        "breakeven_threshold_ticks": 9,
+        "breakeven_offset_ticks": 1,
+        "trailing_distance_ticks": 13,
+        "trailing_min_profit_ticks": 16,
+        "market_regime": "NORMAL_TRENDING",
+        "current_volatility_atr": 2.0,
+        "is_aggressive_mode": false,
+        "situation_factors": {
+          "is_choppy": false,
+          "is_high_vol": false,
+          "is_trending": true,
+          "is_morning": false,
+          "is_lunch": false,
+          "is_close": false,
+          "is_old_trade": false,
+          "is_quick_trade": false
+        },
+        "decision_reasons": [
+          "balanced"
+        ],
+        "duration_minutes": 21.0,
+        "learned_multiplier": 1.0
+      },
+      "outcome": {
+        "pnl": 995.0,
+        "duration": 7951.2376005999995,
+        "exit_reason": "stop_loss",
+        "side": "short",
+        "contracts": 2,
+        "win": true
+      },
+      "situation": {
+        "time_of_day": "00:52",
+        "volatility_atr": 0,
+        "trend_strength": 0
+      }
+    },
+    {
+      "timestamp": "2025-11-06T00:52:14.332832",
+      "regime": "NORMAL",
+      "exit_params": {
+        "breakeven_threshold_ticks": 9,
+        "breakeven_offset_ticks": 1,
+        "trailing_distance_ticks": 10,
+        "trailing_min_profit_ticks": 16,
+        "market_regime": "NORMAL",
+        "current_volatility_atr": 2.0,
+        "is_aggressive_mode": false,
+        "situation_factors": {
+          "is_choppy": false,
+          "is_high_vol": false,
+          "is_trending": false,
+          "is_morning": false,
+          "is_lunch": true,
+          "is_close": false,
+          "is_old_trade": false,
+          "is_quick_trade": true
+        },
+        "decision_reasons": [
+          "balanced"
+        ],
+        "duration_minutes": 1.0,
+        "learned_multiplier": 1.0
+      },
+      "outcome": {
+        "pnl": 292.5,
+        "duration": 7707.238879216667,
+        "exit_reason": "stop_loss",
+        "side": "long",
+        "contracts": 3,
+        "win": true
+      },
+      "situation": {
+        "time_of_day": "00:52",
+        "volatility_atr": 0,
+        "trend_strength": 0
+      }
+    },
+    {
+      "timestamp": "2025-11-06T00:52:14.585673",
+      "regime": "NORMAL_TRENDING",
+      "exit_params": {
+        "breakeven_threshold_ticks": 9,
+        "breakeven_offset_ticks": 1,
+        "trailing_distance_ticks": 13,
+        "trailing_min_profit_ticks": 16,
+        "market_regime": "NORMAL_TRENDING",
+        "current_volatility_atr": 2.0,
+        "is_aggressive_mode": false,
+        "situation_factors": {
+          "is_choppy": false,
+          "is_high_vol": false,
+          "is_trending": true,
+          "is_morning": false,
+          "is_lunch": true,
+          "is_close": false,
+          "is_old_trade": false,
+          "is_quick_trade": true
+        },
+        "decision_reasons": [
+          "balanced"
+        ],
+        "duration_minutes": 1.0,
+        "learned_multiplier": 1.0
+      },
+      "outcome": {
+        "pnl": -177.5,
+        "duration": 7676.240575,
+        "exit_reason": "stop_loss",
+        "side": "long",
+        "contracts": 1,
+        "win": false
+      },
+      "situation": {
+        "time_of_day": "00:52",
+        "volatility_atr": 0,
+        "trend_strength": 0
+      }
+    },
+    {
+      "timestamp": "2025-11-06T00:52:14.812633",
+      "regime": "NORMAL",
+      "exit_params": {
+        "breakeven_threshold_ticks": 9,
+        "breakeven_offset_ticks": 1,
+        "trailing_distance_ticks": 10,
+        "trailing_min_profit_ticks": 16,
+        "market_regime": "NORMAL",
+        "current_volatility_atr": 2.0,
+        "is_aggressive_mode": false,
+        "situation_factors": {
+          "is_choppy": false,
+          "is_high_vol": false,
+          "is_trending": false,
+          "is_morning": false,
+          "is_lunch": false,
+          "is_close": false,
+          "is_old_trade": false,
+          "is_quick_trade": false
+        },
+        "decision_reasons": [
+          "balanced"
+        ],
+        "duration_minutes": 9.0,
+        "learned_multiplier": 1.0
+      },
+      "outcome": {
+        "pnl": -2.5,
+        "duration": 3979.24687625,
+        "exit_reason": "stop_loss",
+        "side": "long",
+        "contracts": 1,
+        "win": false
+      },
+      "situation": {
+        "time_of_day": "00:52",
+        "volatility_atr": 0,
+        "trend_strength": 0
+      }
+    },
+    {
+      "timestamp": "2025-11-06T00:54:33.441362",
+      "regime": "NORMAL_TRENDING",
+      "exit_params": {
+        "breakeven_threshold_ticks": 7,
+        "breakeven_offset_ticks": 1,
+        "trailing_distance_ticks": 8,
+        "trailing_min_profit_ticks": 13,
+        "market_regime": "NORMAL_TRENDING",
+        "current_volatility_atr": 2.0,
+        "is_aggressive_mode": true,
+        "situation_factors": {
+          "is_choppy": false,
+          "is_high_vol": false,
+          "is_trending": true,
+          "is_morning": false,
+          "is_lunch": false,
+          "is_close": false,
+          "is_old_trade": true,
+          "is_quick_trade": false
+        },
+        "decision_reasons": [
+          "OLD_TRADE"
+        ],
+        "duration_minutes": 33.0,
+        "learned_multiplier": 1.0
+      },
+      "outcome": {
+        "pnl": -177.5,
+        "duration": 3944.5573548833336,
+        "exit_reason": "stop_loss",
+        "side": "long",
+        "contracts": 1,
+        "win": false
+      },
+      "situation": {
+        "time_of_day": "00:54",
+        "volatility_atr": 0,
+        "trend_strength": 0
+      }
+    },
+    {
+      "timestamp": "2025-11-06T00:54:53.488727",
+      "regime": "NORMAL",
+      "exit_params": {
+        "breakeven_threshold_ticks": 9,
+        "breakeven_offset_ticks": 1,
+        "trailing_distance_ticks": 10,
+        "trailing_min_profit_ticks": 16,
+        "market_regime": "NORMAL",
+        "current_volatility_atr": 2.0,
+        "is_aggressive_mode": false,
+        "situation_factors": {
+          "is_choppy": false,
+          "is_high_vol": false,
+          "is_trending": false,
+          "is_morning": false,
+          "is_lunch": false,
+          "is_close": false,
+          "is_old_trade": false,
+          "is_quick_trade": false
+        },
+        "decision_reasons": [
+          "balanced"
+        ],
+        "duration_minutes": 9.0,
+        "learned_multiplier": 1.0
+      },
+      "outcome": {
+        "pnl": -2.5,
+        "duration": 3981.8914778833337,
+        "exit_reason": "stop_loss",
+        "side": "long",
+        "contracts": 1,
+        "win": false
+      },
+      "situation": {
+        "time_of_day": "00:54",
+        "volatility_atr": 0,
+        "trend_strength": 0
+      }
+    },
+    {
+      "timestamp": "2025-11-06T00:54:53.523397",
+      "regime": "NORMAL_TRENDING",
+      "exit_params": {
+        "breakeven_threshold_ticks": 7,
+        "breakeven_offset_ticks": 1,
+        "trailing_distance_ticks": 8,
+        "trailing_min_profit_ticks": 13,
+        "market_regime": "NORMAL_TRENDING",
+        "current_volatility_atr": 2.0,
+        "is_aggressive_mode": true,
+        "situation_factors": {
+          "is_choppy": false,
+          "is_high_vol": false,
+          "is_trending": true,
+          "is_morning": false,
+          "is_lunch": false,
+          "is_close": false,
+          "is_old_trade": true,
+          "is_quick_trade": false
+        },
+        "decision_reasons": [
+          "OLD_TRADE"
+        ],
+        "duration_minutes": 36.0,
+        "learned_multiplier": 1.0
+      },
+      "outcome": {
+        "pnl": -177.5,
+        "duration": 3947.892055733333,
+        "exit_reason": "stop_loss",
+        "side": "long",
+        "contracts": 1,
+        "win": false
+      },
+      "situation": {
+        "time_of_day": "00:54",
+        "volatility_atr": 0,
+        "trend_strength": 0
+      }
+    },
+    {
+      "timestamp": "2025-11-06T00:55:57.427429",
+      "regime": "NORMAL",
+      "exit_params": {
+        "breakeven_threshold_ticks": 9,
+        "breakeven_offset_ticks": 1,
+        "trailing_distance_ticks": 10,
+        "trailing_min_profit_ticks": 16,
+        "market_regime": "NORMAL",
+        "current_volatility_atr": 2.0,
+        "is_aggressive_mode": false,
+        "situation_factors": {
+          "is_choppy": false,
+          "is_high_vol": false,
+          "is_trending": false,
+          "is_morning": false,
+          "is_lunch": false,
+          "is_close": false,
+          "is_old_trade": false,
+          "is_quick_trade": false
+        },
+        "decision_reasons": [
+          "balanced"
+        ],
+        "duration_minutes": 9.0,
+        "learned_multiplier": 1.0
+      },
+      "outcome": {
+        "pnl": -2.5,
+        "duration": 3982.9571226,
+        "exit_reason": "stop_loss",
+        "side": "long",
+        "contracts": 1,
+        "win": false
+      },
+      "situation": {
+        "time_of_day": "00:55",
+        "volatility_atr": 0,
+        "trend_strength": 0
+      }
+    },
+    {
+      "timestamp": "2025-11-06T00:55:57.708147",
+      "regime": "NORMAL_TRENDING",
+      "exit_params": {
+        "breakeven_threshold_ticks": 7,
+        "breakeven_offset_ticks": 1,
+        "trailing_distance_ticks": 8,
+        "trailing_min_profit_ticks": 13,
+        "market_regime": "NORMAL_TRENDING",
+        "current_volatility_atr": 2.0,
+        "is_aggressive_mode": true,
+        "situation_factors": {
+          "is_choppy": false,
+          "is_high_vol": false,
+          "is_trending": true,
+          "is_morning": false,
+          "is_lunch": false,
+          "is_close": false,
+          "is_old_trade": true,
+          "is_quick_trade": false
+        },
+        "decision_reasons": [
+          "OLD_TRADE"
+        ],
+        "duration_minutes": 36.0,
+        "learned_multiplier": 1.0
+      },
+      "outcome": {
+        "pnl": -177.5,
+        "duration": 3948.9591587333334,
+        "exit_reason": "stop_loss",
+        "side": "long",
+        "contracts": 1,
+        "win": false
+      },
+      "situation": {
+        "time_of_day": "00:55",
+        "volatility_atr": 0,
+        "trend_strength": 0
+      }
+    },
+    {
+      "timestamp": "2025-11-06T00:56:19.967369",
+      "regime": "NORMAL_TRENDING",
+      "exit_params": {
+        "breakeven_threshold_ticks": 9,
+        "breakeven_offset_ticks": 1,
+        "trailing_distance_ticks": 13,
+        "trailing_min_profit_ticks": 16,
+        "market_regime": "NORMAL_TRENDING",
+        "current_volatility_atr": 2.0,
+        "is_aggressive_mode": false,
+        "situation_factors": {
+          "is_choppy": false,
+          "is_high_vol": false,
+          "is_trending": true,
+          "is_morning": false,
+          "is_lunch": false,
+          "is_close": false,
+          "is_old_trade": false,
+          "is_quick_trade": false
+        },
+        "decision_reasons": [
+          "balanced"
+        ],
+        "duration_minutes": 8.0,
+        "learned_multiplier": 1.0
+      },
+      "outcome": {
+        "pnl": -355.0,
+        "duration": 21403.3327882,
+        "exit_reason": "stop_loss",
+        "side": "short",
+        "contracts": 2,
+        "win": false
+      },
+      "situation": {
+        "time_of_day": "00:56",
+        "volatility_atr": 0,
+        "trend_strength": 0
+      }
+    },
+    {
+      "timestamp": "2025-11-06T00:56:20.076410",
+      "regime": "NORMAL_TRENDING",
+      "exit_params": {
+        "breakeven_threshold_ticks": 9,
+        "breakeven_offset_ticks": 1,
+        "trailing_distance_ticks": 13,
+        "trailing_min_profit_ticks": 16,
+        "market_regime": "NORMAL_TRENDING",
+        "current_volatility_atr": 2.0,
+        "is_aggressive_mode": false,
+        "situation_factors": {
+          "is_choppy": false,
+          "is_high_vol": false,
+          "is_trending": true,
+          "is_morning": true,
+          "is_lunch": false,
+          "is_close": false,
+          "is_old_trade": false,
+          "is_quick_trade": true
+        },
+        "decision_reasons": [
+          "balanced"
+        ],
+        "duration_minutes": 3.0,
+        "learned_multiplier": 1.0
+      },
+      "outcome": {
+        "pnl": -2.5,
+        "duration": 20782.334605666667,
+        "exit_reason": "stop_loss",
+        "side": "long",
+        "contracts": 1,
+        "win": false
+      },
+      "situation": {
+        "time_of_day": "00:56",
+        "volatility_atr": 0,
+        "trend_strength": 0
+      }
+    },
+    {
+      "timestamp": "2025-11-06T00:56:20.184366",
+      "regime": "NORMAL",
+      "exit_params": {
+        "breakeven_threshold_ticks": 9,
+        "breakeven_offset_ticks": 1,
+        "trailing_distance_ticks": 10,
+        "trailing_min_profit_ticks": 16,
+        "market_regime": "NORMAL",
+        "current_volatility_atr": 2.0,
+        "is_aggressive_mode": false,
+        "situation_factors": {
+          "is_choppy": false,
+          "is_high_vol": false,
+          "is_trending": false,
+          "is_morning": false,
+          "is_lunch": true,
+          "is_close": false,
+          "is_old_trade": false,
+          "is_quick_trade": true
+        },
+        "decision_reasons": [
+          "balanced"
+        ],
+        "duration_minutes": 2.0,
+        "learned_multiplier": 1.0
+      },
+      "outcome": {
+        "pnl": 795.0,
+        "duration": 20662.336405116665,
+        "exit_reason": "stop_loss",
+        "side": "long",
+        "contracts": 2,
+        "win": true
+      },
+      "situation": {
+        "time_of_day": "00:56",
+        "volatility_atr": 0,
+        "trend_strength": 0
+      }
+    },
+    {
+      "timestamp": "2025-11-06T00:56:20.397944",
+      "regime": "NORMAL",
+      "exit_params": {
+        "breakeven_threshold_ticks": 9,
+        "breakeven_offset_ticks": 1,
+        "trailing_distance_ticks": 10,
+        "trailing_min_profit_ticks": 16,
+        "market_regime": "NORMAL",
+        "current_volatility_atr": 2.0,
+        "is_aggressive_mode": false,
+        "situation_factors": {
+          "is_choppy": false,
+          "is_high_vol": false,
+          "is_trending": false,
+          "is_morning": false,
+          "is_lunch": false,
+          "is_close": false,
+          "is_old_trade": false,
+          "is_quick_trade": false
+        },
+        "decision_reasons": [
+          "balanced"
+        ],
+        "duration_minutes": 16.0,
+        "learned_multiplier": 1.0
+      },
+      "outcome": {
+        "pnl": 295.0,
+        "duration": 19629.339964683335,
+        "exit_reason": "stop_loss",
+        "side": "long",
+        "contracts": 2,
+        "win": true
+      },
+      "situation": {
+        "time_of_day": "00:56",
+        "volatility_atr": 0,
+        "trend_strength": 0
+      }
+    },
+    {
+      "timestamp": "2025-11-06T00:56:20.582396",
+      "regime": "NORMAL_TRENDING",
+      "exit_params": {
+        "breakeven_threshold_ticks": 9,
+        "breakeven_offset_ticks": 1,
+        "trailing_distance_ticks": 13,
+        "trailing_min_profit_ticks": 16,
+        "market_regime": "NORMAL_TRENDING",
+        "current_volatility_atr": 2.0,
+        "is_aggressive_mode": false,
+        "situation_factors": {
+          "is_choppy": false,
+          "is_high_vol": false,
+          "is_trending": true,
+          "is_morning": false,
+          "is_lunch": false,
+          "is_close": false,
+          "is_old_trade": false,
+          "is_quick_trade": true
+        },
+        "decision_reasons": [
+          "balanced"
+        ],
+        "duration_minutes": 1.0,
+        "learned_multiplier": 1.0
+      },
+      "outcome": {
+        "pnl": -177.5,
+        "duration": 19508.340490983333,
+        "exit_reason": "stop_loss",
+        "side": "long",
+        "contracts": 1,
+        "win": false
+      },
+      "situation": {
+        "time_of_day": "00:56",
+        "volatility_atr": 0,
+        "trend_strength": 0
+      }
+    },
+    {
+      "timestamp": "2025-11-06T00:56:20.990631",
+      "regime": "NORMAL_TRENDING",
+      "exit_params": {
+        "breakeven_threshold_ticks": 9,
+        "breakeven_offset_ticks": 1,
+        "trailing_distance_ticks": 13,
+        "trailing_min_profit_ticks": 16,
+        "market_regime": "NORMAL_TRENDING",
+        "current_volatility_atr": 2.0,
+        "is_aggressive_mode": false,
+        "situation_factors": {
+          "is_choppy": false,
+          "is_high_vol": false,
+          "is_trending": true,
+          "is_morning": false,
+          "is_lunch": false,
+          "is_close": false,
+          "is_old_trade": false,
+          "is_quick_trade": false
+        },
+        "decision_reasons": [
+          "balanced"
+        ],
+        "duration_minutes": 7.0,
+        "learned_multiplier": 1.0
+      },
+      "outcome": {
+        "pnl": -177.5,
+        "duration": 18404.349842933334,
+        "exit_reason": "stop_loss",
+        "side": "short",
+        "contracts": 1,
+        "win": false
+      },
+      "situation": {
+        "time_of_day": "00:56",
+        "volatility_atr": 0,
+        "trend_strength": 0
+      }
+    },
+    {
+      "timestamp": "2025-11-06T00:56:21.027954",
+      "regime": "NORMAL",
+      "exit_params": {
+        "breakeven_threshold_ticks": 7,
+        "breakeven_offset_ticks": 1,
+        "trailing_distance_ticks": 8,
+        "trailing_min_profit_ticks": 13,
+        "market_regime": "NORMAL",
+        "current_volatility_atr": 2.0,
+        "is_aggressive_mode": true,
+        "situation_factors": {
+          "is_choppy": false,
+          "is_high_vol": false,
+          "is_trending": false,
+          "is_morning": false,
+          "is_lunch": false,
+          "is_close": false,
+          "is_old_trade": true,
+          "is_quick_trade": false
+        },
+        "decision_reasons": [
+          "OLD_TRADE"
+        ],
+        "duration_minutes": 64.0,
+        "learned_multiplier": 1.0
+      },
+      "outcome": {
+        "pnl": 495.0,
+        "duration": 18390.350465000003,
+        "exit_reason": "stop_loss",
+        "side": "short",
+        "contracts": 2,
+        "win": true
+      },
+      "situation": {
+        "time_of_day": "00:56",
+        "volatility_atr": 0,
+        "trend_strength": 0
+      }
+    },
+    {
+      "timestamp": "2025-11-06T00:56:21.637432",
+      "regime": "NORMAL",
+      "exit_params": {
+        "breakeven_threshold_ticks": 7,
+        "breakeven_offset_ticks": 1,
+        "trailing_distance_ticks": 8,
+        "trailing_min_profit_ticks": 13,
+        "market_regime": "NORMAL",
+        "current_volatility_atr": 2.0,
+        "is_aggressive_mode": true,
+        "situation_factors": {
+          "is_choppy": false,
+          "is_high_vol": false,
+          "is_trending": false,
+          "is_morning": false,
+          "is_lunch": false,
+          "is_close": true,
+          "is_old_trade": false,
+          "is_quick_trade": false
+        },
+        "decision_reasons": [
+          "NEAR_CLOSE"
+        ],
+        "duration_minutes": 30.0,
+        "learned_multiplier": 1.0
+      },
+      "outcome": {
+        "pnl": -127.5,
+        "duration": 13317.358102033333,
+        "exit_reason": "early_loss_cut",
+        "side": "short",
+        "contracts": 1,
+        "win": false
+      },
+      "situation": {
+        "time_of_day": "00:56",
+        "volatility_atr": 0,
+        "trend_strength": 0
+      }
+    },
+    {
+      "timestamp": "2025-11-06T00:56:22.156612",
+      "regime": "NORMAL",
+      "exit_params": {
+        "breakeven_threshold_ticks": 9,
+        "breakeven_offset_ticks": 1,
+        "trailing_distance_ticks": 10,
+        "trailing_min_profit_ticks": 16,
+        "market_regime": "NORMAL",
+        "current_volatility_atr": 2.0,
+        "is_aggressive_mode": false,
+        "situation_factors": {
+          "is_choppy": false,
+          "is_high_vol": false,
+          "is_trending": false,
+          "is_morning": false,
+          "is_lunch": false,
+          "is_close": false,
+          "is_old_trade": false,
+          "is_quick_trade": false
+        },
+        "decision_reasons": [
+          "balanced"
+        ],
+        "duration_minutes": 28.0,
+        "learned_multiplier": 1.0
+      },
+      "outcome": {
+        "pnl": 195.0,
+        "duration": 11914.369275866666,
+        "exit_reason": "stop_loss",
+        "side": "short",
+        "contracts": 2,
+        "win": true
+      },
+      "situation": {
+        "time_of_day": "00:56",
+        "volatility_atr": 0,
+        "trend_strength": 0
+      }
+    },
+    {
+      "timestamp": "2025-11-06T00:56:22.494755",
+      "regime": "NORMAL_TRENDING",
+      "exit_params": {
+        "breakeven_threshold_ticks": 7,
+        "breakeven_offset_ticks": 1,
+        "trailing_distance_ticks": 8,
+        "trailing_min_profit_ticks": 13,
+        "market_regime": "NORMAL_TRENDING",
+        "current_volatility_atr": 2.0,
+        "is_aggressive_mode": true,
+        "situation_factors": {
+          "is_choppy": false,
+          "is_high_vol": false,
+          "is_trending": true,
+          "is_morning": false,
+          "is_lunch": false,
+          "is_close": false,
+          "is_old_trade": true,
+          "is_quick_trade": false
+        },
+        "decision_reasons": [
+          "OLD_TRADE"
+        ],
+        "duration_minutes": 36.0,
+        "learned_multiplier": 1.0
+      },
+      "outcome": {
+        "pnl": 297.5,
+        "duration": 11090.372399866666,
+        "exit_reason": "stop_loss",
+        "side": "short",
+        "contracts": 1,
+        "win": true
+      },
+      "situation": {
+        "time_of_day": "00:56",
+        "volatility_atr": 0,
+        "trend_strength": 0
+      }
+    },
+    {
+      "timestamp": "2025-11-06T00:56:22.640547",
+      "regime": "NORMAL",
+      "exit_params": {
+        "breakeven_threshold_ticks": 9,
+        "breakeven_offset_ticks": 1,
+        "trailing_distance_ticks": 10,
+        "trailing_min_profit_ticks": 16,
+        "market_regime": "NORMAL",
+        "current_volatility_atr": 2.0,
+        "is_aggressive_mode": false,
+        "situation_factors": {
+          "is_choppy": false,
+          "is_high_vol": false,
+          "is_trending": false,
+          "is_morning": false,
+          "is_lunch": false,
+          "is_close": false,
+          "is_old_trade": false,
+          "is_quick_trade": true
+        },
+        "decision_reasons": [
+          "balanced"
+        ],
+        "duration_minutes": 2.0,
+        "learned_multiplier": 1.0
+      },
+      "outcome": {
+        "pnl": -2.5,
+        "duration": 10479.37734145,
+        "exit_reason": "stop_loss",
+        "side": "long",
+        "contracts": 1,
+        "win": false
+      },
+      "situation": {
+        "time_of_day": "00:56",
+        "volatility_atr": 0,
+        "trend_strength": 0
+      }
+    },
+    {
+      "timestamp": "2025-11-06T00:56:23.170598",
+      "regime": "NORMAL_TRENDING",
+      "exit_params": {
+        "breakeven_threshold_ticks": 9,
+        "breakeven_offset_ticks": 1,
+        "trailing_distance_ticks": 13,
+        "trailing_min_profit_ticks": 16,
+        "market_regime": "NORMAL_TRENDING",
+        "current_volatility_atr": 2.0,
+        "is_aggressive_mode": false,
+        "situation_factors": {
+          "is_choppy": false,
+          "is_high_vol": false,
+          "is_trending": true,
+          "is_morning": false,
+          "is_lunch": false,
+          "is_close": false,
+          "is_old_trade": false,
+          "is_quick_trade": false
+        },
+        "decision_reasons": [
+          "balanced"
+        ],
+        "duration_minutes": 21.0,
+        "learned_multiplier": 1.0
+      },
+      "outcome": {
+        "pnl": 995.0,
+        "duration": 7955.3861756,
+        "exit_reason": "stop_loss",
+        "side": "short",
+        "contracts": 2,
+        "win": true
+      },
+      "situation": {
+        "time_of_day": "00:56",
+        "volatility_atr": 0,
+        "trend_strength": 0
+      }
+    },
+    {
+      "timestamp": "2025-11-06T00:56:29.943258",
+      "regime": "NORMAL",
+      "exit_params": {
+        "breakeven_threshold_ticks": 9,
+        "breakeven_offset_ticks": 1,
+        "trailing_distance_ticks": 10,
+        "trailing_min_profit_ticks": 16,
+        "market_regime": "NORMAL",
+        "current_volatility_atr": 2.0,
+        "is_aggressive_mode": false,
+        "situation_factors": {
+          "is_choppy": false,
+          "is_high_vol": false,
+          "is_trending": false,
+          "is_morning": false,
+          "is_lunch": true,
+          "is_close": false,
+          "is_old_trade": false,
+          "is_quick_trade": true
+        },
+        "decision_reasons": [
+          "balanced"
+        ],
+        "duration_minutes": 1.0,
+        "learned_multiplier": 1.0
+      },
+      "outcome": {
+        "pnl": 292.5,
+        "duration": 7711.499053233333,
+        "exit_reason": "stop_loss",
+        "side": "long",
+        "contracts": 3,
+        "win": true
+      },
+      "situation": {
+        "time_of_day": "00:56",
+        "volatility_atr": 0,
+        "trend_strength": 0
+      }
+    },
+    {
+      "timestamp": "2025-11-06T00:56:29.971305",
+      "regime": "NORMAL_TRENDING",
+      "exit_params": {
+        "breakeven_threshold_ticks": 9,
+        "breakeven_offset_ticks": 1,
+        "trailing_distance_ticks": 13,
+        "trailing_min_profit_ticks": 16,
+        "market_regime": "NORMAL_TRENDING",
+        "current_volatility_atr": 2.0,
+        "is_aggressive_mode": false,
+        "situation_factors": {
+          "is_choppy": false,
+          "is_high_vol": false,
+          "is_trending": true,
+          "is_morning": false,
+          "is_lunch": true,
+          "is_close": false,
+          "is_old_trade": false,
+          "is_quick_trade": true
+        },
+        "decision_reasons": [
+          "balanced"
+        ],
+        "duration_minutes": 1.0,
+        "learned_multiplier": 1.0
+      },
+      "outcome": {
+        "pnl": -177.5,
+        "duration": 7674.499519749999,
+        "exit_reason": "stop_loss",
+        "side": "long",
+        "contracts": 1,
+        "win": false
+      },
+      "situation": {
+        "time_of_day": "00:56",
+        "volatility_atr": 0,
+        "trend_strength": 0
+      }
+    },
+    {
+      "timestamp": "2025-11-06T00:56:30.218581",
+      "regime": "NORMAL_TRENDING",
+      "exit_params": {
+        "breakeven_threshold_ticks": 9,
+        "breakeven_offset_ticks": 1,
+        "trailing_distance_ticks": 13,
+        "trailing_min_profit_ticks": 16,
+        "market_regime": "NORMAL_TRENDING",
+        "current_volatility_atr": 2.0,
+        "is_aggressive_mode": false,
+        "situation_factors": {
+          "is_choppy": false,
+          "is_high_vol": false,
+          "is_trending": true,
+          "is_morning": false,
+          "is_lunch": true,
+          "is_close": false,
+          "is_old_trade": false,
+          "is_quick_trade": true
+        },
+        "decision_reasons": [
+          "balanced"
+        ],
+        "duration_minutes": 2.0,
+        "learned_multiplier": 1.0
+      },
+      "outcome": {
+        "pnl": -177.5,
+        "duration": 7668.501097,
+        "exit_reason": "stop_loss",
+        "side": "long",
+        "contracts": 1,
+        "win": false
+      },
+      "situation": {
+        "time_of_day": "00:56",
+        "volatility_atr": 0,
+        "trend_strength": 0
+      }
+    },
+    {
+      "timestamp": "2025-11-06T00:56:30.468928",
+      "regime": "NORMAL_TRENDING",
+      "exit_params": {
+        "breakeven_threshold_ticks": 7,
+        "breakeven_offset_ticks": 1,
+        "trailing_distance_ticks": 8,
+        "trailing_min_profit_ticks": 13,
+        "market_regime": "NORMAL_TRENDING",
+        "current_volatility_atr": 2.0,
+        "is_aggressive_mode": true,
+        "situation_factors": {
+          "is_choppy": false,
+          "is_high_vol": false,
+          "is_trending": true,
+          "is_morning": false,
+          "is_lunch": false,
+          "is_close": false,
+          "is_old_trade": true,
+          "is_quick_trade": false
+        },
+        "decision_reasons": [
+          "OLD_TRADE"
+        ],
+        "duration_minutes": 33.0,
+        "learned_multiplier": 1.0
+      },
+      "outcome": {
+        "pnl": -177.5,
+        "duration": 3946.507814466667,
+        "exit_reason": "stop_loss",
+        "side": "long",
+        "contracts": 1,
+        "win": false
+      },
+      "situation": {
+        "time_of_day": "00:56",
+        "volatility_atr": 0,
+        "trend_strength": 0
+      }
     }
   ],
   "learned_params": {
@@ -93074,5 +95862,5 @@
       "trailing_mult": 0.95
     }
   },
-  "total_exits": 2268
+  "total_exits": 2336
 }
