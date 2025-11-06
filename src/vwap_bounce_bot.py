@@ -5086,11 +5086,10 @@ def check_safety_conditions(symbol: str) -> Tuple[bool, Optional[str]]:
                 current_price = state[symbol]["bars"][-1]["close"] if state[symbol]["bars"] else entry_price
                 
                 # Check if position is losing
-                is_losing = False
-                if position["side"] == "long" and current_price < entry_price:
-                    is_losing = True
-                elif position["side"] == "short" and current_price > entry_price:
-                    is_losing = True
+                is_losing = (
+                    (position["side"] == "long" and current_price < entry_price) or
+                    (position["side"] == "short" and current_price > entry_price)
+                )
                 
                 if is_losing:
                     logger.warning("=" * 80)

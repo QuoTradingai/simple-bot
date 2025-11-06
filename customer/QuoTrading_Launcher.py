@@ -1054,6 +1054,16 @@ class QuoTradingLauncher:
         }
         self.validate_api_call("broker", credentials, on_success, on_error)
     
+    def _apply_smart_settings(self, smart_settings: Dict[str, Any]):
+        """Apply smart recommended settings to config."""
+        if "confidence_threshold" in smart_settings:
+            self.config["rl_confidence_threshold"] = smart_settings["confidence_threshold"] / 100
+        if "max_contracts" in smart_settings:
+            self.config["max_contracts"] = smart_settings["max_contracts"]
+        if "daily_loss_limit" in smart_settings:
+            self.config["daily_loss_limit"] = smart_settings["daily_loss_limit"]
+        self.save_config()
+    
     def _show_session_warnings(self):
         """Display warnings and recommendations based on session state."""
         if not self.session_manager:
@@ -1097,13 +1107,7 @@ class QuoTradingLauncher:
                     
                     if result and smart_settings:
                         # Apply smart settings
-                        if "confidence_threshold" in smart_settings:
-                            self.config["rl_confidence_threshold"] = smart_settings["confidence_threshold"] / 100
-                        if "max_contracts" in smart_settings:
-                            self.config["max_contracts"] = smart_settings["max_contracts"]
-                        if "daily_loss_limit" in smart_settings:
-                            self.config["daily_loss_limit"] = smart_settings["daily_loss_limit"]
-                        self.save_config()
+                        self._apply_smart_settings(smart_settings)
                         messagebox.showinfo("Settings Applied", "✓ Smart recommendations applied successfully!")
                 else:
                     messagebox.showwarning("⚠️ Account Status Warning", warning_text)
@@ -1119,13 +1123,7 @@ class QuoTradingLauncher:
                     warning_text += "\n\n⚙️ Apply recommended settings?"
                     result = messagebox.askyesno("Session Status", warning_text)
                     if result:
-                        if "confidence_threshold" in smart_settings:
-                            self.config["rl_confidence_threshold"] = smart_settings["confidence_threshold"] / 100
-                        if "max_contracts" in smart_settings:
-                            self.config["max_contracts"] = smart_settings["max_contracts"]
-                        if "daily_loss_limit" in smart_settings:
-                            self.config["daily_loss_limit"] = smart_settings["daily_loss_limit"]
-                        self.save_config()
+                        self._apply_smart_settings(smart_settings)
     
     def setup_trading_screen(self):
         """Screen 1: Trading Controls and Launch."""

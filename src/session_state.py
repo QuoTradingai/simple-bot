@@ -13,6 +13,23 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+# Constants for recommendations
+PROP_FIRM_NAMES = ["topstep", "apex", "earn2trade", "ftmo", "the5ers"]
+PROP_FIRM_DAILY_LOSS_PERCENT = 0.02  # 2% daily loss rule for prop firms
+
+# Severity thresholds for recommendations
+SEVERITY_HIGH = 0.90
+SEVERITY_MODERATE = 0.80
+
+# Confidence thresholds based on severity
+CONFIDENCE_THRESHOLD_HIGH = 85.0
+CONFIDENCE_THRESHOLD_MODERATE = 75.0
+
+# Contract reduction multipliers based on severity
+CONTRACT_MULTIPLIER_CRITICAL = 0.33  # At 95%+ severity
+CONTRACT_MULTIPLIER_HIGH = 0.50  # At 90-95% severity
+CONTRACT_MULTIPLIER_MODERATE = 0.75  # At 80-90% severity
+
 
 class SessionStateManager:
     """Manages session state to track bot performance across restarts."""
@@ -107,10 +124,9 @@ class SessionStateManager:
     
     def _infer_account_type(self, broker: str) -> str:
         """Infer account type from broker name."""
-        prop_firms = ["topstep", "apex", "earn2trade", "ftmo", "the5ers"]
         broker_lower = broker.lower()
         
-        for prop_firm in prop_firms:
+        for prop_firm in PROP_FIRM_NAMES:
             if prop_firm in broker_lower:
                 return "prop_firm"
         
@@ -181,10 +197,10 @@ class SessionStateManager:
                 })
             
             # Recommend higher confidence
-            if max_severity >= 0.90:
-                recommended_confidence = 85.0
-            elif max_severity >= 0.80:
-                recommended_confidence = 75.0
+            if max_severity >= SEVERITY_HIGH:
+                recommended_confidence = CONFIDENCE_THRESHOLD_HIGH
+            elif max_severity >= SEVERITY_MODERATE:
+                recommended_confidence = CONFIDENCE_THRESHOLD_MODERATE
             else:
                 recommended_confidence = current_confidence
             
@@ -197,11 +213,11 @@ class SessionStateManager:
             
             # Recommend fewer contracts
             if max_severity >= 0.95:
-                recommended_contracts = max(1, int(max_contracts * 0.33))
-            elif max_severity >= 0.90:
-                recommended_contracts = max(1, int(max_contracts * 0.50))
-            elif max_severity >= 0.80:
-                recommended_contracts = max(1, int(max_contracts * 0.75))
+                recommended_contracts = max(1, int(max_contracts * CONTRACT_MULTIPLIER_CRITICAL))
+            elif max_severity >= SEVERITY_HIGH:
+                recommended_contracts = max(1, int(max_contracts * CONTRACT_MULTIPLIER_HIGH))
+            elif max_severity >= SEVERITY_MODERATE:
+                recommended_contracts = max(1, int(max_contracts * CONTRACT_MULTIPLIER_MODERATE))
             else:
                 recommended_contracts = max_contracts
             
@@ -217,11 +233,11 @@ class SessionStateManager:
             # Calculate optimal daily loss limit for prop firm
             if account_size > 0:
                 # Most prop firms have 2% daily loss rule
-                optimal_daily_loss = account_size * 0.02
+                optimal_daily_loss = account_size * PROP_FIRM_DAILY_LOSS_PERCENT
                 if abs(optimal_daily_loss - daily_loss_limit) > 100:
                     recommendations.append({
                         "priority": "medium",
-                        "message": f"💡 SUGGEST: Set daily loss limit to ${optimal_daily_loss:.0f} (2% rule for {broker})"
+                        "message": f"💡 SUGGEST: Set daily loss limit to ${optimal_daily_loss:.0f} ({PROP_FIRM_DAILY_LOSS_PERCENT*100:.0f}% rule for {broker})"
                     })
                     smart_settings["daily_loss_limit"] = optimal_daily_loss
                 
