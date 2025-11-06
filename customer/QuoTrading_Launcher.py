@@ -1442,53 +1442,90 @@ class QuoTradingLauncher:
         )
         trailing_dd_label.pack(anchor=tk.W, pady=(0, 5))
         
-        # Trailing Drawdown checkbox with account-aware guidance
-        # Initialize with smart defaults based on account type
-        default_trailing = self.config.get("broker_type", "Prop Firm") == "Prop Firm"
+        # Trailing Drawdown checkbox with two-floor system awareness
+        # Initialize with smart defaults based on account type and broker
+        broker_name = self.config.get("broker", "")
+        default_trailing = False  # Default to disabled for most cases
         self.trailing_drawdown_var = tk.BooleanVar(value=self.config.get("trailing_drawdown", default_trailing))
         
-        # Add validation to provide smart, session-aware guidance
+        # Determine broker-specific trailing drawdown requirements
+        def get_broker_trailing_requirement(broker):
+            """Returns (requires_trailing, hard_floor_type)"""
+            if broker == "Apex":
+                return (True, "trailing")  # REQUIRED - Hard trailing floor enforced
+            elif broker == "TopStep":
+                return (False, "static")  # Optional - Static hard floor at $47K
+            elif broker == "Tradovate":
+                return (False, "static")  # Live broker - Optional soft floor
+            else:
+                return (False, "static")  # Default: optional with static hard floor
+        
+        requires_trailing, hard_floor_type = get_broker_trailing_requirement(broker_name)
+        
+        # If broker REQUIRES trailing, enable and lock checkbox
+        if requires_trailing:
+            self.trailing_drawdown_var.set(True)
+        
+        # Add validation to provide smart, two-floor aware guidance
         def update_trailing_drawdown_info(*args):
             enabled = self.trailing_drawdown_var.get()
             account_type = self.config.get("broker_type", "Prop Firm")
-            broker_name = self.config.get("broker", "")
+            broker = self.config.get("broker", "")
+            requires, floor_type = get_broker_trailing_requirement(broker)
             
-            # Future-ready: Detect brokers that REQUIRE trailing drawdown (enforced)
-            # This will be used when Apex or similar brokers are added
-            requires_trailing = False
-            if broker_name == "Apex":  # Future support
-                requires_trailing = True
-                # Would disable checkbox: trailing_dd_cb.config(state='disabled')
-                # Would update label: "(Required by Apex)"
-            
-            # Session-aware: Check if account has fetched data to provide contextual advice
+            # Session-aware: Check if account has fetched data
             accounts = self.config.get("accounts", [])
             has_account_data = len(accounts) > 0
             
+            # Update checkbox label based on requirement
+            if requires:
+                trailing_dd_cb.config(
+                    text=f"Trailing Drawdown (Required by {broker})",
+                    state='disabled',  # Lock checkbox
+                    fg=self.colors['error']  # Red to show it's critical
+                )
+            else:
+                trailing_dd_cb.config(
+                    text="Enable Trailing Drawdown (Optional - Soft Floor Protection)",
+                    state='normal',
+                    fg=self.colors['text']
+                )
+            
             if enabled:
-                # Unified security-focused message for all account types
-                # Emphasizes protection and "circuit breaker" function
-                if has_account_data:
-                    # Show concrete dollar benefit when possible
+                if requires:
+                    # HARD FLOOR - Required by prop firm (account fails if violated)
                     trailing_dd_info.config(
-                        text="✓ Secured - Floor moves UP with profits, never down. Stops bot before giving back gains. (Circuit breaker for account protection)",
-                        fg=self.colors['success']
+                        text=f"⚠️ REQUIRED Hard Floor - {broker} enforces trailing drawdown. Account FAILS if violated (not pauseable). This is your firm's actual rule.",
+                        fg=self.colors['error']
                     )
                 else:
-                    trailing_dd_info.config(
-                        text="✓ Secured - Floor moves UP with profits, never down. Bot stops trading when floor is violated. (Protects from extended losing streaks)",
-                        fg=self.colors['success']
-                    )
+                    # SOFT FLOOR - Optional personal protection (bot pauses with recovery options)
+                    if broker == "TopStep":
+                        trailing_dd_info.config(
+                            text="✓ Personal Soft Floor Active - Moves UP with profits. Bot PAUSES (doesn't fail) if violated - you'll get options to resume or adjust. TopStep's hard floor: $47K static (separate).",
+                            fg=self.colors['success']
+                        )
+                    else:
+                        trailing_dd_info.config(
+                            text="✓ Personal Soft Floor Active - Moves UP with profits, never down. Bot PAUSES (doesn't fail) if violated - you can adjust and resume. This is YOUR protection layer.",
+                            fg=self.colors['success']
+                        )
             else:
-                # Optional but helpful security message - no judgment, just information
+                # Disabled - show what they're missing
                 if account_type == "Prop Firm":
-                    trailing_dd_info.config(
-                        text="Optional but recommended - Adds extra security layer to protect your funded account from giving back profits",
-                        fg=self.colors['text_secondary']
-                    )
+                    if broker == "TopStep":
+                        trailing_dd_info.config(
+                            text=f"TopStep's hard floor: $47K static (account fails if violated). Optional: Enable soft trailing floor for extra protection - bot will pause (not fail) if soft floor violated.",
+                            fg=self.colors['text_secondary']
+                        )
+                    else:
+                        trailing_dd_info.config(
+                            text="Optional soft floor protection - Adds personal safety layer that pauses bot (with recovery options) before you approach your firm's hard floor.",
+                            fg=self.colors['text_secondary']
+                        )
                 else:  # Live Broker
                     trailing_dd_info.config(
-                        text="Optional - Adds security to protect your capital from extended losing streaks after profitable periods",
+                        text="Optional soft floor - Bot pauses (doesn't stop) if violated, giving you options to adjust and resume. Protects your capital from extended losing streaks.",
                         fg=self.colors['text_secondary']
                     )
         
@@ -1523,21 +1560,29 @@ class QuoTradingLauncher:
         # Trigger initial info update
         update_trailing_drawdown_info()
         
-        # Comprehensive explanation text for trailing drawdown
+        # Comprehensive explanation text for two-floor trailing drawdown system
         trailing_dd_explanation = tk.Label(
             trailing_dd_content,
-            text="ℹ️ What It Does:\n"
-                 "• Sets a safety floor that moves UP with your profits (never down)\n"
-                 "• Example: $50K start → $52K → $55K peak → Floor rises to $52K (with 10% max DD)\n"
-                 "• Bot STOPS trading when balance drops below floor (circuit breaker)\n"
-                 "• Prevents giving back all gains during losing streaks\n"
+            text="ℹ️ Two-Floor System Explained:\n"
                  "\n"
-                 "ℹ️ What It Does NOT Do:\n"
-                 "• Does NOT close winning trades early - bot still uses adaptive exits\n"
-                 "• Does NOT force withdrawals - you keep trading until floor is hit\n"
-                 "• Does NOT change position sizing - bot still uses AI for entries/exits\n"
+                 "HARD FLOOR (Prop Firm's Actual Rule):\n"
+                 "• Apex: Trailing floor that moves up (REQUIRED - account fails if violated)\n"
+                 "• TopStep: Static at $47K forever (account fails if violated)\n"
+                 "• Cannot be disabled - enforced by your prop firm\n"
                  "\n"
-                 "Think of it like: A floating platform that rises with water level but never goes back down.",
+                 "SOFT FLOOR (Your Personal Protection - THIS CHECKBOX):\n"
+                 "• Optional safety YOU can enable for extra protection\n"
+                 "• Moves UP with your profits (just like hard trailing)\n"
+                 "• If violated: Bot PAUSES (doesn't fail) - you get recovery options\n"
+                 "• Helps you avoid getting close to the dangerous hard floor\n"
+                 "\n"
+                 "Example: TopStep account with soft floor enabled:\n"
+                 "• Hard floor: $47K static (account fails - can't change)\n"
+                 "• Peak at $55K → Soft floor at $49.5K (with 10% max DD)\n"
+                 "• Drop to $49K → Bot PAUSES (below soft floor)\n"
+                 "• Hard floor still $47K - you're $2K away, still safe!\n"
+                 "• Options: Resume (disable soft), Adjust soft floor, or Stop\n"
+                 "• Prevents you from getting too close to $47K danger zone",
             font=("Arial", 7, "italic"),
             bg=self.colors['card_elevated'],
             fg=self.colors['text_secondary'],
@@ -1926,7 +1971,13 @@ class QuoTradingLauncher:
         confirmation_text += f"Contracts Per Trade: {self.contracts_var.get()}\n"
         confirmation_text += f"Max Drawdown: {self.drawdown_var.get()}%\n"
         if self.trailing_drawdown_var.get():
-            confirmation_text += f"Trailing Drawdown: ON (Floor moves up with profits)\n"
+            broker = self.config.get("broker", "")
+            if broker == "Apex":
+                confirmation_text += f"Trailing Drawdown: ON (HARD FLOOR - Required by {broker}, account fails if violated)\n"
+            else:
+                confirmation_text += f"Trailing Drawdown: ON (SOFT FLOOR - Bot pauses with recovery options if violated)\n"
+                if broker == "TopStep":
+                    confirmation_text += f"  → TopStep's hard floor: $47K static (separate, account fails if violated)\n"
         confirmation_text += f"Daily Loss Limit: ${loss_limit}\n"
         confirmation_text += f"  → Bot stays on but will NOT execute trades if limit is hit\n"
         confirmation_text += f"  → Resets daily after market maintenance\n"
@@ -2036,7 +2087,12 @@ BOT_MAX_TRADES_PER_DAY={self.trades_var.get()}
 BOT_MAX_DRAWDOWN={self.drawdown_var.get()}
 # Maximum drawdown percentage before bot stops trading (account type aware)
 BOT_TRAILING_DRAWDOWN={'true' if self.trailing_drawdown_var.get() else 'false'}
-# When enabled, max drawdown 'floor' moves UP with profits but never down (profit protection)
+# SOFT FLOOR: Optional personal protection. When enabled, floor moves UP with profits (never down).
+# If violated: Bot PAUSES (doesn't fail) with recovery options (resume/adjust/stop).
+# This is YOUR extra protection layer - separate from prop firm's hard floor rules.
+# Hard floors: Apex=trailing (required), TopStep=$47K static, both cause account failure if violated.
+BOT_TRAILING_TYPE={'hard' if self.config.get("broker", "") == "Apex" else 'soft'}
+# Type: "hard" (required by prop firm, account fails) or "soft" (optional, bot pauses with recovery)
 BOT_DAILY_LOSS_LIMIT={self.loss_entry.get()}
 # Bot stays on but will NOT execute trades if this limit (in dollars) is hit (resets daily after market maintenance)
 
