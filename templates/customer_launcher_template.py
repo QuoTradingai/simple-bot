@@ -30,7 +30,7 @@ class QuoTradingLauncher:
     def __init__(self):
         self.root = tk.Tk()
         self.root.title("QuoTrading - Professional Trading Platform")
-        self.root.geometry("700x650")
+        self.root.geometry("750x700")
         self.root.resizable(False, False)
         
         # Green and Black color scheme - Premium Matrix-style theme
@@ -39,15 +39,20 @@ class QuoTradingLauncher:
             'secondary': '#0A0A0A',      # Near black for secondary cards
             'success': '#00FF41',        # Matrix green (bright) - primary accent
             'success_dark': '#00B82E',   # Darker green for buttons/headers
+            'success_darker': '#008F28', # Even darker green for depth
             'error': '#FF0000',          # Red for error messages
             'background': '#000000',     # Black main background
             'card': '#0F0F0F',           # Dark gray card background
+            'card_elevated': '#1A1A1A',  # Slightly lighter for elevation
             'text': '#00FF41',           # Bright green text (primary)
             'text_light': '#00CC33',     # Medium green (secondary labels)
             'text_secondary': '#008822', # Dark green (tertiary/hints)
             'border': '#00FF41',         # Green border (glowing effect)
+            'border_subtle': '#00AA30',  # Subtle border
             'input_bg': '#1A1A1A',       # Very dark gray for input fields
-            'button_hover': '#00DD38'    # Slightly darker green for hover state
+            'input_focus': '#252525',    # Input field on focus
+            'button_hover': '#00DD38',   # Slightly darker green for hover state
+            'shadow': '#050505'          # Very dark for shadow effect
         }
         
         # Default fallback symbol
@@ -69,60 +74,89 @@ class QuoTradingLauncher:
         self.setup_username_screen()
     
     def create_header(self, title, subtitle=""):
-        """Create a professional header for each screen."""
-        header = tk.Frame(self.root, bg=self.colors['success_dark'], height=100)
+        """Create a professional header for each screen with premium styling."""
+        header = tk.Frame(self.root, bg=self.colors['success_dark'], height=110)
         header.pack(fill=tk.X)
         header.pack_propagate(False)
+        
+        # Add subtle gradient effect with multiple frames
+        top_accent = tk.Frame(header, bg=self.colors['success'], height=3)
+        top_accent.pack(fill=tk.X)
         
         title_label = tk.Label(
             header,
             text=title,
-            font=("Arial", 24, "bold"),
+            font=("Segoe UI", 26, "bold"),  # Better font, larger size
             bg=self.colors['success_dark'],
             fg=self.colors['background']
         )
-        title_label.pack(pady=(20, 5))
+        title_label.pack(pady=(22, 5))
         
         if subtitle:
             subtitle_label = tk.Label(
                 header,
                 text=subtitle,
-                font=("Arial", 11),
+                font=("Segoe UI", 12),
                 bg=self.colors['success_dark'],
                 fg=self.colors['background']
             )
-            subtitle_label.pack()
+            subtitle_label.pack(pady=(0, 8))
+        
+        # Bottom shadow effect
+        bottom_shadow = tk.Frame(header, bg=self.colors['shadow'], height=2)
+        bottom_shadow.pack(side=tk.BOTTOM, fill=tk.X)
         
         return header
     
     def create_input_field(self, parent, label_text, is_password=False, placeholder=""):
-        """Create a styled input field with label."""
+        """Create a styled input field with label and premium design."""
         container = tk.Frame(parent, bg=self.colors['card'])
-        container.pack(fill=tk.X, pady=10)
+        container.pack(fill=tk.X, pady=12)
         
         label = tk.Label(
             container,
             text=label_text,
-            font=("Arial", 12, "bold"),
+            font=("Segoe UI", 11, "bold"),
             bg=self.colors['card'],
             fg=self.colors['text']
         )
-        label.pack(anchor=tk.W, pady=(0, 5))
+        label.pack(anchor=tk.W, pady=(0, 6))
+        
+        # Create frame for input with border effect
+        input_frame = tk.Frame(container, bg=self.colors['border'], bd=0)
+        input_frame.pack(fill=tk.X, padx=1, pady=1)
         
         entry = tk.Entry(
-            container,
-            font=("Arial", 12),
+            input_frame,
+            font=("Segoe UI", 11),
             bg=self.colors['input_bg'],
             fg=self.colors['text'],
             insertbackground=self.colors['success'],
             relief=tk.FLAT,
             bd=0,
-            highlightthickness=2,
-            highlightbackground=self.colors['border'],
-            highlightcolor=self.colors['success'],
             show="●" if is_password else ""
         )
-        entry.pack(fill=tk.X, ipady=8, padx=2)
+        entry.pack(fill=tk.X, ipady=10, padx=2, pady=2)
+        
+        # Add focus effects
+        def on_focus_in(event):
+            input_frame.config(bg=self.colors['success'])
+            entry.config(bg=self.colors['input_focus'])
+            if hasattr(entry, 'is_placeholder') and entry.is_placeholder:
+                entry.delete(0, tk.END)
+                entry.config(fg=self.colors['text'])
+                entry.is_placeholder = False
+        
+        def on_focus_out(event):
+            input_frame.config(bg=self.colors['border_subtle'])
+            entry.config(bg=self.colors['input_bg'])
+            if not entry.get() and hasattr(entry, 'placeholder_text'):
+                entry.insert(0, entry.placeholder_text)
+                entry.config(fg=self.colors['text_secondary'])
+                entry.is_placeholder = True
+        
+        entry.bind("<FocusIn>", on_focus_in)
+        entry.bind("<FocusOut>", on_focus_out)
         
         if placeholder:
             # Track placeholder state with custom attribute
@@ -130,43 +164,41 @@ class QuoTradingLauncher:
             entry.placeholder_text = placeholder
             entry.insert(0, placeholder)
             entry.config(fg=self.colors['text_secondary'])
-            
-            def on_focus_in(event):
-                if entry.is_placeholder:
-                    entry.delete(0, tk.END)
-                    entry.config(fg=self.colors['text'])
-                    entry.is_placeholder = False
-            
-            def on_focus_out(event):
-                if not entry.get():
-                    entry.insert(0, entry.placeholder_text)
-                    entry.config(fg=self.colors['text_secondary'])
-                    entry.is_placeholder = True
-            
-            entry.bind("<FocusIn>", on_focus_in)
-            entry.bind("<FocusOut>", on_focus_out)
+        
+        # Initial state
+        input_frame.config(bg=self.colors['border_subtle'])
         
         return entry
     
     def create_button(self, parent, text, command, button_type="next"):
-        """Create a styled button."""
+        """Create a styled button with premium design and hover effects."""
         if button_type == "next":
             bg = self.colors['success_dark']
             fg = self.colors['background']
             width = 20
+            height = 2
         elif button_type == "back":
             bg = self.colors['secondary']
             fg = self.colors['text']
             width = 15
+            height = 2
         else:  # start
             bg = self.colors['success']
             fg = self.colors['background']
             width = 25
+            height = 2
+        
+        # Create frame for button with shadow effect
+        button_container = tk.Frame(parent, bg=parent.cget('bg'))
+        
+        # Shadow effect
+        shadow = tk.Frame(button_container, bg=self.colors['shadow'], height=2)
+        shadow.pack(fill=tk.X, pady=(2, 0))
         
         button = tk.Button(
-            parent,
+            button_container,
             text=text,
-            font=("Arial", 14, "bold"),
+            font=("Segoe UI", 13, "bold"),
             bg=bg,
             fg=fg,
             activebackground=self.colors['button_hover'],
@@ -176,17 +208,43 @@ class QuoTradingLauncher:
             command=command,
             cursor="hand2",
             width=width,
-            height=2
+            height=height
         )
-        return button
+        button.pack(fill=tk.X)
+        
+        # Add hover effects
+        def on_enter(e):
+            if button_type == "next" or button_type == "start":
+                button.config(bg=self.colors['button_hover'])
+            else:
+                button.config(bg=self.colors['card'])
+        
+        def on_leave(e):
+            button.config(bg=bg)
+        
+        button.bind("<Enter>", on_enter)
+        button.bind("<Leave>", on_leave)
+        
+        return button_container
     
     def show_loading(self, message="Validating..."):
-        """Show a loading dialog with spinner."""
+        """Show a loading dialog with spinner and premium styling."""
         self.loading_window = tk.Toplevel(self.root)
         self.loading_window.title("Please Wait")
-        self.loading_window.geometry("350x150")
+        self.loading_window.geometry("380x170")
         self.loading_window.resizable(False, False)
         self.loading_window.configure(bg=self.colors['card'])
+        
+        # Remove window decorations for modern look
+        self.loading_window.overrideredirect(True)
+        
+        # Add border frame
+        border_frame = tk.Frame(self.loading_window, bg=self.colors['border'], bd=0)
+        border_frame.pack(fill=tk.BOTH, expand=True, padx=2, pady=2)
+        
+        # Inner frame
+        inner_frame = tk.Frame(border_frame, bg=self.colors['card'])
+        inner_frame.pack(fill=tk.BOTH, expand=True, padx=2, pady=2)
         
         # Center the window
         self.loading_window.transient(self.root)
@@ -194,23 +252,23 @@ class QuoTradingLauncher:
         
         # Loading message
         msg_label = tk.Label(
-            self.loading_window,
+            inner_frame,
             text=message,
-            font=("Arial", 14, "bold"),
+            font=("Segoe UI", 14, "bold"),
             bg=self.colors['card'],
             fg=self.colors['success']
         )
-        msg_label.pack(pady=(30, 10))
+        msg_label.pack(pady=(35, 15))
         
         # Spinner animation
         self.spinner_label = tk.Label(
-            self.loading_window,
+            inner_frame,
             text="●",
-            font=("Arial", 24),
+            font=("Segoe UI", 28),
             bg=self.colors['card'],
             fg=self.colors['success']
         )
-        self.spinner_label.pack(pady=10)
+        self.spinner_label.pack(pady=15)
         
         # Start spinner animation
         self.spinner_running = True
