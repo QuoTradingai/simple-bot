@@ -101,6 +101,16 @@ except Exception as e:
 MSG_LIVE_TRADING_NOT_IMPLEMENTED = "Live trading not implemented - SDK integration required"
 SEPARATOR_LINE = "=" * 60
 
+# Recovery Mode Constants - Dynamic Risk Management
+RECOVERY_APPROACHING_THRESHOLD = 0.80  # Trigger recovery mode at 80% of limits
+RECOVERY_DEFAULT_SEVERITY = 0.80  # Default severity if not set
+RECOVERY_SIZE_CRITICAL = 0.95  # At 95%+ of limits
+RECOVERY_SIZE_HIGH = 0.90  # At 90-95% of limits
+RECOVERY_SIZE_MODERATE = 0.80  # At 80-90% of limits
+RECOVERY_MULTIPLIER_CRITICAL = 0.33  # Reduce to 33% of position at critical
+RECOVERY_MULTIPLIER_HIGH = 0.50  # Reduce to 50% of position at high severity
+RECOVERY_MULTIPLIER_MODERATE = 0.75  # Reduce to 75% of position at moderate severity
+
 # Global broker instance (replaces sdk_client)
 broker: Optional[BrokerInterface] = None
 
@@ -2068,17 +2078,17 @@ def calculate_position_size(symbol: str, side: str, entry_price: float, rl_confi
     
     # RECOVERY MODE: Further reduce position size when approaching limits
     if bot_status.get("recovery_confidence_threshold") is not None:
-        severity = bot_status.get("recovery_severity", 0.8)  # Default to 80% if not set
+        severity = bot_status.get("recovery_severity", RECOVERY_DEFAULT_SEVERITY)
         # Reduce position size based on proximity to failure
         # At 80% severity: 75% of normal size
         # At 90% severity: 50% of normal size
         # At 95%+ severity: 33% of normal size
-        if severity >= 0.95:
-            recovery_multiplier = 0.33
-        elif severity >= 0.90:
-            recovery_multiplier = 0.50
-        elif severity >= 0.80:
-            recovery_multiplier = 0.75
+        if severity >= RECOVERY_SIZE_CRITICAL:
+            recovery_multiplier = RECOVERY_MULTIPLIER_CRITICAL
+        elif severity >= RECOVERY_SIZE_HIGH:
+            recovery_multiplier = RECOVERY_MULTIPLIER_HIGH
+        elif severity >= RECOVERY_SIZE_MODERATE:
+            recovery_multiplier = RECOVERY_MULTIPLIER_MODERATE
         else:
             recovery_multiplier = 1.0
         
@@ -4854,29 +4864,29 @@ def check_max_drawdown() -> Tuple[bool, Optional[str]]:
 
 def check_approaching_failure(symbol: str) -> Tuple[bool, Optional[str], Optional[float]]:
     """
-    Check if bot is approaching failure thresholds (80% of limits).
-    Used for Prop Firm Safety Mode.
+    Check if bot is approaching failure thresholds.
+    Used for Recovery Mode (all account types).
     
     Args:
         symbol: Instrument symbol
     
     Returns:
         Tuple of (is_approaching, reason, severity_level)
-        - is_approaching: True if at 80%+ of any limit
+        - is_approaching: True if at RECOVERY_APPROACHING_THRESHOLD (80%) or more of any limit
         - reason: Description of what limit is being approached
         - severity_level: 0.0-1.0 indicating how close to failure (0.8 = at 80%, 1.0 = at 100%)
     """
     max_severity = 0.0
     reasons = []
     
-    # Check daily loss limit approach (80% threshold)
+    # Check daily loss limit approach
     daily_loss_limit = CONFIG.get("daily_loss_limit", 1000.0)
-    if daily_loss_limit > 0 and state[symbol]["daily_pnl"] <= -daily_loss_limit * 0.8:
+    if daily_loss_limit > 0 and state[symbol]["daily_pnl"] <= -daily_loss_limit * RECOVERY_APPROACHING_THRESHOLD:
         daily_loss_severity = abs(state[symbol]["daily_pnl"]) / daily_loss_limit
         max_severity = max(max_severity, daily_loss_severity)
         reasons.append(f"Daily loss at {daily_loss_severity*100:.1f}% of limit (${state[symbol]['daily_pnl']:.2f}/${-daily_loss_limit:.2f})")
     
-    # Check max drawdown approach (80% threshold)
+    # Check max drawdown approach
     max_drawdown_percent = CONFIG.get("max_drawdown_percent", 4.0)
     if bot_status["starting_equity"] is not None and max_drawdown_percent > 0:
         current_equity = get_account_equity()
@@ -4884,7 +4894,7 @@ def check_approaching_failure(symbol: str) -> Tuple[bool, Optional[str], Optiona
                            bot_status["starting_equity"] * 100)
         drawdown_severity = drawdown_percent / max_drawdown_percent
         
-        if drawdown_severity >= 0.8:
+        if drawdown_severity >= RECOVERY_APPROACHING_THRESHOLD:
             max_severity = max(max_severity, drawdown_severity)
             reasons.append(f"Drawdown at {drawdown_severity*100:.1f}% of limit ({drawdown_percent:.2f}%/{max_drawdown_percent:.2f}%)")
     
@@ -5028,7 +5038,9 @@ def check_safety_conditions(symbol: str) -> Tuple[bool, Optional[str]]:
     is_approaching, approach_reason, severity = check_approaching_failure(symbol)
     if is_approaching:
         # Use recovery_mode setting to determine behavior
-        # INVERTED LOGIC: recovery_mode=True means CONTINUE trading, False means STOP
+        # IMPORTANT: Inverted logic for clarity
+        # - recovery_mode=True (ENABLED): Bot CONTINUES trading (risky, attempts recovery)
+        # - recovery_mode=False (DISABLED, default): Bot STOPS trading (safe, prevents failure)
         if CONFIG.get("recovery_mode", False):
             # RECOVERY MODE ENABLED: Continue trading with high confidence requirements
             required_confidence = get_recovery_confidence_threshold(severity)
