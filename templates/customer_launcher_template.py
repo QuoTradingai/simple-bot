@@ -247,34 +247,47 @@ class QuoTradingLauncher:
             self.loading_window.destroy()
     
     def validate_api_call(self, api_type, credentials, success_callback, error_callback):
-        """Simulate API validation with async call.
+        """Validate credentials with simulated API call.
+        
+        This method simulates an API validation call with a 2-second delay to provide
+        realistic user feedback. The simulation validates credential format and presence.
+        
+        To integrate with real APIs, replace the simulation logic below with actual
+        HTTP requests to the appropriate endpoints:
+        - QuoTrading: POST to https://api.quotrading.com/v1/validate
+        - Brokers: Use broker-specific authentication endpoints
         
         Args:
             api_type: "quotrading" or "broker"
             credentials: dict with credentials to validate
-            success_callback: function to call on success
-            error_callback: function to call on error with error message
+            success_callback: function to call on successful validation
+            error_callback: function to call on validation failure (receives error message)
         """
         def api_call():
-            # Simulate API call delay (2 seconds)
+            # Simulate API call delay (2 seconds) for realistic UX
             time.sleep(2)
             
-            # TODO: Replace with actual API calls
-            # For QuoTrading:
-            #   POST to https://api.quotrading.com/v1/validate
-            #   Body: {"email": credentials["email"], "api_key": credentials["api_key"]}
-            # For Broker:
-            #   Broker-specific API validation
-            
-            # For now, simulate success for properly formatted credentials
-            # In production, this would be replaced with actual API calls
+            # SIMULATION: Validates format and presence of credentials
+            # PRODUCTION: Replace this section with actual API HTTP requests
+            #
+            # Example for QuoTrading:
+            #   import requests
+            #   response = requests.post(
+            #       "https://api.quotrading.com/v1/validate",
+            #       json={"email": credentials["email"], "api_key": credentials["api_key"]},
+            #       timeout=10
+            #   )
+            #   if response.status_code == 200:
+            #       self.root.after(0, success_callback)
+            #   else:
+            #       self.root.after(0, lambda: error_callback(response.json().get("error", "Validation failed")))
             
             if api_type == "quotrading":
                 email = credentials.get("email", "")
                 api_key = credentials.get("api_key", "")
                 
-                # Simulate validation logic
-                # Real implementation would call QuoTrading API
+                # Simulated validation: checks format
+                # Real implementation would make HTTP request to QuoTrading API
                 if "@" in email and len(api_key) >= 20:
                     self.root.after(0, success_callback)
                 else:
@@ -285,10 +298,10 @@ class QuoTradingLauncher:
                 token = credentials.get("token", "")
                 username = credentials.get("username", "")
                 
-                # Simulate broker API validation
-                # Real implementation would call broker-specific APIs:
-                # - TopStep: Their authentication endpoint
-                # - Tradovate: Their authentication endpoint
+                # Simulated validation: checks presence
+                # Real implementation would make HTTP request to broker-specific API:
+                # - TopStep: POST to their authentication endpoint
+                # - Tradovate: POST to their authentication endpoint
                 # - etc.
                 
                 if token and username:
@@ -684,7 +697,6 @@ class QuoTradingLauncher:
             width=35
         )
         self.broker_dropdown.pack(fill=tk.X, pady=(0, 15))
-        self.broker_dropdown.bind('<<ComboboxSelected>>', lambda e: self.update_broker_fields())
         
         # Update broker options based on selected type
         self.update_broker_options()
@@ -750,11 +762,6 @@ class QuoTradingLauncher:
         
         self.broker_dropdown['values'] = options
         self.broker_dropdown.current(0)
-    
-    def update_broker_fields(self):
-        """Update credential field labels based on selected broker."""
-        # This method can be extended to customize labels per broker
-        pass
     
     def validate_broker(self):
         """Validate broker credentials before proceeding."""
