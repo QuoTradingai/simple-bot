@@ -52,9 +52,6 @@ class BotConfiguration:
     use_volume_filter: bool = False  # Don't use volume filter - blocks overnight trades
     use_macd_filter: bool = False
     
-    # Testing/Debug Parameters
-    force_test_trade: bool = True  # Set to True to force a test trade on next bar (ignores all filters)
-    
     # RSI Settings - ITERATION 3 (Conservative, Selective)
     rsi_period: int = 10  # Iteration 3
     rsi_oversold: int = 35  # Iteration 3 - selective entry

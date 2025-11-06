@@ -2,8 +2,8 @@
   "quotrading_license": "QUOTRADING_ADMIN_MASTER_2025",
   "market_type": "Futures",
   "broker": "TopStep",
-  "broker_token": "test_token",
-  "broker_username": "test@example.com",
+  "broker_token": "",
+  "broker_username": "",
   "symbols": [
     "ES",
     "NQ",

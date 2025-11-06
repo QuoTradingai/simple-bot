@@ -122,9 +122,6 @@ bid_ask_manager: Optional[BidAskManager] = None
 # Global adaptive exit manager (for streak tracking persistence)
 adaptive_manager: Optional[Any] = None
 
-# Global live data recorder (for tick-by-tick data capture)
-live_recorder: Optional[Any] = None
-
 # State management dictionary
 state: Dict[str, Any] = {}
 
@@ -766,19 +763,6 @@ def on_quote(symbol: str, bid_price: float, ask_price: float, bid_size: int,
             last_price=last_price,
             timestamp=timestamp_ms
         )
-    
-    # Record quote data if recorder is enabled
-    if live_recorder is not None:
-        try:
-            live_recorder.record_tick(
-                bid=bid_price,
-                ask=ask_price,
-                last=last_price,
-                bid_size=bid_size,
-                ask_size=ask_size
-            )
-        except Exception as e:
-            logger.error(f"Failed to record tick: {e}")
     
     # Also process as tick data to build bars
     # Use last_price and estimated volume of 1 (quote updates don't have volume)
@@ -1597,11 +1581,6 @@ def check_long_signal_conditions(symbol: str, prev_bar: Dict[str, Any],
     Returns:
         True if long signal detected
     """
-    # FORCE TEST TRADE - bypass all filters
-    if CONFIG.get("force_test_trade", False):
-        logger.info("[FORCE TEST] Forcing LONG signal for testing - bypassing all filters")
-        return True
-    
     vwap_bands = state[symbol]["vwap_bands"]
     vwap = state[symbol]["vwap"]
     
@@ -1671,11 +1650,6 @@ def check_short_signal_conditions(symbol: str, prev_bar: Dict[str, Any],
     Returns:
         True if short signal detected
     """
-    # FORCE TEST TRADE - bypass all filters (note: we'll force LONG instead of SHORT for safety)
-    if CONFIG.get("force_test_trade", False):
-        logger.debug("[FORCE TEST] Skipping SHORT signal - will use LONG instead")
-        return False
-    
     vwap_bands = state[symbol]["vwap_bands"]
     vwap = state[symbol]["vwap"]
     
@@ -4422,6 +4396,48 @@ def execute_exit(symbol: str, exit_price: float, reason: str) -> None:
     logger.info(f"Trades today: {state[symbol]['daily_trade_count']}/{CONFIG['max_trades_per_day']}")
     logger.info(SEPARATOR_LINE)
     
+    # Write trade summary to file for GUI display
+    try:
+        import json
+        pnl_percent = (pnl / (position['entry_price'] * position['quantity'] * CONFIG.get('tick_value', 12.50))) * 100 if position['entry_price'] and position['quantity'] else 0
+        
+        trade_summary = {
+            'symbol': symbol,
+            'direction': position['side'].upper(),
+            'entry_price': position['entry_price'],
+            'exit_price': exit_price,
+            'contracts': position['quantity'],
+            'pnl': pnl,
+            'pnl_percent': pnl_percent,
+            'timestamp': exit_time.isoformat(),
+            'reason': reason
+        }
+        
+        # Write to file
+        summary_file = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'trade_summary.json')
+        with open(summary_file, 'w') as f:
+            json.dump(trade_summary, f, indent=2)
+        
+        # Also write daily stats
+        wins = len([t for t in state[symbol].get('trade_history', []) if t.get('pnl', 0) > 0])
+        losses = len([t for t in state[symbol].get('trade_history', []) if t.get('pnl', 0) < 0])
+        
+        daily_summary = {
+            'total_pnl': state[symbol]['daily_pnl'],
+            'wins': wins,
+            'losses': losses,
+            'account_balance': CONFIG.get('account_size', 50000) + state[symbol]['daily_pnl'],
+            'timestamp': exit_time.isoformat()
+        }
+        
+        daily_file = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'daily_summary.json')
+        with open(daily_file, 'w') as f:
+            json.dump(daily_summary, f, indent=2)
+            
+        logger.debug(f"[GUI] Trade summary written to {summary_file}")
+    except Exception as e:
+        logger.debug(f"[GUI] Failed to write trade summary: {e}")
+    
     # Reset position tracking
     state[symbol]["position"] = {
         "active": False,
@@ -5529,7 +5545,7 @@ def main(symbol_override: str = None) -> None:
         symbol_override: Optional symbol to trade (overrides CONFIG["instrument"])
                         Used for multi-symbol bot instances
     """
-    global event_loop, timer_manager, bid_ask_manager, live_recorder
+    global event_loop, timer_manager, bid_ask_manager
     
     # Use symbol override if provided (for multi-symbol support)
     trading_symbol = symbol_override if symbol_override else CONFIG["instrument"]
@@ -5572,31 +5588,6 @@ def main(symbol_override: str = None) -> None:
     # Initialize bid/ask manager
     logger.info(f"[{trading_symbol}] Initializing bid/ask manager...")
     bid_ask_manager = BidAskManager(CONFIG)
-    
-    # Initialize live data recorder (if enabled)
-    record_live_data = os.getenv("RECORD_LIVE_DATA", "false").lower() == "true"
-    if record_live_data and not CONFIG["dry_run"]:
-        try:
-            from live_data_recorder import LiveDataRecorder
-            logger.info("Initializing live data recorder...")
-            live_recorder = LiveDataRecorder(
-                output_dir="data/historical_data",  # Save with historical data
-                symbol=CONFIG["instrument"],
-                compress=True,
-                max_file_size_mb=100,
-                rotation_interval_minutes=720  # 12 hours
-            )
-            logger.info("[OK] Live data recorder enabled - saving tick-by-tick data")
-        except Exception as e:
-            logger.warning(f"Failed to initialize live data recorder: {e}")
-            logger.warning("Continuing without data recording")
-            live_recorder = None
-    else:
-        if CONFIG["dry_run"]:
-            logger.info("Data recording disabled (dry run mode)")
-        else:
-            logger.info("Data recording disabled (set RECORD_LIVE_DATA=true to enable)")
-        live_recorder = None
     
     # Initialize broker (replaces initialize_sdk)
     initialize_broker()
@@ -5893,15 +5884,6 @@ def handle_shutdown_event(data: Dict[str, Any]) -> None:
 def cleanup_on_shutdown() -> None:
     """Cleanup tasks on shutdown"""
     logger.info("Running cleanup tasks...")
-    
-    # Close live data recorder
-    if live_recorder:
-        try:
-            logger.info("Closing live data recorder...")
-            live_recorder.close()
-            logger.info("Live data recorder closed")
-        except Exception as e:
-            logger.error(f"Error closing live data recorder: {e}")
     
     # Save state to disk
     if recovery_manager:

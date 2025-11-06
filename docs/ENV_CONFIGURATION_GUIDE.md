@@ -10,7 +10,6 @@ Your `.env` file now includes:
 - `BOT_ENVIRONMENT` - Environment mode (production) ✅
 - `BOT_DRY_RUN` - Live vs paper trading (false = LIVE) ✅
 - `CONFIRM_LIVE_TRADING` - Safety confirmation (1 = enabled) ✅
-- `RECORD_LIVE_DATA` - Tick data recording ✅
 - `BOT_LOG_LEVEL` - Logging verbosity ✅
 
 ### Trading Configuration

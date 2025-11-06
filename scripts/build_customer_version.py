@@ -67,7 +67,6 @@ pyinstaller>=6.0.0  # Convert to Windows EXE
 
 # Files to skip (dev only)
 SKIP_FILES = [
-    "src/live_data_recorder.py",  # No data recording for customers
     "src/adaptive_exits.py",  # RL training logic stays with you
 ]
 

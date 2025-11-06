@@ -142,34 +142,90 @@ class QuoTradingLauncher:
             fg=self.colors['text']
         ).pack(anchor=tk.W, pady=(0, 6))
         
-        # Market type selection (Futures, Forex, Crypto) - centered
-        self.market_var = tk.StringVar(value=self.config.get("market_type", "Futures"))
-        market_container = tk.Frame(card_content, bg=self.colors['card'])
-        market_container.pack(pady=(0, 8))
+        # Market type - Futures only (hidden, always set)
+        self.market_var = tk.StringVar(value="Futures")
         
-        # Create centered frame for market options
-        market_options_frame = tk.Frame(market_container, bg=self.colors['card'])
-        market_options_frame.pack()
+        # Broker Type selection (Prop Firm vs Live Broker) - Modern card-style buttons
+        tk.Label(
+            card_content,
+            text="Account Type:",
+            font=("Segoe UI", 10, "bold"),
+            bg=self.colors['card'],
+            fg=self.colors['text']
+        ).pack(anchor=tk.W, pady=(0, 8))
         
-        # Market type radio buttons - centered with Options added
-        markets = ["Futures", "Forex", "Crypto", "Options"]
-        for market in markets:
-            market_radio = tk.Radiobutton(
-                market_options_frame,
-                text=market,
-                variable=self.market_var,
-                value=market,
-                bg=self.colors['card'],
-                fg=self.colors['text'],
-                activebackground=self.colors['card'],
-                activeforeground=self.colors['text'],
-                selectcolor=self.colors['secondary'],
-                font=("Segoe UI", 8, "bold"),
-                command=self.update_broker_dropdown
+        self.broker_type_var = tk.StringVar(value=self.config.get("broker_type", "Prop Firm"))
+        
+        # Container for card-style buttons
+        broker_type_container = tk.Frame(card_content, bg=self.colors['card'])
+        broker_type_container.pack(fill=tk.X, pady=(0, 12))
+        
+        # Create card-style selection buttons
+        broker_types = [
+            ("Prop Firm", "💼", "Funded trading programs"),
+            ("Live Broker", "🏦", "Direct broker accounts")
+        ]
+        
+        self.broker_type_buttons = {}
+        for i, (btype, icon, desc) in enumerate(broker_types):
+            # Card frame
+            card_frame = tk.Frame(
+                broker_type_container,
+                bg=self.colors['background'],
+                relief=tk.FLAT,
+                bd=0,
+                highlightthickness=2,
+                highlightbackground=self.colors['border']
             )
-            market_radio.pack(side=tk.LEFT, padx=10)
+            card_frame.pack(side=tk.LEFT, padx=(0, 10) if i == 0 else (0, 0), expand=True, fill=tk.BOTH)
+            
+            # Make card clickable
+            def make_select(bt=btype):
+                return lambda e: self.select_broker_type(bt)
+            
+            card_frame.bind("<Button-1>", make_select(btype))
+            
+            # Icon + Text inside card
+            inner_frame = tk.Frame(card_frame, bg=self.colors['background'])
+            inner_frame.pack(expand=True, fill=tk.BOTH, padx=15, pady=12)
+            inner_frame.bind("<Button-1>", make_select(btype))
+            
+            # Icon
+            icon_label = tk.Label(
+                inner_frame,
+                text=icon,
+                font=("Segoe UI", 20),
+                bg=self.colors['background'],
+                fg=self.colors['text']
+            )
+            icon_label.pack()
+            icon_label.bind("<Button-1>", make_select(btype))
+            
+            # Type text
+            type_label = tk.Label(
+                inner_frame,
+                text=btype,
+                font=("Segoe UI", 11, "bold"),
+                bg=self.colors['background'],
+                fg=self.colors['text']
+            )
+            type_label.pack(pady=(4, 2))
+            type_label.bind("<Button-1>", make_select(btype))
+            
+            # Description
+            desc_label = tk.Label(
+                inner_frame,
+                text=desc,
+                font=("Segoe UI", 8),
+                bg=self.colors['background'],
+                fg=self.colors['text_light']
+            )
+            desc_label.pack()
+            desc_label.bind("<Button-1>", make_select(btype))
+            
+            self.broker_type_buttons[btype] = card_frame
         
-        # Broker dropdown (changes based on market type)
+        # Broker dropdown (changes based on broker type)
         tk.Label(
             card_content,
             text="Select Broker:",
@@ -251,6 +307,9 @@ class QuoTradingLauncher:
         )
         self.username_entry.pack(fill=tk.X, ipady=3)
         self.username_entry.insert(0, self.config.get("broker_username", ""))
+        
+        # Initialize broker type selection and dropdown options (after all fields exist)
+        self.select_broker_type(self.broker_type_var.get())
         
         # Initialize broker dropdown options and update credential fields
         self.update_broker_dropdown()
@@ -403,49 +462,55 @@ class QuoTradingLauncher:
         self.token_entry.config(show=creds["field1_show"])
         self.username_entry.config(show=creds["field2_show"])
     
-    def update_broker_dropdown(self):
-        """Update broker dropdown options based on selected market type."""
-        market = self.market_var.get()
+    def select_broker_type(self, broker_type):
+        """Select broker type and update UI styling."""
+        self.broker_type_var.set(broker_type)
         
-        # Define brokers for each market type
-        broker_options = {
-            "Futures": [
-                "TopStep - Funded trader program",
-                "Tradovate - Cloud-based platform",
-                "Rithmic - Professional API access",
-                "Interactive Brokers - Global markets",
-                "NinjaTrader - Platform + brokerage"
-            ],
-            "Forex": [
-                "OANDA - Forex specialist",
-                "Interactive Brokers - Multi-asset",
-                "FXCM - Forex trading",
-                "TD Ameritrade - Forex & more",
-                "IG Markets - Global forex"
-            ],
-            "Crypto": [
-                "Binance - Largest crypto exchange",
-                "Coinbase Pro - US-based exchange",
-                "Kraken - Secure crypto trading",
-                "Bybit - Derivatives exchange",
-                "Bitget - Copy trading platform"
-            ],
-            "Options": [
-                "Tastytrade - Options specialist",
-                "TD Ameritrade - thinkorswim platform",
-                "Interactive Brokers - Advanced options",
-                "E*TRADE - Options trading tools",
-                "Charles Schwab - Full-service options"
+        # Update card styling
+        for btype, card in self.broker_type_buttons.items():
+            if btype == broker_type:
+                # Selected state - bright blue border
+                card.config(
+                    highlightbackground=self.colors['secondary'],
+                    highlightthickness=3
+                )
+            else:
+                # Unselected state - gray border
+                card.config(
+                    highlightbackground=self.colors['border'],
+                    highlightthickness=2
+                )
+        
+        # Update broker dropdown
+        self.update_broker_dropdown()
+    
+    def update_broker_dropdown(self):
+        """Update broker dropdown options based on Prop Firm vs Live Broker selection."""
+        broker_type = self.broker_type_var.get()
+        
+        # Define brokers for each type
+        if broker_type == "Prop Firm":
+            broker_options = [
+                "TopStep - Funded Trader Program",
+                # More prop firms coming soon:
+                # "Earn2Trade - Evaluation Program",
+                # "The5ers - Trading Combine",
+                # "FTMO - Funded Trading"
             ]
-        }
+        else:  # Live Broker
+            broker_options = [
+                "Tradovate - Cloud-Based Platform",
+                # More live brokers coming soon:
+                # "Rithmic - Professional API Access",
+                # "Interactive Brokers - Global Markets",
+                # "NinjaTrader - Platform + Brokerage"
+            ]
         
         # Update dropdown values
-        self.broker_dropdown['values'] = broker_options.get(market, broker_options["Futures"])
+        self.broker_dropdown['values'] = broker_options
         
-        # Set default selection if current broker not in new list
-        current_broker = self.broker_var.get()
-        if not any(current_broker in option for option in self.broker_dropdown['values']):
-            self.broker_dropdown.current(0)
+        # Set default selection
+        self.broker_dropdown.current(0)
         
         # Update credential fields
         self.update_broker_fields()
@@ -964,39 +1029,46 @@ class QuoTradingLauncher:
         # Store bot process reference
         self.bot_process = None
         
+        # Track last trade timestamp to avoid duplicate displays
+        self.last_trade_timestamp = None
+        self.last_daily_timestamp = None
+        
+        # Start polling for trade updates (every 2 seconds)
+        self.poll_trade_updates()
+        
         # Console/Status Frame (compact)
         console_separator = tk.Frame(card_content, bg=self.colors['border'], height=1)
         console_separator.pack(fill=tk.X, pady=(5, 3))
         
         console_label = tk.Label(
             card_content,
-            text="📊 Status",
+            text="📊 Trade Summary",
             font=("Segoe UI", 9, "bold"),
             bg=self.colors['card'],
             fg=self.colors['text']
         )
         console_label.pack(anchor=tk.W, pady=(0, 3))
         
-        # Compact console text area (3 lines)
+        # Trade summary console (8 lines for better visibility)
         console_frame = tk.Frame(card_content, bg=self.colors['background'])
         console_frame.pack(fill=tk.X)
         
         self.console_text = tk.Text(
             console_frame,
-            height=3,
-            font=("Consolas", 7),
-            bg="#1a1a1a",
+            height=8,
+            font=("Consolas", 8),
+            bg="#0a0a0a",
             fg="#00ff00",
             insertbackground="#00ff00",
             relief=tk.FLAT,
-            padx=5,
-            pady=3,
+            padx=8,
+            pady=5,
             wrap=tk.WORD
         )
         self.console_text.pack(fill=tk.X)
         
         # Initial console message
-        self.console_log("Ready - Configure settings and click 'Start Bot'")
+        self.console_log("Ready to trade - Configure settings and click 'Start Bot'")
         self.console_text.config(state=tk.DISABLED)
     
     def fetch_account_size(self):
@@ -1160,6 +1232,105 @@ class QuoTradingLauncher:
         self.console_text.insert(tk.END, f"[{timestamp}] {message}\n")
         self.console_text.see(tk.END)  # Auto-scroll to bottom
         self.console_text.config(state=tk.DISABLED)
+    
+    def show_trade_summary(self, trade_data):
+        """Display a clean trade summary in the GUI console.
+        
+        Example trade_data:
+        {
+            'symbol': 'ES',
+            'direction': 'LONG',
+            'entry_price': 4500.00,
+            'exit_price': 4506.25,
+            'contracts': 2,
+            'pnl': 156.25,
+            'pnl_percent': 0.31
+        }
+        """
+        if not hasattr(self, 'console_text'):
+            return
+        
+        symbol = trade_data.get('symbol', '?')
+        direction = trade_data.get('direction', '?')
+        entry = trade_data.get('entry_price', 0)
+        exit_price = trade_data.get('exit_price', 0)
+        contracts = trade_data.get('contracts', 0)
+        pnl = trade_data.get('pnl', 0)
+        pnl_pct = trade_data.get('pnl_percent', 0)
+        
+        # Format profit/loss with color indication
+        pnl_symbol = '+' if pnl >= 0 else ''
+        
+        # Create clean summary line
+        summary = f"{symbol} {direction} @ {entry:.2f} → EXIT @ {exit_price:.2f} | {pnl_symbol}${pnl:.2f} ({pnl_symbol}{pnl_pct:.2f}%)"
+        
+        self.console_log(summary)
+    
+    def update_daily_summary(self, daily_stats):
+        """Update daily statistics in the GUI console.
+        
+        Example daily_stats:
+        {
+            'total_pnl': 406.25,
+            'wins': 2,
+            'losses': 0,
+            'account_balance': 50406.25
+        }
+        """
+        if not hasattr(self, 'console_text'):
+            return
+        
+        pnl = daily_stats.get('total_pnl', 0)
+        wins = daily_stats.get('wins', 0)
+        losses = daily_stats.get('losses', 0)
+        balance = daily_stats.get('account_balance', 0)
+        
+        pnl_symbol = '+' if pnl >= 0 else ''
+        
+        summary = f"─────────────────────────────────"
+        self.console_log(summary)
+        self.console_log(f"Today: {pnl_symbol}${pnl:.2f} | {wins}W, {losses}L | Balance: ${balance:,.2f}")
+        self.console_log(summary)
+    
+    def poll_trade_updates(self):
+        """Poll for new trade data from bot and display in GUI."""
+        try:
+            # Check for new trade summary
+            trade_file = Path('trade_summary.json')
+            if trade_file.exists():
+                try:
+                    with open(trade_file, 'r') as f:
+                        trade_data = json.load(f)
+                    
+                    # Check if this is a new trade (avoid duplicates)
+                    trade_timestamp = trade_data.get('timestamp')
+                    if trade_timestamp and trade_timestamp != self.last_trade_timestamp:
+                        self.last_trade_timestamp = trade_timestamp
+                        self.show_trade_summary(trade_data)
+                except (json.JSONDecodeError, IOError):
+                    pass  # File might be being written, skip this poll
+            
+            # Check for daily summary updates
+            daily_file = Path('daily_summary.json')
+            if daily_file.exists():
+                try:
+                    with open(daily_file, 'r') as f:
+                        daily_data = json.load(f)
+                    
+                    # Check if daily stats changed
+                    daily_timestamp = daily_data.get('timestamp')
+                    if daily_timestamp and daily_timestamp != self.last_daily_timestamp:
+                        self.last_daily_timestamp = daily_timestamp
+                        self.update_daily_summary(daily_data)
+                except (json.JSONDecodeError, IOError):
+                    pass  # File might be being written, skip this poll
+        
+        except Exception as e:
+            # Silently ignore errors (file access, etc.)
+            pass
+        
+        # Schedule next poll in 2000ms (2 seconds)
+        self.root.after(2000, self.poll_trade_updates)
     
     def stop_bot(self):
         """Stop the running bot process."""
