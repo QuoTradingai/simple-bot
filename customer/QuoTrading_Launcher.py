@@ -58,6 +58,12 @@ class QuoTradingLauncher:
         # Default fallback symbol
         self.DEFAULT_SYMBOL = 'ES'
         
+        # Account mismatch detection threshold
+        self.ACCOUNT_MISMATCH_THRESHOLD = 1000  # Dollars - warn if difference is > $1000
+        
+        # Prop firm maximum drawdown percentage (most common rule)
+        self.PROP_FIRM_MAX_DRAWDOWN = 8.0  # 8% for most prop firms (some use 10%)
+        
         # Cloud validation API URL
         self.VALIDATION_API_URL = "http://localhost:5000/api/validate"  # Update with your cloud server URL
         
@@ -1937,6 +1943,13 @@ class QuoTradingLauncher:
         start_btn = self.create_button(button_frame, "START BOT →", self.start_bot, "next")
         start_btn.pack(side=tk.RIGHT)
     
+    def _update_account_size_from_fetched(self, balance: float):
+        """Helper method to update account size field with fetched balance."""
+        self.config["account_size"] = str(int(balance))
+        self.account_entry.delete(0, tk.END)
+        self.account_entry.insert(0, str(int(balance)))
+        self.save_config()
+    
     def fetch_account_info(self):
         """Fetch account information from the broker."""
         broker = self.config.get("broker", "TopStep")
@@ -1986,18 +1999,15 @@ class QuoTradingLauncher:
                     fetched_balance = accounts[0]['balance']
                     
                     mismatch_warning = ""
-                    if user_account_size > 0 and abs(user_account_size - fetched_balance) > 1000:
+                    if user_account_size > 0 and abs(user_account_size - fetched_balance) > self.ACCOUNT_MISMATCH_THRESHOLD:
                         mismatch_warning = (
                             f"\n\n⚠️ MISMATCH DETECTED:\n"
                             f"You entered: ${user_account_size:,.2f}\n"
                             f"Fetched account: ${fetched_balance:,.2f}\n\n"
                             f"Using fetched account data (more accurate)."
                         )
-                        # Update account size to fetched value
-                        self.config["account_size"] = str(int(fetched_balance))
-                        self.account_entry.delete(0, tk.END)
-                        self.account_entry.insert(0, str(int(fetched_balance)))
-                        self.save_config()
+                        # Update account size to fetched value using helper method
+                        self._update_account_size_from_fetched(fetched_balance)
                     
                     # Update info label
                     selected_acc = accounts[0]
@@ -2013,7 +2023,7 @@ class QuoTradingLauncher:
                         f"Balance: ${selected_acc['balance']:,.2f}\n"
                         f"Equity: ${selected_acc['equity']:,.2f}\n"
                         f"Type: {selected_acc.get('type', 'Unknown')}"
-                        f"{mismatch_warning}"
+                        + (mismatch_warning if mismatch_warning else "")
                     )
                 
                 self.root.after(0, update_ui)
@@ -2064,10 +2074,8 @@ class QuoTradingLauncher:
             equity = selected_account.get("equity", balance)
             account_type = selected_account.get("type", "live_broker")
         
-        # Update account size with fetched data (overrides user input)
-        self.config["account_size"] = str(int(balance))
-        self.account_entry.delete(0, tk.END)
-        self.account_entry.insert(0, str(int(balance)))
+        # Update account size with fetched data (overrides user input) using helper method
+        self._update_account_size_from_fetched(balance)
         
         # Calculate drawdown percentage (how far from starting balance)
         drawdown_pct = ((balance - equity) / balance) * 100 if balance > 0 else 0
@@ -2078,8 +2086,8 @@ class QuoTradingLauncher:
             # Prop firm rules: Be more conservative as drawdown increases
             # Most prop firms fail traders at 8-10% drawdown
             
-            # Calculate distance to failure (assuming 8% max drawdown rule for most prop firms)
-            max_dd = 8.0
+            # Calculate distance to failure using configured max drawdown
+            max_dd = self.PROP_FIRM_MAX_DRAWDOWN
             distance_to_failure = max_dd - drawdown_pct
             
             # Daily loss limit: Scale based on distance to failure
