@@ -388,12 +388,17 @@ class BotConfiguration:
     rl_exploration_rate: float = 0.30  # 30% exploration (random decisions)
     rl_min_exploration_rate: float = 0.05  # Minimum exploration after decay
     rl_exploration_decay: float = 0.995  # Decay rate per signal
-    rl_confidence_threshold: float = 0.5  # Minimum confidence to take signal
+    rl_confidence_threshold: float = 0.5  # Minimum confidence to take signal (USER CONFIGURABLE via GUI)
     rl_min_contracts: int = 1  # Minimum contracts (low confidence)
     rl_medium_contracts: int = 2  # Medium contracts (moderate confidence)
     rl_max_contracts: int = 3  # Maximum contracts (high confidence)
     rl_experience_file: str = "data/signal_experience.json"  # Where to save learning
     rl_save_frequency: int = 5  # Save experiences every N trades
+    
+    # Dynamic AI Features (USER CONFIGURABLE via GUI)
+    dynamic_confidence: bool = False  # USER CONFIGURABLE - Auto-increase confidence when approaching limits
+    dynamic_contracts: bool = False  # USER CONFIGURABLE - Use signal confidence to scale contracts dynamically
+    trailing_drawdown: bool = False  # USER CONFIGURABLE - Enable trailing drawdown (soft floor protection)
     
     # Broker Configuration (only for live trading)
     api_token: Optional[str] = None
@@ -560,6 +565,12 @@ class BotConfiguration:
             "rl_exploration_rate": self.rl_exploration_rate,
             "rl_min_exploration_rate": self.rl_min_exploration_rate,
             "rl_exploration_decay": self.rl_exploration_decay,
+            # Dynamic AI Features (from GUI)
+            "dynamic_confidence": self.dynamic_confidence,
+            "dynamic_contracts": self.dynamic_contracts,
+            "trailing_drawdown": self.trailing_drawdown,
+            # Recovery Mode
+            "recovery_mode": self.recovery_mode,
         }
 
 
@@ -618,6 +629,24 @@ def load_from_env() -> BotConfiguration:
     # Recovery Mode (All Account Types)
     if os.getenv("BOT_RECOVERY_MODE"):
         config.recovery_mode = os.getenv("BOT_RECOVERY_MODE").lower() in ("true", "1", "yes")
+    
+    # RL/AI Configuration from GUI
+    if os.getenv("BOT_CONFIDENCE_THRESHOLD"):
+        # GUI provides confidence as percentage (0-100), config expects decimal (0-1)
+        threshold = float(os.getenv("BOT_CONFIDENCE_THRESHOLD"))
+        # If value is > 1, assume it's a percentage and convert to decimal
+        if threshold > 1.0:
+            threshold = threshold / 100.0
+        config.rl_confidence_threshold = threshold
+    
+    if os.getenv("BOT_DYNAMIC_CONFIDENCE"):
+        config.dynamic_confidence = os.getenv("BOT_DYNAMIC_CONFIDENCE").lower() in ("true", "1", "yes")
+    
+    if os.getenv("BOT_DYNAMIC_CONTRACTS"):
+        config.dynamic_contracts = os.getenv("BOT_DYNAMIC_CONTRACTS").lower() in ("true", "1", "yes")
+    
+    if os.getenv("BOT_TRAILING_DRAWDOWN"):
+        config.trailing_drawdown = os.getenv("BOT_TRAILING_DRAWDOWN").lower() in ("true", "1", "yes")
     
     if os.getenv("BOT_TICK_SIZE"):
         config.tick_size = float(os.getenv("BOT_TICK_SIZE"))
