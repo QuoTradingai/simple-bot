@@ -132,9 +132,6 @@ bid_ask_manager: Optional[BidAskManager] = None
 # Global adaptive exit manager (for streak tracking persistence)
 adaptive_manager: Optional[Any] = None
 
-# Global session state manager (for cross-session awareness)
-session_manager: Optional[Any] = None
-
 # State management dictionary
 state: Dict[str, Any] = {}
 
@@ -4485,19 +4482,6 @@ def execute_exit(symbol: str, exit_price: float, reason: str) -> None:
     logger.info(SEPARATOR_LINE)
     
     # Update session state for cross-session awareness
-    if session_manager:
-        try:
-            current_equity = get_account_equity()
-            session_manager.update_trading_state(
-                starting_equity=bot_status.get("starting_equity", current_equity),
-                current_equity=current_equity,
-                daily_pnl=state[symbol]["daily_pnl"],
-                daily_trades=state[symbol]["daily_trade_count"],
-                broker=CONFIG.get("broker", "Unknown"),
-                account_type=None  # Will be inferred
-            )
-        except Exception as e:
-            logger.error(f"Failed to update session state: {e}")
     
     # Write trade summary to file for GUI display
     try:
@@ -4838,10 +4822,10 @@ def perform_daily_reset(symbol: str, new_date: Any) -> None:
     }
     
     # Re-enable trading if it was stopped for daily limits
-    if bot_status["stop_reason"] == "daily_loss_limit":
+    if bot_status["stop_reason"] in ["daily_loss_limit", "daily_limits_reached"]:
         bot_status["trading_enabled"] = True
         bot_status["stop_reason"] = None
-        logger.info("Trading re-enabled for new day")
+        logger.info("Trading re-enabled for new day after maintenance hour reset")
     
     # Reset flatten mode flag for new day
     bot_status["flatten_mode"] = False
@@ -5093,16 +5077,16 @@ def check_safety_conditions(symbol: str) -> Tuple[bool, Optional[str]]:
             
             if bot_status.get("stop_reason") != "recovery_mode":
                 logger.warning("=" * 80)
-                logger.warning("RECOVERY MODE: APPROACHING LIMITS - CONTINUING WITH HIGH CONFIDENCE")
+                logger.warning("RECOVERY MODE: APPROACHING LIMITS - CONTINUING WITH SAME LOGIC")
                 logger.warning(f"Reason: {approach_reason}")
                 logger.warning(f"Severity: {severity*100:.1f}%")
                 if dynamic_confidence_enabled:
                     logger.warning(f"Required confidence DYNAMICALLY increased to {required_confidence*100:.1f}%")
                     logger.warning("Bot will ONLY take highest-confidence signals")
                 else:
-                    logger.warning(f"Using FIXED confidence threshold: {required_confidence*100:.1f}% (dynamic confidence disabled)")
+                    logger.warning(f"Using confidence threshold: {required_confidence*100:.1f}%")
                 logger.warning("Position size will be dynamically reduced")
-                logger.warning("⚠️ Attempting to recover from losses")
+                logger.warning("⚠️ Attempting to recover - bot continues trading")
                 logger.warning("=" * 80)
                 bot_status["stop_reason"] = "recovery_mode"
             
@@ -5130,26 +5114,24 @@ def check_safety_conditions(symbol: str) -> Tuple[bool, Optional[str]]:
                     # Let exit management handle it - just flag for aggressive management
                     bot_status["aggressive_exit_mode"] = True
             
-            # Don't stop trading, but signal evaluation will use higher threshold
+            # Don't stop trading - recovery mode continues with same logic
         else:
-            # RECOVERY MODE DISABLED (Safe Mode): WARN but DON'T stop trading
-            # User maintains full control - bot provides guidance but doesn't lock them out
-            if bot_status.get("stop_reason") != "approaching_failure_warning":
-                logger.warning("=" * 80)
-                logger.warning("⚠️ WARNING: APPROACHING FAILURE - PROCEED WITH CAUTION")
-                logger.warning(f"Reason: {approach_reason}")
-                logger.warning(f"Severity: {severity*100:.1f}%")
-                logger.warning("RECOMMENDATION: Enable Recovery Mode for smart risk management")
-                logger.warning("Bot will CONTINUE trading - User maintains full control")
-                logger.warning("⚠️ CAUTION: Higher risk of account failure without recovery mode")
-                logger.warning("=" * 80)
-                bot_status["stop_reason"] = "approaching_failure_warning"
-            # DON'T set trading_enabled = False - never lock user out
-            # Just provide warning and let user decide
-            # Continue with normal trading - no return False
+            # RECOVERY MODE DISABLED: STOP trading until next session (after maintenance)
+            # Bot stays running but doesn't execute new trades until daily reset at 6 PM ET
+            logger.warning("=" * 80)
+            logger.warning("⚠️ LIMITS REACHED - STOPPING TRADING UNTIL NEXT SESSION")
+            logger.warning(f"Reason: {approach_reason}")
+            logger.warning(f"Severity: {severity*100:.1f}%")
+            logger.warning("Bot will STOP making new trades until daily reset at 6 PM ET")
+            logger.warning("Bot continues running and monitoring - will resume after maintenance hour")
+            logger.warning("To continue trading when approaching limits, enable Recovery Mode")
+            logger.warning("=" * 80)
+            bot_status["trading_enabled"] = False
+            bot_status["stop_reason"] = "daily_limits_reached"
+            return False, "Daily limits reached - trading stopped until next session (6 PM ET reset)"
     else:
         # Not approaching failure - clear any safety mode that was set
-        if bot_status.get("stop_reason") in ["approaching_failure", "approaching_failure_warning", "recovery_mode"]:
+        if bot_status.get("stop_reason") in ["daily_limits_reached", "approaching_failure_warning", "recovery_mode"]:
             logger.info("=" * 80)
             logger.info("SAFE ZONE: Back to normal operation")
             logger.info("Bot has moved away from failure thresholds")
@@ -5804,7 +5786,7 @@ def main(symbol_override: str = None) -> None:
         symbol_override: Optional symbol to trade (overrides CONFIG["instrument"])
                         Used for multi-symbol bot instances
     """
-    global event_loop, timer_manager, bid_ask_manager, session_manager
+    global event_loop, timer_manager, bid_ask_manager
     
     # Use symbol override if provided (for multi-symbol support)
     trading_symbol = symbol_override if symbol_override else CONFIG["instrument"]
@@ -5812,15 +5794,6 @@ def main(symbol_override: str = None) -> None:
     logger.info(SEPARATOR_LINE)
     logger.info(f"VWAP Bounce Bot Starting [{trading_symbol}]")
     logger.info(SEPARATOR_LINE)
-    
-    # Initialize session state manager for cross-session awareness
-    try:
-        from session_state import SessionStateManager
-        session_manager = SessionStateManager()
-        logger.info(f"[{trading_symbol}] Session state manager initialized")
-    except ImportError:
-        logger.warning(f"[{trading_symbol}] Session state manager not available")
-        session_manager = None
     
     # Log symbol specifications if loaded
     if SYMBOL_SPEC:
