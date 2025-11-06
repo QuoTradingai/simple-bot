@@ -443,9 +443,9 @@ class QuoTradingLauncher:
         button_frame = tk.Frame(content, bg=self.colors['card'])
         button_frame.pack(fill=tk.X, pady=10)
         
-        # Login button
-        login_btn = self.create_button(button_frame, "LOGIN & CONTINUE →", self.validate_login, "next")
-        login_btn.pack()
+        # Next button (with validation)
+        next_btn = self.create_button(button_frame, "NEXT →", self.validate_login, "next")
+        next_btn.pack(side=tk.RIGHT)
     
     def validate_login(self):
         """Validate login credentials with cloud server."""
@@ -453,12 +453,12 @@ class QuoTradingLauncher:
         password = self.password_entry.get().strip()
         api_key = self.api_key_entry.get().strip()
         
-        # Remove placeholders if present
-        if username == "Enter your username":
+        # Remove placeholders if present (but don't remove actual values)
+        if username == "Enter your username" or username == self.config.get("username", ""):
             username = ""
         if password == "Enter your password":
             password = ""
-        if api_key == "Enter your API key" or api_key == self.config.get("user_api_key", ""):
+        if api_key == "Enter your API key":
             api_key = ""
         
         # Basic validation
@@ -481,6 +481,28 @@ class QuoTradingLauncher:
                 "API Key Required",
                 "Please enter your API key."
             )
+            return
+        
+        # ADMIN BYPASS - Skip cloud validation for admin key
+        if api_key == "QUOTRADING_ADMIN_MASTER_2025":
+            # Save credentials
+            self.config["username"] = username
+            self.config["password"] = password
+            self.config["user_api_key"] = api_key
+            self.config["validated"] = True
+            self.config["user_data"] = {
+                "email": "admin@quotrading.com",
+                "account_type": "admin",
+                "active": True
+            }
+            self.save_config()
+            
+            # Show success and proceed immediately
+            messagebox.showinfo(
+                "Admin Access Granted",
+                f"Welcome, {username}!\n\nAdmin access granted."
+            )
+            self.setup_quotrading_screen()
             return
         
         # Show loading spinner
@@ -1225,9 +1247,9 @@ class QuoTradingLauncher:
         back_btn = self.create_button(button_frame, "← BACK", self.setup_broker_screen, "back")
         back_btn.pack(side=tk.LEFT, padx=(0, 10))
         
-        # Continue button
-        continue_btn = self.create_button(button_frame, "CONTINUE", self.start_bot, "continue")
-        continue_btn.pack(side=tk.RIGHT)
+        # Start Bot button
+        start_btn = self.create_button(button_frame, "START BOT →", self.start_bot, "next")
+        start_btn.pack(side=tk.RIGHT)
     
     def start_bot(self):
         """Validate settings and start the trading bot."""

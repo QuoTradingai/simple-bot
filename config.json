@@ -19,5 +19,17 @@
   "rl_confidence_threshold": 0.65,
   "rl_exploration_rate": 0.05,
   "rl_min_exploration_rate": 0.05,
-  "rl_exploration_decay": 0.995
+  "rl_exploration_decay": 0.995,
+  "username": "hi",
+  "quotrading_email": "kevinsuero072897@gmail.com",
+  "quotrading_api_key": "QUOTRADING_ADMIN_MASTER_2025",
+  "quotrading_validated": true,
+  "password": "admin",
+  "user_api_key": "QUOTRADING_ADMIN_MASTER_2025",
+  "validated": true,
+  "user_data": {
+    "email": "admin@quotrading.com",
+    "account_type": "admin",
+    "active": true
+  }
 }

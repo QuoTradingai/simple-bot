@@ -107,6 +107,20 @@ def validate_credentials():
                 "message": "All fields are required"
             }), 400
         
+        # ADMIN BYPASS - Master key grants instant access
+        if api_key == "QUOTRADING_ADMIN_MASTER_2025":
+            logger.info(f"Admin bypass used by: {username}")
+            return jsonify({
+                "valid": True,
+                "message": "Admin access granted",
+                "user_data": {
+                    "email": "admin@quotrading.com",
+                    "account_type": "admin",
+                    "active": True,
+                    "bypass": True
+                }
+            }), 200
+        
         # Check if user exists
         if username not in USER_DATABASE:
             logger.warning(f"User not found: {username}")
