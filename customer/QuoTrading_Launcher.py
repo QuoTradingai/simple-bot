@@ -894,26 +894,128 @@ class QuoTradingLauncher:
             placeholder=self.config.get("quotrading_api_key", "")
         )
         
-        # Account Size dropdown
-        account_label = tk.Label(
+        # TopStep Account Type Selection
+        account_type_label = tk.Label(
             content,
-            text="Account Size:",
+            text="TopStep Account Type:",
             font=("Segoe UI", 10, "bold"),
             bg=self.colors['card'],
             fg=self.colors['text']
         )
-        account_label.pack(anchor=tk.W, pady=(8, 3))
+        account_type_label.pack(anchor=tk.W, pady=(8, 3))
         
-        self.account_size_var = tk.StringVar(value=self.config.get("account_size", "50k"))
-        self.account_size_dropdown = ttk.Combobox(
-            content,
-            textvariable=self.account_size_var,
+        # Define TopStep account types with their rules
+        self.topstep_account_types = {
+            "Trading Combine $50K": {
+                "size": "50000",
+                "daily_loss": "2000",
+                "total_drawdown": "3000",
+                "profit_target": "3000",
+                "description": "Daily Loss: $2,000 | Total DD: $3,000 | Target: $3,000"
+            },
+            "Trading Combine $100K": {
+                "size": "100000",
+                "daily_loss": "4000",
+                "total_drawdown": "6000",
+                "profit_target": "6000",
+                "description": "Daily Loss: $4,000 | Total DD: $6,000 | Target: $6,000"
+            },
+            "Trading Combine $150K": {
+                "size": "150000",
+                "daily_loss": "6000",
+                "total_drawdown": "9000",
+                "profit_target": "9000",
+                "description": "Daily Loss: $6,000 | Total DD: $9,000 | Target: $9,000"
+            },
+            "Trading Combine $250K": {
+                "size": "250000",
+                "daily_loss": "10000",
+                "total_drawdown": "15000",
+                "profit_target": "15000",
+                "description": "Daily Loss: $10,000 | Total DD: $15,000 | Target: $15,000"
+            },
+            "Express Funded $50K": {
+                "size": "50000",
+                "daily_loss": "2000",
+                "total_drawdown": "3000",
+                "profit_target": "3000",
+                "description": "Daily Loss: $2,000 | Total DD: $3,000 | Target: $3,000 (15-day eval)"
+            },
+            "Express Funded $100K": {
+                "size": "100000",
+                "daily_loss": "4000",
+                "total_drawdown": "6000",
+                "profit_target": "6000",
+                "description": "Daily Loss: $4,000 | Total DD: $6,000 | Target: $6,000 (15-day eval)"
+            },
+            "Funded Account $50K": {
+                "size": "50000",
+                "daily_loss": "2000",
+                "total_drawdown": "3000",
+                "profit_target": "N/A",
+                "description": "Daily Loss: $2,000 | Trailing Threshold: $3,000 | No target"
+            },
+            "Funded Account $100K": {
+                "size": "100000",
+                "daily_loss": "4000",
+                "total_drawdown": "6000",
+                "profit_target": "N/A",
+                "description": "Daily Loss: $4,000 | Trailing Threshold: $6,000 | No target"
+            },
+            "Funded Account $150K": {
+                "size": "150000",
+                "daily_loss": "6000",
+                "total_drawdown": "9000",
+                "profit_target": "N/A",
+                "description": "Daily Loss: $6,000 | Trailing Threshold: $9,000 | No target"
+            }
+        }
+        
+        # Get saved account type or default
+        saved_account_type = self.config.get("topstep_account_type", "Trading Combine $50K")
+        self.account_type_var = tk.StringVar(value=saved_account_type)
+        
+        # Create styled dropdown frame
+        dropdown_frame = tk.Frame(content, bg=self.colors['border'], bd=0)
+        dropdown_frame.pack(fill=tk.X, padx=1, pady=1)
+        
+        # Create custom style for combobox to make it look better
+        style = ttk.Style()
+        style.theme_use('clam')
+        style.configure('TopStep.TCombobox',
+                       fieldbackground=self.colors['input_bg'],
+                       background=self.colors['success'],
+                       foreground=self.colors['text'],
+                       arrowcolor=self.colors['success'],
+                       borderwidth=0,
+                       relief='flat')
+        style.map('TopStep.TCombobox',
+                 fieldbackground=[('readonly', self.colors['input_bg'])],
+                 selectbackground=[('readonly', self.colors['input_focus'])],
+                 selectforeground=[('readonly', self.colors['text'])])
+        
+        self.account_type_dropdown = ttk.Combobox(
+            dropdown_frame,
+            textvariable=self.account_type_var,
             state="readonly",
-            font=("Segoe UI", 9),
-            width=35,
-            values=["50k", "100k", "150k", "200k", "250k"]
+            font=("Segoe UI", 10),
+            style='TopStep.TCombobox',
+            values=list(self.topstep_account_types.keys())
         )
-        self.account_size_dropdown.pack(fill=tk.X, pady=(0, 10))
+        self.account_type_dropdown.pack(fill=tk.X, ipady=6, padx=2, pady=2)
+        self.account_type_dropdown.bind("<<ComboboxSelected>>", self.update_account_type_info)
+        
+        # Account type info display
+        self.account_info_display = tk.Label(
+            content,
+            text=self.topstep_account_types[saved_account_type]["description"],
+            font=("Segoe UI", 8),
+            bg=self.colors['card'],
+            fg=self.colors['text_light'],
+            wraplength=500,
+            justify=tk.LEFT
+        )
+        self.account_info_display.pack(anchor=tk.W, pady=(3, 10))
         
         # Broker credentials
         self.broker_token_entry = self.create_input_field(
@@ -961,6 +1063,13 @@ class QuoTradingLauncher:
         # Update broker dropdown
         self.update_broker_options()
     
+    def update_account_type_info(self, event=None):
+        """Update the account type info display when selection changes."""
+        selected_type = self.account_type_var.get()
+        if selected_type in self.topstep_account_types:
+            account_info = self.topstep_account_types[selected_type]
+            self.account_info_display.config(text=account_info["description"])
+    
     def update_broker_options(self):
         """Update broker dropdown based on account type."""
         broker_type = self.broker_type_var.get()
@@ -979,7 +1088,14 @@ class QuoTradingLauncher:
         token = self.broker_token_entry.get().strip()
         username = self.broker_username_entry.get().strip()
         quotrading_api_key = self.quotrading_api_key_entry.get().strip()
-        account_size = self.account_size_var.get()
+        
+        # Get selected TopStep account type
+        account_type = self.account_type_var.get()
+        if account_type in self.topstep_account_types:
+            account_info = self.topstep_account_types[account_type]
+            account_size = account_info["size"]
+        else:
+            account_size = "50000"  # Default fallback
         
         # Remove placeholder if present
         if quotrading_api_key == self.config.get("quotrading_api_key", ""):
@@ -1007,6 +1123,7 @@ class QuoTradingLauncher:
             self.config["broker_token"] = token
             self.config["broker_username"] = username
             self.config["quotrading_api_key"] = quotrading_api_key
+            self.config["topstep_account_type"] = account_type
             self.config["account_size"] = account_size
             self.config["broker_validated"] = True
             self.save_config()
@@ -1025,6 +1142,7 @@ class QuoTradingLauncher:
             self.config["broker_token"] = token
             self.config["broker_username"] = username
             self.config["quotrading_api_key"] = quotrading_api_key
+            self.config["topstep_account_type"] = account_type
             self.config["account_size"] = account_size
             self.config["broker_validated"] = True
             self.save_config()
@@ -1836,11 +1954,11 @@ class QuoTradingLauncher:
         summary_title.pack(pady=(0, 3))
         
         broker = self.config.get("broker", "TopStep")
-        account_size = self.config.get("account_size", "50k")
+        account_type = self.config.get("topstep_account_type", "Trading Combine $50K")
         
         summary_text = tk.Label(
             summary_content,
-            text=f"Broker: {broker} | Account: {account_size}\nAll credentials validated and ready",
+            text=f"Broker: {broker} | Account: {account_type}\nAll credentials validated and ready",
             font=("Segoe UI", 8),
             bg=self.colors['secondary'],
             fg=self.colors['text_light'],
