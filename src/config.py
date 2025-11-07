@@ -775,12 +775,65 @@ def load_config(environment: Optional[str] = None, backtest_mode: bool = False) 
     env_config = load_from_env()
     
     # Merge configurations (env vars take precedence)
+    # We need to check which env vars were actually set, not just compare to defaults
+    # Load environment variables again to check which ones are set
+    env_vars_set = set()
+    
+    # Check which environment variables are actually set
+    if os.getenv("BOT_INSTRUMENTS") or os.getenv("BOT_INSTRUMENT"):
+        env_vars_set.add("instruments")
+        env_vars_set.add("instrument")
+    if os.getenv("BOT_TIMEZONE"):
+        env_vars_set.add("timezone")
+    if os.getenv("BOT_RISK_PER_TRADE"):
+        env_vars_set.add("risk_per_trade")
+    if os.getenv("BOT_MAX_CONTRACTS"):
+        env_vars_set.add("max_contracts")
+    if os.getenv("BOT_MAX_TRADES_PER_DAY"):
+        env_vars_set.add("max_trades_per_day")
+    if os.getenv("BOT_MIN_RISK_REWARD") or os.getenv("BOT_RISK_REWARD_RATIO"):
+        env_vars_set.add("risk_reward_ratio")
+    if os.getenv("BOT_DAILY_LOSS_LIMIT"):
+        env_vars_set.add("daily_loss_limit")
+    if os.getenv("BOT_DAILY_LOSS_PERCENT"):
+        env_vars_set.add("daily_loss_percent")
+    if os.getenv("BOT_AUTO_CALCULATE_LIMITS") or os.getenv("BOT_USE_TOPSTEP_RULES"):
+        env_vars_set.add("auto_calculate_limits")
+    if os.getenv("BOT_RECOVERY_MODE"):
+        env_vars_set.add("recovery_mode")
+    if os.getenv("BOT_MAX_DRAWDOWN_PERCENT"):
+        env_vars_set.add("max_drawdown_percent")
+    if os.getenv("BOT_TRAILING_DRAWDOWN"):
+        env_vars_set.add("trailing_drawdown")
+    if os.getenv("ACCOUNT_SIZE"):
+        env_vars_set.add("account_size")
+    if os.getenv("BOT_CONFIDENCE_THRESHOLD"):
+        env_vars_set.add("rl_confidence_threshold")
+    if os.getenv("BOT_DYNAMIC_CONFIDENCE"):
+        env_vars_set.add("dynamic_confidence")
+    if os.getenv("BOT_DYNAMIC_CONTRACTS"):
+        env_vars_set.add("dynamic_contracts")
+    if os.getenv("BOT_TICK_SIZE"):
+        env_vars_set.add("tick_size")
+    if os.getenv("BOT_TICK_VALUE"):
+        env_vars_set.add("tick_value")
+    if os.getenv("BOT_DRY_RUN"):
+        env_vars_set.add("dry_run")
+    if os.getenv("BOT_SHADOW_MODE"):
+        env_vars_set.add("shadow_mode")
+    if os.getenv("BOT_ENVIRONMENT"):
+        env_vars_set.add("environment")
+    if os.getenv("BOT_BROKER") or os.getenv("BROKER"):
+        env_vars_set.add("broker")
+    if os.getenv("BOT_API_TOKEN") or os.getenv("TOPSTEPX_API_TOKEN") or os.getenv("TOPSTEP_API_TOKEN") or os.getenv("BROKER_API_TOKEN"):
+        env_vars_set.add("api_token")
+    if os.getenv("BOT_USERNAME") or os.getenv("TOPSTEPX_USERNAME") or os.getenv("TOPSTEP_USERNAME") or os.getenv("BROKER_USERNAME"):
+        env_vars_set.add("username")
+    
+    # Apply env vars that were actually set
     for key in config.__dataclass_fields__.keys():
-        env_value = getattr(env_config, key)
-        default_value = getattr(BotConfiguration(), key)
-        
-        # If env value differs from default, use it
-        if env_value != default_value:
+        if key in env_vars_set:
+            env_value = getattr(env_config, key)
             setattr(config, key, env_value)
     
     # Validate configuration
