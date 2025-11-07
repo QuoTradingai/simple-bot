@@ -973,6 +973,9 @@ class QuoTradingLauncher:
         
         # Get saved account type or default
         saved_account_type = self.config.get("topstep_account_type", "Trading Combine $50K")
+        # Ensure saved account type is valid, fallback to default if not
+        if saved_account_type not in self.topstep_account_types:
+            saved_account_type = "Trading Combine $50K"
         self.account_type_var = tk.StringVar(value=saved_account_type)
         
         # Create styled dropdown frame
@@ -980,16 +983,17 @@ class QuoTradingLauncher:
         dropdown_frame.pack(fill=tk.X, padx=1, pady=1)
         
         # Create custom style for combobox to make it look better
+        # Use unique style name to avoid conflicts with other widgets
         style = ttk.Style()
         style.theme_use('clam')
-        style.configure('TopStep.TCombobox',
+        style.configure('TopStepAccount.TCombobox',
                        fieldbackground=self.colors['input_bg'],
                        background=self.colors['success'],
                        foreground=self.colors['text'],
                        arrowcolor=self.colors['success'],
                        borderwidth=0,
                        relief='flat')
-        style.map('TopStep.TCombobox',
+        style.map('TopStepAccount.TCombobox',
                  fieldbackground=[('readonly', self.colors['input_bg'])],
                  selectbackground=[('readonly', self.colors['input_focus'])],
                  selectforeground=[('readonly', self.colors['text'])])
@@ -999,7 +1003,7 @@ class QuoTradingLauncher:
             textvariable=self.account_type_var,
             state="readonly",
             font=("Segoe UI", 10),
-            style='TopStep.TCombobox',
+            style='TopStepAccount.TCombobox',
             values=list(self.topstep_account_types.keys())
         )
         self.account_type_dropdown.pack(fill=tk.X, ipady=6, padx=2, pady=2)
