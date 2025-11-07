@@ -82,6 +82,9 @@ class BotConfiguration:
     # Safety Parameters - USER CONFIGURABLE
     daily_loss_limit: float = 1000.0  # USER CONFIGURABLE - max $ loss per day (or auto-calculated)
     daily_loss_percent: float = 2.0  # USER CONFIGURABLE - max daily loss as % of account
+    max_drawdown_percent: float = 8.0  # USER CONFIGURABLE - max drawdown as % of account (prop firms typically 8-10%)
+    trailing_drawdown: bool = False  # USER CONFIGURABLE - Enable trailing drawdown protection
+    account_size: float = 50000.0  # USER CONFIGURABLE - account size for risk calculations
     auto_calculate_limits: bool = True  # USER CONFIGURABLE - auto-calculate limits from account balance
     tick_timeout_seconds: int = 999999  # Disabled for testing
     proactive_stop_buffer_ticks: int = 2
@@ -533,8 +536,11 @@ class BotConfiguration:
             # Dynamic AI Features (from GUI)
             "dynamic_confidence": self.dynamic_confidence,
             "dynamic_contracts": self.dynamic_contracts,
-            # Recovery Mode
+            # Recovery Mode and Account Settings
             "recovery_mode": self.recovery_mode,
+            "max_drawdown_percent": self.max_drawdown_percent,
+            "trailing_drawdown": self.trailing_drawdown,
+            "account_size": self.account_size,
         }
 
 
@@ -591,6 +597,25 @@ def load_from_env() -> BotConfiguration:
     # Recovery Mode (All Account Types)
     if os.getenv("BOT_RECOVERY_MODE"):
         config.recovery_mode = os.getenv("BOT_RECOVERY_MODE").lower() in ("true", "1", "yes")
+    
+    # Max Drawdown and Trailing Drawdown
+    if os.getenv("BOT_MAX_DRAWDOWN_PERCENT"):
+        config.max_drawdown_percent = float(os.getenv("BOT_MAX_DRAWDOWN_PERCENT"))
+    
+    if os.getenv("BOT_TRAILING_DRAWDOWN"):
+        config.trailing_drawdown = os.getenv("BOT_TRAILING_DRAWDOWN").lower() in ("true", "1", "yes")
+    
+    # Account Size (for risk calculations)
+    if os.getenv("ACCOUNT_SIZE"):
+        # Handle both numeric and string formats (e.g., "50000" or "50k")
+        account_size_str = os.getenv("ACCOUNT_SIZE")
+        try:
+            # Try parsing as float first
+            config.account_size = float(account_size_str)
+        except ValueError:
+            # Handle "50k", "100k" format
+            account_size_str = account_size_str.lower().replace("k", "000")
+            config.account_size = float(account_size_str)
     
     # RL/AI Configuration from GUI
     if os.getenv("BOT_CONFIDENCE_THRESHOLD"):
