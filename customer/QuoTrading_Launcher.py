@@ -30,9 +30,8 @@ class QuoTradingLauncher:
     def __init__(self):
         self.root = tk.Tk()
         self.root.title("QuoTrading - Professional Trading Platform")
-        self.root.geometry("700x800")
-        self.root.resizable(True, True)
-        self.root.minsize(700, 800)
+        self.root.geometry("650x600")
+        self.root.resizable(False, False)
         
         # Blue and White color scheme - Professional theme
         self.colors = {
@@ -117,30 +116,30 @@ class QuoTradingLauncher:
         header.pack_propagate(False)
         
         # Add subtle gradient effect with multiple frames
-        top_accent = tk.Frame(header, bg=self.colors['success'], height=3)
+        top_accent = tk.Frame(header, bg=self.colors['success'], height=2)
         top_accent.pack(fill=tk.X)
         
         title_label = tk.Label(
             header,
             text=title,
-            font=("Segoe UI", 18, "bold"),
+            font=("Segoe UI", 13, "bold"),
             bg=self.colors['success_dark'],
             fg='white'
         )
-        title_label.pack(pady=(15, 3))
+        title_label.pack(pady=(17, 2))
         
         if subtitle:
             subtitle_label = tk.Label(
                 header,
                 text=subtitle,
-                font=("Segoe UI", 10),
+                font=("Segoe UI", 7),
                 bg=self.colors['success_dark'],
                 fg='white'
             )
-            subtitle_label.pack(pady=(0, 5))
+            subtitle_label.pack(pady=(0, 8))
         
         # Bottom shadow effect
-        bottom_shadow = tk.Frame(header, bg=self.colors['shadow'], height=2)
+        bottom_shadow = tk.Frame(header, bg=self.colors['shadow'], height=1)
         bottom_shadow.pack(side=tk.BOTTOM, fill=tk.X)
         
         return header
@@ -148,16 +147,16 @@ class QuoTradingLauncher:
     def create_input_field(self, parent, label_text, is_password=False, placeholder=""):
         """Create a styled input field with label and premium design."""
         container = tk.Frame(parent, bg=self.colors['card'])
-        container.pack(fill=tk.X, pady=8)
+        container.pack(fill=tk.X, pady=2)
         
         label = tk.Label(
             container,
             text=label_text,
-            font=("Segoe UI", 10, "bold"),
+            font=("Segoe UI", 9, "bold"),
             bg=self.colors['card'],
             fg=self.colors['text']
         )
-        label.pack(anchor=tk.W, pady=(0, 4))
+        label.pack(anchor=tk.W, pady=(0, 1))
         
         # Create frame for input with border effect
         input_frame = tk.Frame(container, bg=self.colors['border'], bd=0)
@@ -165,7 +164,7 @@ class QuoTradingLauncher:
         
         entry = tk.Entry(
             input_frame,
-            font=("Segoe UI", 10),
+            font=("Segoe UI", 9),
             bg=self.colors['input_bg'],
             fg=self.colors['text'],
             insertbackground=self.colors['success'],
@@ -173,7 +172,7 @@ class QuoTradingLauncher:
             bd=0,
             show="●" if is_password else ""
         )
-        entry.pack(fill=tk.X, ipady=8, padx=2, pady=2)
+        entry.pack(fill=tk.X, ipady=4, padx=2, pady=2)
         
         # Add focus effects
         def on_focus_in(event):
@@ -212,30 +211,30 @@ class QuoTradingLauncher:
         if button_type == "next":
             bg = self.colors['success_dark']
             fg = 'white'
-            width = 18
+            width = 16
             height = 1
         elif button_type == "back":
             bg = self.colors['secondary']
             fg = self.colors['text']
-            width = 12
+            width = 10
             height = 1
         else:  # start, continue, or other button types
             bg = self.colors['success']
             fg = 'white'
-            width = 20
+            width = 18
             height = 1
         
         # Create frame for button with shadow effect
         button_container = tk.Frame(parent, bg=parent.cget('bg'))
         
         # Shadow effect
-        shadow = tk.Frame(button_container, bg=self.colors['shadow'], height=2)
-        shadow.pack(fill=tk.X, pady=(2, 0))
+        shadow = tk.Frame(button_container, bg=self.colors['shadow'], height=1)
+        shadow.pack(fill=tk.X, pady=(1, 0))
         
         button = tk.Button(
             button_container,
             text=text,
-            font=("Segoe UI", 11, "bold"),
+            font=("Segoe UI", 9, "bold"),
             bg=bg,
             fg=fg,
             activebackground=self.colors['button_hover'],
@@ -784,72 +783,45 @@ class QuoTradingLauncher:
         self.root.title("QuoTrading - Broker Setup")
         
         # Header
-        header = self.create_header("Broker Connection", "Select your account type and broker")
+        header = self.create_header("QuoTrading AI", "Select your account type and broker")
         
-        # Main container with scrolling
-        main = tk.Frame(self.root, bg=self.colors['background'])
+        # Main container - no scrolling
+        main = tk.Frame(self.root, bg=self.colors['background'], padx=10, pady=5)
         main.pack(fill=tk.BOTH, expand=True)
         
-        # Create canvas for scrolling
-        canvas = tk.Canvas(main, bg=self.colors['background'], highlightthickness=0)
-        scrollbar = tk.Scrollbar(main, orient="vertical", command=canvas.yview)
-        scrollable_frame = tk.Frame(canvas, bg=self.colors['background'])
-        
-        scrollable_frame.bind(
-            "<Configure>",
-            lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
-        )
-        
-        canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
-        canvas.configure(yscrollcommand=scrollbar.set)
-        
-        # Pack scrollbar and canvas
-        scrollbar.pack(side="right", fill="y")
-        canvas.pack(side="left", fill="both", expand=True)
-        
-        # Enable mouse wheel scrolling with cross-platform support
-        mousewheel_handler = self.create_mousewheel_handler(canvas)
-        canvas.bind("<MouseWheel>", mousewheel_handler)  # Windows/macOS
-        canvas.bind("<Button-4>", mousewheel_handler)    # Linux scroll up
-        canvas.bind("<Button-5>", mousewheel_handler)    # Linux scroll down
-        
-        # Container inside scrollable frame
-        container = tk.Frame(scrollable_frame, bg=self.colors['background'], padx=30, pady=15)
-        container.pack(fill=tk.BOTH, expand=True)
-        
         # Card
-        card = tk.Frame(container, bg=self.colors['card'], relief=tk.FLAT, bd=0)
+        card = tk.Frame(main, bg=self.colors['card'], relief=tk.FLAT, bd=0)
         card.pack(fill=tk.BOTH, expand=True)
         card.configure(highlightbackground=self.colors['border'], highlightthickness=2)
         
         # Card content
-        content = tk.Frame(card, bg=self.colors['card'], padx=25, pady=20)
+        content = tk.Frame(card, bg=self.colors['card'], padx=10, pady=6)
         content.pack(fill=tk.BOTH, expand=True)
         
         # Info message
         info = tk.Label(
             content,
             text="Choose your broker type and enter credentials",
-            font=("Segoe UI", 9),
+            font=("Segoe UI", 8),
             bg=self.colors['card'],
             fg=self.colors['text_light'],
             justify=tk.CENTER
         )
-        info.pack(pady=(0, 10))
+        info.pack(pady=(0, 4))
         
         # Broker Type Selection - Card-style buttons
         type_label = tk.Label(
             content,
             text="Account Type:",
-            font=("Segoe UI", 10, "bold"),
+            font=("Segoe UI", 9, "bold"),
             bg=self.colors['card'],
             fg=self.colors['text']
         )
-        type_label.pack(pady=(0, 8))
+        type_label.pack(pady=(0, 3))
         
         # Container for cards
         cards_container = tk.Frame(content, bg=self.colors['card'])
-        cards_container.pack(fill=tk.X, pady=(0, 10))
+        cards_container.pack(fill=tk.X, pady=(0, 4))
         
         # Initialize broker type variable
         self.broker_type_var = tk.StringVar(value=self.config.get("broker_type", "Prop Firm"))
@@ -870,7 +842,7 @@ class QuoTradingLauncher:
                 highlightthickness=2,
                 highlightbackground=self.colors['border'] if self.broker_type_var.get() == btype else self.colors['text_secondary']
             )
-            card_frame.pack(side=tk.LEFT, expand=True, fill=tk.BOTH, padx=5)
+            card_frame.pack(side=tk.LEFT, expand=True, fill=tk.BOTH, padx=3)
             
             # Make card clickable
             def make_select(bt=btype):
@@ -880,14 +852,14 @@ class QuoTradingLauncher:
             
             # Card content
             inner = tk.Frame(card_frame, bg=self.colors['secondary'])
-            inner.pack(expand=True, fill=tk.BOTH, padx=10, pady=10)
+            inner.pack(expand=True, fill=tk.BOTH, padx=4, pady=4)
             inner.bind("<Button-1>", make_select(btype))
             
             # Icon
             icon_label = tk.Label(
                 inner,
                 text=icon,
-                font=("Segoe UI", 20),
+                font=("Segoe UI", 12),
                 bg=self.colors['secondary'],
                 fg=self.colors['text']
             )
@@ -898,18 +870,18 @@ class QuoTradingLauncher:
             type_name = tk.Label(
                 inner,
                 text=btype,
-                font=("Segoe UI", 10, "bold"),
+                font=("Segoe UI", 8, "bold"),
                 bg=self.colors['secondary'],
                 fg=self.colors['text']
             )
-            type_name.pack(pady=(5, 3))
+            type_name.pack(pady=(2, 1))
             type_name.bind("<Button-1>", make_select(btype))
             
             # Description
             desc_label = tk.Label(
                 inner,
                 text=desc,
-                font=("Segoe UI", 8),
+                font=("Segoe UI", 7),
                 bg=self.colors['secondary'],
                 fg=self.colors['text_light']
             )
@@ -922,11 +894,11 @@ class QuoTradingLauncher:
         broker_label = tk.Label(
             content,
             text="Select Broker:",
-            font=("Segoe UI", 10, "bold"),
+            font=("Segoe UI", 9, "bold"),
             bg=self.colors['card'],
             fg=self.colors['text']
         )
-        broker_label.pack(anchor=tk.W, pady=(8, 3))
+        broker_label.pack(anchor=tk.W, pady=(4, 2))
         
         self.broker_var = tk.StringVar(value=self.config.get("broker", "TopStep"))
         self.broker_dropdown = ttk.Combobox(
@@ -936,24 +908,16 @@ class QuoTradingLauncher:
             font=("Segoe UI", 9),
             width=35
         )
-        self.broker_dropdown.pack(fill=tk.X, pady=(0, 10))
+        self.broker_dropdown.pack(fill=tk.X, pady=(0, 4))
         
         # Update broker options based on selected type
         self.update_broker_options()
-        
-        # QuoTrading API Key
-        self.quotrading_api_key_entry = self.create_input_field(
-            content,
-            "QuoTrading API Key:",
-            is_password=True,
-            placeholder=self.config.get("quotrading_api_key", "")
-        )
         
         # Account Type Selection (dynamic label based on broker)
         self.account_type_label = tk.Label(
             content,
             text="Account Type:",
-            font=("Segoe UI", 10, "bold"),
+            font=("Segoe UI", 9, "bold"),
             bg=self.colors['card'],
             fg=self.colors['text']
         )
@@ -1115,55 +1079,64 @@ class QuoTradingLauncher:
             dropdown_frame,
             textvariable=self.account_type_var,
             state="readonly",
-            font=("Segoe UI", 10),
+            font=("Segoe UI", 9),
             style='TopStepAccount.TCombobox',
             values=list(current_account_types.keys())
         )
-        self.account_type_dropdown.pack(fill=tk.X, ipady=6, padx=2, pady=2)
+        self.account_type_dropdown.pack(fill=tk.X, ipady=3, padx=2, pady=2)
         self.account_type_dropdown.bind("<<ComboboxSelected>>", self.update_account_type_info)
         
         # Account type info display
         self.account_info_display = tk.Label(
             content,
             text=current_account_types[saved_account_type]["description"],
-            font=("Segoe UI", 8),
+            font=("Segoe UI", 7),
             bg=self.colors['card'],
             fg=self.colors['text_light'],
             wraplength=500,
             justify=tk.LEFT
         )
-        self.account_info_display.pack(anchor=tk.W, pady=(3, 10))
+        self.account_info_display.pack(anchor=tk.W, pady=(2, 4))
         
-        # Broker credentials
-        self.broker_token_entry = self.create_input_field(
-            content,
-            "API Token:",
-            is_password=True,
-            placeholder=self.config.get("broker_token", "")
-        )
-        
+        # Broker Username
         self.broker_username_entry = self.create_input_field(
             content,
             "Username/Email:",
             placeholder=self.config.get("broker_username", "")
         )
         
+        # Broker API Token
+        self.broker_token_entry = self.create_input_field(
+            content,
+            "Broker API Key:",
+            is_password=True,
+            placeholder=self.config.get("broker_token", "")
+        )
+        
+        # QuoTrading API Key
+        self.quotrading_api_key_entry = self.create_input_field(
+            content,
+            "QuoTrading API Key:",
+            is_password=True,
+            placeholder=self.config.get("quotrading_api_key", "")
+        )
+        
         # Help text
         help_text = tk.Label(
             content,
             text="💡 Get your API credentials from your broker's account dashboard",
-            font=("Segoe UI", 8),
+            font=("Segoe UI", 7),
             bg=self.colors['card'],
             fg=self.colors['text_secondary']
         )
-        help_text.pack(pady=(3, 12))
+        help_text.pack(pady=(2, 4))
         
         # Button container
         button_frame = tk.Frame(content, bg=self.colors['card'])
-        button_frame.pack(fill=tk.X, pady=5)
+        button_frame.pack(fill=tk.X, pady=1)
         
-        # Continue button (no back button on first screen)
-        continue_btn = self.create_button(button_frame, "CONTINUE →", self.validate_broker, "next")
+        # Login button (no back button on first screen)
+        continue_btn = self.create_button(button_frame, "LOGIN", self.validate_broker, "next")
         continue_btn.pack(side=tk.RIGHT)
     
     def select_broker_type(self, broker_type):
