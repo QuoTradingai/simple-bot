@@ -85,9 +85,7 @@ class BotConfiguration:
     # Safety Parameters - USER CONFIGURABLE
     daily_loss_limit: float = 1000.0  # USER CONFIGURABLE - max $ loss per day (or auto-calculated)
     daily_loss_percent: float = 2.0  # USER CONFIGURABLE - max daily loss as % of account
-    max_drawdown_percent: float = 8.0  # USER CONFIGURABLE - max drawdown as % of account (prop firms typically 8-10%)
-    trailing_drawdown: bool = False  # USER CONFIGURABLE - Enable trailing drawdown protection
-    account_size: float = 50000.0  # USER CONFIGURABLE - account size for risk calculations
+    account_size: float = 50000.0  # USER CONFIGURABLE - account size for risk calculations (needed for recovery mode to track initial balance)
     auto_calculate_limits: bool = True  # USER CONFIGURABLE - auto-calculate limits from account balance
     tick_timeout_seconds: int = 999999  # Disabled for testing
     proactive_stop_buffer_ticks: int = 2
@@ -541,8 +539,6 @@ class BotConfiguration:
             "dynamic_contracts": self.dynamic_contracts,
             # Recovery Mode and Account Settings
             "recovery_mode": self.recovery_mode,
-            "max_drawdown_percent": self.max_drawdown_percent,
-            "trailing_drawdown": self.trailing_drawdown,
             "account_size": self.account_size,
         }
 
@@ -601,14 +597,7 @@ def load_from_env() -> BotConfiguration:
     if os.getenv("BOT_RECOVERY_MODE"):
         config.recovery_mode = os.getenv("BOT_RECOVERY_MODE").lower() in ("true", "1", "yes")
     
-    # Max Drawdown and Trailing Drawdown
-    if os.getenv("BOT_MAX_DRAWDOWN_PERCENT"):
-        config.max_drawdown_percent = float(os.getenv("BOT_MAX_DRAWDOWN_PERCENT"))
-    
-    if os.getenv("BOT_TRAILING_DRAWDOWN"):
-        config.trailing_drawdown = os.getenv("BOT_TRAILING_DRAWDOWN").lower() in ("true", "1", "yes")
-    
-    # Account Size (for risk calculations)
+    # Account Size (for risk calculations and recovery mode initial balance tracking)
     if os.getenv("ACCOUNT_SIZE"):
         # Handle both numeric and string formats (e.g., "50000", "50k", "50K")
         account_size_str = os.getenv("ACCOUNT_SIZE")
@@ -810,10 +799,6 @@ def load_config(environment: Optional[str] = None, backtest_mode: bool = False) 
         env_vars_set.add("auto_calculate_limits")
     if os.getenv("BOT_RECOVERY_MODE"):
         env_vars_set.add("recovery_mode")
-    if os.getenv("BOT_MAX_DRAWDOWN_PERCENT"):
-        env_vars_set.add("max_drawdown_percent")
-    if os.getenv("BOT_TRAILING_DRAWDOWN"):
-        env_vars_set.add("trailing_drawdown")
     if os.getenv("ACCOUNT_SIZE"):
         env_vars_set.add("account_size")
     if os.getenv("BOT_CONFIDENCE_THRESHOLD"):

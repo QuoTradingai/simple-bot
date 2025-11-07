@@ -23,27 +23,26 @@ The GUI collects the following settings from the user:
 ### Account Settings
 - **Broker Type**: Prop Firm or Live Broker
 - **Broker**: TopStep, Tradovate, etc.
-- **Account Size**: Starting equity (numeric, e.g., 50000)
+- **Account Size**: Starting equity (numeric, e.g., 50000) - **Used by recovery mode to track initial balance**
 - **Selected Account**: Fetched account from broker API
 
 ### Risk Management
 - **Max Contracts**: Maximum contracts per trade (enforced limits: Prop Firm = 5, Live = 25)
 - **Max Trades/Day**: Daily trade limit
-- **Max Drawdown %**: Maximum drawdown percentage (default: 8% for prop firms)
-- **Trailing Drawdown**: Enable trailing drawdown protection (soft floor)
-- **Daily Loss Limit**: Dollar amount for daily loss ($)
+- **Daily Loss Limit**: Dollar amount for daily loss ($) - **Primary limit tracked by recovery mode**
 
 ### Trading Settings
 - **Symbols**: Multiple symbol selection (ES, NQ, RTY, YM, CL, GC)
 - **Confidence Threshold**: Minimum AI confidence (%) for taking signals
-- **Dynamic Confidence**: Auto-increase confidence when approaching limits
+- **Dynamic Confidence**: Auto-increase confidence when approaching daily loss limit
 - **Dynamic Contracts**: Use AI confidence to scale contracts dynamically
 - **Shadow Mode**: Paper trading mode (no real trades)
 
 ### Recovery Mode
 - **Recovery Mode**: Enable/disable recovery mode
-  - **Enabled**: Bot continues trading when close to limits with higher confidence
-  - **Disabled**: Bot stops trading at 80% of limits, shows warnings
+  - **Enabled**: Bot continues trading when close to daily loss limit with higher confidence
+  - **Disabled**: Bot stops trading at 80% of daily loss limit, shows warnings
+  - **Tracks**: Initial balance (from account_size) and daily loss limit
 
 ## 2. Configuration Persistence (config.json)
 
@@ -164,38 +163,39 @@ All settings are validated at multiple levels:
 - Max trades per day
 - Confidence threshold (minimum)
 - Daily loss limit (if not auto-calculated)
-- Max drawdown percentage
+- Account size (initial balance for recovery mode)
 
 ### Dynamic Settings (Auto-Adjusted)
 - **Dynamic Confidence**: Bot increases confidence when:
   - Performance is poor
-  - Approaching account limits
+  - Approaching daily loss limit
   - Recovery mode is active
-  - Confidence scales: 75% @ 80% of limits, 85% @ 90%, 90% @ 95%+
+  - Confidence scales: 75% @ 80% of daily loss limit, 85% @ 90%, 90% @ 95%+
 
 - **Dynamic Contracts**: Bot scales contracts based on:
   - Signal confidence (higher confidence = more contracts)
   - Current performance (poor performance = fewer contracts)
-  - Distance to limits (closer to limits = fewer contracts)
+  - Distance to daily loss limit (closer to limit = fewer contracts)
 
 ## 8. Recovery Mode Behavior
 
 ### When DISABLED (Default - Safest)
-- Bot **warns** at 80% of daily loss
-- Bot **warns** at 80% of max drawdown
+- Bot **warns** at 80% of daily loss limit
 - Shows recommendations but user maintains full control
 - Bot continues running and monitoring
 - User can choose to apply recommendations
 
 ### When ENABLED (Aggressive Recovery)
-- Bot **continues trading** when approaching limits
-- Auto-increases confidence (75-90% based on severity)
+- Bot **continues trading** when approaching daily loss limit
+- Auto-increases confidence (75-90% based on severity of daily loss)
 - Auto-reduces position size dynamically
 - Attempts to recover from losses with highest-quality signals
 - Example progression:
-  - 80% of limits → 75% confidence, 75% position size
-  - 90% of limits → 85% confidence, 50% position size
-  - 95%+ of limits → 90% confidence, 33% position size
+  - 80% of daily loss limit → 75% confidence, 75% position size
+  - 90% of daily loss limit → 85% confidence, 50% position size
+  - 95%+ of daily loss limit → 90% confidence, 33% position size
+
+**Note**: Recovery mode only tracks daily loss limit and initial balance. No maximum drawdown or trailing drawdown tracking.
 
 ## 9. Testing
 

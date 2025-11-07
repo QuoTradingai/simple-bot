@@ -40,8 +40,6 @@ def test_env_variables():
         'BOT_INSTRUMENTS': 'Trading symbols',
         'BOT_MAX_CONTRACTS': 'Max contracts per trade',
         'BOT_MAX_TRADES_PER_DAY': 'Max trades per day',
-        'BOT_MAX_DRAWDOWN_PERCENT': 'Max drawdown percentage',
-        'BOT_TRAILING_DRAWDOWN': 'Trailing drawdown enabled',
         'BOT_DAILY_LOSS_LIMIT': 'Daily loss limit',
         'BOT_CONFIDENCE_THRESHOLD': 'Confidence threshold',
         'BOT_DYNAMIC_CONFIDENCE': 'Dynamic confidence enabled',
@@ -87,8 +85,6 @@ def test_config_loading():
         print(f"  Account Size:            ${config.account_size:,.2f}")
         print(f"  Max Contracts:           {config.max_contracts}")
         print(f"  Max Trades/Day:          {config.max_trades_per_day}")
-        print(f"  Max Drawdown %:          {config.max_drawdown_percent:.1f}%")
-        print(f"  Trailing Drawdown:       {config.trailing_drawdown}")
         print(f"  Daily Loss Limit:        ${config.daily_loss_limit:.2f}")
         print(f"  Confidence Threshold:    {config.rl_confidence_threshold * 100:.1f}%")
         print(f"  Dynamic Confidence:      {config.dynamic_confidence}")
@@ -172,7 +168,6 @@ def test_warnings_and_recommendations():
         
         warnings, recommendations, smart_settings = session.check_warnings_and_recommendations(
             account_size=50000.0,
-            max_drawdown_percent=8.0,
             daily_loss_limit=2000.0,  # $2000 limit, lost $1700 = 85%
             current_confidence=65.0,
             max_contracts=3,

@@ -1,5 +1,5 @@
 {
-  "last_updated": "2025-11-07T03:06:51.116700",
+  "last_updated": "2025-11-07T03:22:28.733034",
   "trading_date": "2025-11-07",
   "starting_equity": 50000.0,
   "current_equity": 48300.0,
@@ -14,7 +14,7 @@
   "warnings": [
     {
       "level": "warning",
-      "message": "\u26a0\ufe0f WARNING: Approaching limits (85% of max). Consider enabling Recovery Mode."
+      "message": "\u26a0\ufe0f WARNING: Approaching daily loss limit (85% of max). Consider enabling Recovery Mode."
     },
     {
       "level": "warning",
@@ -39,16 +39,12 @@
       "message": "\ud83d\udca1 SUGGEST: Set daily loss limit to $1000 (2% rule for TopStep)"
     },
     {
-      "priority": "medium",
-      "message": "\ud83d\udee1\ufe0f SUGGEST: Enable trailing drawdown protection for prop firm accounts"
-    },
-    {
       "priority": "info",
       "message": "\ud83d\udcca Current Daily Loss: $1700 of $2000 limit"
     },
     {
       "priority": "info",
-      "message": "\ud83d\udcc9 Current Drawdown: $1700 from starting $50000"
+      "message": "\ud83d\udcc9 Total Loss from Initial Balance: $1700 (started at $50000)"
     }
   ],
   "account_type": "prop_firm",
