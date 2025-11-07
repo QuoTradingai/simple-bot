@@ -21,6 +21,7 @@ import re
 import threading
 import time
 import requests  # For cloud API calls
+import platform  # For cross-platform mouse wheel support
 
 
 class QuoTradingLauncher:
@@ -29,8 +30,9 @@ class QuoTradingLauncher:
     def __init__(self):
         self.root = tk.Tk()
         self.root.title("QuoTrading - Professional Trading Platform")
-        self.root.geometry("600x600")
-        self.root.resizable(False, False)
+        self.root.geometry("700x800")
+        self.root.resizable(True, True)
+        self.root.minsize(700, 800)
         
         # Blue and White color scheme - Professional theme
         self.colors = {
@@ -81,6 +83,32 @@ class QuoTradingLauncher:
         
         # Start with broker screen (Screen 0)
         self.setup_broker_screen()
+    
+    def create_mousewheel_handler(self, canvas):
+        """
+        Create a cross-platform mouse wheel event handler for a canvas.
+        
+        Args:
+            canvas: The tkinter Canvas widget to scroll
+            
+        Returns:
+            Function that handles mouse wheel events
+        """
+        def handler(event):
+            # Platform-specific mouse wheel handling
+            system = platform.system()
+            if system == "Windows":
+                canvas.yview_scroll(int(-1*(event.delta/120)), "units")
+            elif system == "Darwin":  # macOS
+                canvas.yview_scroll(int(-1*event.delta), "units")
+            else:  # Linux and others
+                # Check for event.num attribute (Linux X11 scroll events)
+                if hasattr(event, 'num'):
+                    if event.num == 4:
+                        canvas.yview_scroll(-1, "units")
+                    elif event.num == 5:
+                        canvas.yview_scroll(1, "units")
+        return handler
     
     def create_header(self, title, subtitle=""):
         """Create a professional header for each screen with premium styling."""
@@ -758,12 +786,39 @@ class QuoTradingLauncher:
         # Header
         header = self.create_header("Broker Connection", "Select your account type and broker")
         
-        # Main container
-        main = tk.Frame(self.root, bg=self.colors['background'], padx=30, pady=15)
+        # Main container with scrolling
+        main = tk.Frame(self.root, bg=self.colors['background'])
         main.pack(fill=tk.BOTH, expand=True)
         
+        # Create canvas for scrolling
+        canvas = tk.Canvas(main, bg=self.colors['background'], highlightthickness=0)
+        scrollbar = tk.Scrollbar(main, orient="vertical", command=canvas.yview)
+        scrollable_frame = tk.Frame(canvas, bg=self.colors['background'])
+        
+        scrollable_frame.bind(
+            "<Configure>",
+            lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
+        )
+        
+        canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
+        canvas.configure(yscrollcommand=scrollbar.set)
+        
+        # Pack scrollbar and canvas
+        scrollbar.pack(side="right", fill="y")
+        canvas.pack(side="left", fill="both", expand=True)
+        
+        # Enable mouse wheel scrolling with cross-platform support
+        mousewheel_handler = self.create_mousewheel_handler(canvas)
+        canvas.bind("<MouseWheel>", mousewheel_handler)  # Windows/macOS
+        canvas.bind("<Button-4>", mousewheel_handler)    # Linux scroll up
+        canvas.bind("<Button-5>", mousewheel_handler)    # Linux scroll down
+        
+        # Container inside scrollable frame
+        container = tk.Frame(scrollable_frame, bg=self.colors['background'], padx=30, pady=15)
+        container.pack(fill=tk.BOTH, expand=True)
+        
         # Card
-        card = tk.Frame(main, bg=self.colors['card'], relief=tk.FLAT, bd=0)
+        card = tk.Frame(container, bg=self.colors['card'], relief=tk.FLAT, bd=0)
         card.pack(fill=tk.BOTH, expand=True)
         card.configure(highlightbackground=self.colors['border'], highlightthickness=2)
         
@@ -894,15 +949,15 @@ class QuoTradingLauncher:
             placeholder=self.config.get("quotrading_api_key", "")
         )
         
-        # TopStep Account Type Selection
-        account_type_label = tk.Label(
+        # Account Type Selection (dynamic label based on broker)
+        self.account_type_label = tk.Label(
             content,
-            text="TopStep Account Type:",
+            text="Account Type:",
             font=("Segoe UI", 10, "bold"),
             bg=self.colors['card'],
             fg=self.colors['text']
         )
-        account_type_label.pack(anchor=tk.W, pady=(8, 3))
+        self.account_type_label.pack(anchor=tk.W, pady=(8, 3))
         
         # Define TopStep account types with their rules
         self.topstep_account_types = {
@@ -971,12 +1026,70 @@ class QuoTradingLauncher:
             }
         }
         
+        # Define Tradovate account types
+        self.tradovate_account_types = {
+            "Live Account $5K": {
+                "size": "5000",
+                "daily_loss": "500",
+                "total_drawdown": "1000",
+                "profit_target": "N/A",
+                "description": "Personal funded account - $5,000 starting balance"
+            },
+            "Live Account $10K": {
+                "size": "10000",
+                "daily_loss": "1000",
+                "total_drawdown": "2000",
+                "profit_target": "N/A",
+                "description": "Personal funded account - $10,000 starting balance"
+            },
+            "Live Account $25K": {
+                "size": "25000",
+                "daily_loss": "2500",
+                "total_drawdown": "5000",
+                "profit_target": "N/A",
+                "description": "Personal funded account - $25,000 starting balance"
+            },
+            "Live Account $50K": {
+                "size": "50000",
+                "daily_loss": "5000",
+                "total_drawdown": "10000",
+                "profit_target": "N/A",
+                "description": "Personal funded account - $50,000 starting balance"
+            },
+            "Live Account $100K": {
+                "size": "100000",
+                "daily_loss": "10000",
+                "total_drawdown": "20000",
+                "profit_target": "N/A",
+                "description": "Personal funded account - $100,000 starting balance"
+            },
+            "Live Account (Custom)": {
+                "size": "10000",
+                "daily_loss": "1000",
+                "total_drawdown": "2000",
+                "profit_target": "N/A",
+                "description": "Custom account size - adjust values after selection"
+            }
+        }
+        
+        # Get current broker type to determine which account types to show
+        broker_type = self.broker_type_var.get()
+        if broker_type == "Prop Firm":
+            current_account_types = self.topstep_account_types
+            default_account_type = "Trading Combine $50K"
+        else:  # Live Broker
+            current_account_types = self.tradovate_account_types
+            default_account_type = "Live Account $10K"
+        
         # Get saved account type or default
-        saved_account_type = self.config.get("topstep_account_type", "Trading Combine $50K")
-        # Ensure saved account type is valid, fallback to default if not
-        if saved_account_type not in self.topstep_account_types:
-            saved_account_type = "Trading Combine $50K"
+        saved_account_type = self.config.get("account_type", default_account_type)
+        # Ensure saved account type is valid for current broker, fallback to default if not
+        if saved_account_type not in current_account_types:
+            saved_account_type = default_account_type
         self.account_type_var = tk.StringVar(value=saved_account_type)
+        
+        # Store current account types for access in other methods
+        self.current_account_types = current_account_types
         
         # Create styled dropdown frame
         dropdown_frame = tk.Frame(content, bg=self.colors['border'], bd=0)
@@ -1004,7 +1117,7 @@ class QuoTradingLauncher:
             state="readonly",
             font=("Segoe UI", 10),
             style='TopStepAccount.TCombobox',
-            values=list(self.topstep_account_types.keys())
+            values=list(current_account_types.keys())
         )
         self.account_type_dropdown.pack(fill=tk.X, ipady=6, padx=2, pady=2)
         self.account_type_dropdown.bind("<<ComboboxSelected>>", self.update_account_type_info)
@@ -1012,7 +1125,7 @@ class QuoTradingLauncher:
         # Account type info display
         self.account_info_display = tk.Label(
             content,
-            text=self.topstep_account_types[saved_account_type]["description"],
+            text=current_account_types[saved_account_type]["description"],
             font=("Segoe UI", 8),
             bg=self.colors['card'],
             fg=self.colors['text_light'],
@@ -1066,12 +1179,31 @@ class QuoTradingLauncher:
         
         # Update broker dropdown
         self.update_broker_options()
+        
+        # Update account types based on broker type
+        if broker_type == "Prop Firm":
+            self.current_account_types = self.topstep_account_types
+            default_account_type = "Trading Combine $50K"
+            self.account_type_label.config(text="TopStep Account Type:")
+        else:  # Live Broker
+            self.current_account_types = self.tradovate_account_types
+            default_account_type = "Live Account $10K"
+            self.account_type_label.config(text="Tradovate Account Type:")
+        
+        # Update dropdown values
+        self.account_type_dropdown['values'] = list(self.current_account_types.keys())
+        
+        # Set default account type for this broker
+        self.account_type_var.set(default_account_type)
+        
+        # Update info display
+        self.update_account_type_info()
     
     def update_account_type_info(self, event=None):
         """Update the account type info display when selection changes."""
         selected_type = self.account_type_var.get()
-        if selected_type in self.topstep_account_types:
-            account_info = self.topstep_account_types[selected_type]
+        if selected_type in self.current_account_types:
+            account_info = self.current_account_types[selected_type]
             self.account_info_display.config(text=account_info["description"])
     
     def update_broker_options(self):
@@ -1093,13 +1225,13 @@ class QuoTradingLauncher:
         username = self.broker_username_entry.get().strip()
         quotrading_api_key = self.quotrading_api_key_entry.get().strip()
         
-        # Get selected TopStep account type
+        # Get selected account type (works for both TopStep and Tradovate)
         account_type = self.account_type_var.get()
-        if account_type in self.topstep_account_types:
-            account_info = self.topstep_account_types[account_type]
+        if account_type in self.current_account_types:
+            account_info = self.current_account_types[account_type]
             account_size = account_info["size"]
         else:
-            account_size = "50000"  # Default fallback
+            account_size = "10000"  # Default fallback
         
         # Remove placeholder if present
         if quotrading_api_key == self.config.get("quotrading_api_key", ""):
@@ -1127,7 +1259,7 @@ class QuoTradingLauncher:
             self.config["broker_token"] = token
             self.config["broker_username"] = username
             self.config["quotrading_api_key"] = quotrading_api_key
-            self.config["topstep_account_type"] = account_type
+            self.config["account_type"] = account_type
             self.config["account_size"] = account_size
             self.config["broker_validated"] = True
             self.save_config()
@@ -1146,7 +1278,7 @@ class QuoTradingLauncher:
             self.config["broker_token"] = token
             self.config["broker_username"] = username
             self.config["quotrading_api_key"] = quotrading_api_key
-            self.config["topstep_account_type"] = account_type
+            self.config["account_type"] = account_type
             self.config["account_size"] = account_size
             self.config["broker_validated"] = True
             self.save_config()
@@ -1187,11 +1319,38 @@ class QuoTradingLauncher:
         header = self.create_header("Trading Controls", "Configure your trading strategy")
         
         # Main container with scrollbar capability
-        main = tk.Frame(self.root, bg=self.colors['background'], padx=25, pady=12)
+        main = tk.Frame(self.root, bg=self.colors['background'])
         main.pack(fill=tk.BOTH, expand=True)
         
+        # Create canvas for scrolling
+        canvas = tk.Canvas(main, bg=self.colors['background'], highlightthickness=0)
+        scrollbar = tk.Scrollbar(main, orient="vertical", command=canvas.yview)
+        scrollable_frame = tk.Frame(canvas, bg=self.colors['background'])
+        
+        scrollable_frame.bind(
+            "<Configure>",
+            lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
+        )
+        
+        canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
+        canvas.configure(yscrollcommand=scrollbar.set)
+        
+        # Pack scrollbar and canvas
+        scrollbar.pack(side="right", fill="y")
+        canvas.pack(side="left", fill="both", expand=True)
+        
+        # Enable mouse wheel scrolling with cross-platform support
+        mousewheel_handler = self.create_mousewheel_handler(canvas)
+        canvas.bind("<MouseWheel>", mousewheel_handler)  # Windows/macOS
+        canvas.bind("<Button-4>", mousewheel_handler)    # Linux scroll up
+        canvas.bind("<Button-5>", mousewheel_handler)    # Linux scroll down
+        
+        # Container inside scrollable frame
+        container = tk.Frame(scrollable_frame, bg=self.colors['background'], padx=25, pady=12)
+        container.pack(fill=tk.BOTH, expand=True)
+        
         # Card
-        card = tk.Frame(main, bg=self.colors['card'], relief=tk.FLAT, bd=0)
+        card = tk.Frame(container, bg=self.colors['card'], relief=tk.FLAT, bd=0)
         card.pack(fill=tk.BOTH, expand=True)
         card.configure(highlightbackground=self.colors['border'], highlightthickness=2)
         
@@ -1958,7 +2117,7 @@ class QuoTradingLauncher:
         summary_title.pack(pady=(0, 3))
         
         broker = self.config.get("broker", "TopStep")
-        account_type = self.config.get("topstep_account_type", "Trading Combine $50K")
+        account_type = self.config.get("account_type", "Trading Combine $50K")
         
         summary_text = tk.Label(
             summary_content,
