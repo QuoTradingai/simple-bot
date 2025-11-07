@@ -1384,24 +1384,6 @@ class QuoTradingLauncher:
         )
         important_label.pack(anchor=tk.W)
         
-        # Simple direct button test
-        def simple_test():
-            print("="*50)
-            print("BUTTON CLICKED!")
-            print("="*50)
-            messagebox.showinfo("Test", "Button is working!")
-            self.fetch_account_info()
-        
-        test_btn = tk.Button(
-            fetch_button_frame,
-            text="TEST FETCH",
-            command=simple_test,
-            bg="red",
-            fg="white",
-            font=("Segoe UI", 9, "bold")
-        )
-        test_btn.pack(pady=5)
-        
         fetch_btn = self.create_button(fetch_button_frame, "Fetch Account Info", self.fetch_account_info, "next")
         fetch_btn.pack()
         
