@@ -1436,9 +1436,18 @@ class QuoTradingLauncher:
         
         self.auto_adjust_info_label = self.account_info_label  # Reuse same label
         
-        # Symbol Selection
+        # ========================================
+        # SYMBOLS AND MODES SIDE BY SIDE
+        # ========================================
+        symbols_modes_container = tk.Frame(content, bg=self.colors['card'])
+        symbols_modes_container.pack(fill=tk.X, pady=(0, 4))
+        
+        # Left side - Symbol Selection
+        symbol_section = tk.Frame(symbols_modes_container, bg=self.colors['card'])
+        symbol_section.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 10))
+        
         symbol_label = tk.Label(
-            content,
+            symbol_section,
             text="Trading Symbols (select at least one):",
             font=("Segoe UI", 8, "bold"),
             bg=self.colors['card'],
@@ -1447,8 +1456,8 @@ class QuoTradingLauncher:
         symbol_label.pack(anchor=tk.W, pady=(0, 2))
         
         # Symbol checkboxes - 2 columns
-        symbol_frame = tk.Frame(content, bg=self.colors['card'])
-        symbol_frame.pack(fill=tk.X, pady=(0, 4))
+        symbol_frame = tk.Frame(symbol_section, bg=self.colors['card'])
+        symbol_frame.pack(fill=tk.X, pady=(0, 0))
         
         self.symbol_vars = {}
         symbols = [
@@ -1490,26 +1499,41 @@ class QuoTradingLauncher:
             )
             cb.grid(row=row, column=col, sticky=tk.W, padx=4, pady=0)
         
-        # ========================================
-        # TRADING MODES - Next to Symbols
-        # ========================================
-        modes_section = tk.Frame(content, bg=self.colors['card'])
-        modes_section.pack(fill=tk.X, pady=(6, 3))
+        # Right side - Trading Modes
+        modes_section = tk.Frame(symbols_modes_container, bg=self.colors['card'])
+        modes_section.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        
+        # News Avoidance (top)
+        news_avoid_frame = tk.Frame(modes_section, bg=self.colors['card'])
+        news_avoid_frame.pack(fill=tk.X, pady=(0, 8))
+        
+        self.avoid_news_var = tk.BooleanVar(value=self.config.get("avoid_news_days", False))
+        
+        tk.Checkbutton(
+            news_avoid_frame,
+            text="📰 Avoid High-Impact News Days",
+            variable=self.avoid_news_var,
+            command=self.save_config,
+            font=("Segoe UI", 7, "bold"),
+            bg=self.colors['card'],
+            fg=self.colors['text'],
+            selectcolor=self.colors['secondary'],
+            activebackground=self.colors['card'],
+            activeforeground=self.colors['success'],
+            cursor="hand2"
+        ).pack(anchor=tk.W)
         
         tk.Label(
-            modes_section,
-            text="Trading Modes:",
-            font=("Segoe UI", 8, "bold"),
+            news_avoid_frame,
+            text="Skip trading during major economic events (NFP, FOMC, CPI, PPI)",
+            font=("Segoe UI", 6),
             bg=self.colors['card'],
-            fg=self.colors['text']
-        ).pack(anchor=tk.W, pady=(0, 2))
-        
-        modes_row = tk.Frame(modes_section, bg=self.colors['card'])
-        modes_row.pack(fill=tk.X)
+            fg=self.colors['text_secondary']
+        ).pack(anchor=tk.W)
         
         # Confidence Trading
-        conf_mode_frame = tk.Frame(modes_row, bg=self.colors['card'])
-        conf_mode_frame.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 5))
+        conf_mode_frame = tk.Frame(modes_section, bg=self.colors['card'])
+        conf_mode_frame.pack(fill=tk.X, pady=(0, 5))
         
         self.confidence_trading_var = tk.BooleanVar(value=self.config.get("confidence_trading", False))
         
@@ -1548,8 +1572,8 @@ class QuoTradingLauncher:
         ).pack(anchor=tk.W)
         
         # Shadow Mode
-        shadow_mode_frame = tk.Frame(modes_row, bg=self.colors['card'])
-        shadow_mode_frame.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 5))
+        shadow_mode_frame = tk.Frame(modes_section, bg=self.colors['card'])
+        shadow_mode_frame.pack(fill=tk.X, pady=(0, 5))
         
         self.shadow_mode_var = tk.BooleanVar(value=self.config.get("shadow_mode", False))
         tk.Checkbutton(
@@ -1574,8 +1598,8 @@ class QuoTradingLauncher:
         ).pack(anchor=tk.W)
         
         # Recovery Mode
-        recovery_mode_frame = tk.Frame(modes_row, bg=self.colors['card'])
-        recovery_mode_frame.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        recovery_mode_frame = tk.Frame(modes_section, bg=self.colors['card'])
+        recovery_mode_frame.pack(fill=tk.X)
         
         self.recovery_mode_var = tk.BooleanVar(value=self.config.get("recovery_mode", False))
         
@@ -1636,6 +1660,43 @@ class QuoTradingLauncher:
         tk.Label(
             recovery_mode_frame,
             text="Reduces contract size when losing, keeps trading past daily limit",
+            font=("Segoe UI", 6),
+            bg=self.colors['card'],
+            fg=self.colors['text_secondary']
+        ).pack(anchor=tk.W)
+        
+        # Alert Notifications
+        alerts_frame = tk.Frame(modes_section, bg=self.colors['card'])
+        alerts_frame.pack(fill=tk.X, pady=(0, 5))
+        
+        self.alerts_enabled_var = tk.BooleanVar(value=self.config.get("alerts_enabled", False))
+        
+        def on_alerts_toggle():
+            """Show alert configuration dialog when enabling alerts."""
+            if self.alerts_enabled_var.get():
+                # User is enabling alerts - show configuration dialog
+                self.show_alerts_config_dialog()
+            else:
+                # User is disabling alerts
+                self.save_config()
+        
+        tk.Checkbutton(
+            alerts_frame,
+            text="🔔 Enable Trade Alerts",
+            variable=self.alerts_enabled_var,
+            command=on_alerts_toggle,
+            font=("Segoe UI", 7, "bold"),
+            bg=self.colors['card'],
+            fg=self.colors['text'],
+            selectcolor=self.colors['secondary'],
+            activebackground=self.colors['card'],
+            activeforeground=self.colors['success'],
+            cursor="hand2"
+        ).pack(anchor=tk.W)
+        
+        tk.Label(
+            alerts_frame,
+            text="Get notified via Email/SMS for trades, errors, and daily summaries",
             font=("Segoe UI", 6),
             bg=self.colors['card'],
             fg=self.colors['text_secondary']
@@ -2316,6 +2377,8 @@ class QuoTradingLauncher:
                 break
         
         self.config["recovery_mode"] = self.recovery_mode_var.get()
+        self.config["avoid_news_days"] = self.avoid_news_var.get()
+        self.config["alerts_enabled"] = self.alerts_enabled_var.get()
         self.save_config()
         
         # Create .env file
@@ -2397,6 +2460,358 @@ class QuoTradingLauncher:
                 f"Failed to launch bot:\n{str(e)}\n\n"
                 f"Make sure Python is installed and run.py exists."
             )
+    
+    def show_alerts_config_dialog(self):
+        """Show dialog to configure email/SMS alert settings."""
+        dialog = tk.Toplevel(self.root)
+        dialog.title("Configure Alerts")
+        dialog.geometry("550x650")
+        dialog.configure(bg=self.colors['background'])
+        dialog.resizable(False, False)
+        
+        # Center the dialog
+        dialog.transient(self.root)
+        dialog.grab_set()
+        
+        # Header
+        header_frame = tk.Frame(dialog, bg=self.colors['success_dark'], height=60)
+        header_frame.pack(fill=tk.X)
+        header_frame.pack_propagate(False)
+        
+        tk.Label(
+            header_frame,
+            text="📧 Alert Configuration",
+            font=("Segoe UI", 14, "bold"),
+            bg=self.colors['success_dark'],
+            fg='white'
+        ).pack(pady=15)
+        
+        # Scrollable content
+        canvas = tk.Canvas(dialog, bg=self.colors['card'], highlightthickness=0)
+        scrollbar = tk.Scrollbar(dialog, orient="vertical", command=canvas.yview)
+        content = tk.Frame(canvas, bg=self.colors['card'])
+        
+        content.bind(
+            "<Configure>",
+            lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
+        )
+        
+        canvas.create_window((0, 0), window=content, anchor="nw")
+        canvas.configure(yscrollcommand=scrollbar.set)
+        
+        canvas.pack(side="left", fill="both", expand=True, padx=20, pady=20)
+        scrollbar.pack(side="right", fill="y")
+        
+        # Email Provider Section
+        tk.Label(
+            content,
+            text="📨 Email Provider:",
+            font=("Segoe UI", 9, "bold"),
+            bg=self.colors['card'],
+            fg=self.colors['text']
+        ).pack(anchor=tk.W, pady=(0, 5))
+        
+        provider_var = tk.StringVar(value=self.config.get("smtp_provider", "gmail"))
+        provider_frame = tk.Frame(content, bg=self.colors['card'])
+        provider_frame.pack(fill=tk.X, pady=(0, 10))
+        
+        tk.Label(
+            provider_frame,
+            text="Provider:",
+            font=("Segoe UI", 8),
+            bg=self.colors['card'],
+            fg=self.colors['text']
+        ).pack(side=tk.LEFT)
+        
+        provider_dropdown = ttk.Combobox(
+            provider_frame,
+            textvariable=provider_var,
+            values=["gmail", "outlook", "yahoo", "office365", "custom"],
+            font=("Segoe UI", 9),
+            state="readonly",
+            width=15
+        )
+        provider_dropdown.pack(side=tk.LEFT, padx=(5, 0))
+        
+        # Primary Email Section
+        tk.Label(
+            content,
+            text="✉️ Primary Email Account:",
+            font=("Segoe UI", 9, "bold"),
+            bg=self.colors['card'],
+            fg=self.colors['text']
+        ).pack(anchor=tk.W, pady=(10, 5))
+        
+        tk.Label(
+            content,
+            text="Your Email Address:",
+            font=("Segoe UI", 8),
+            bg=self.colors['card'],
+            fg=self.colors['text']
+        ).pack(anchor=tk.W)
+        
+        email_var = tk.StringVar(value=self.config.get("alert_email", ""))
+        email_entry = tk.Entry(
+            content,
+            textvariable=email_var,
+            font=("Segoe UI", 9),
+            bg='white',
+            fg=self.colors['text']
+        )
+        email_entry.pack(fill=tk.X, pady=(2, 10))
+        
+        tk.Label(
+            content,
+            text="Email Password / App Password:",
+            font=("Segoe UI", 8),
+            bg=self.colors['card'],
+            fg=self.colors['text']
+        ).pack(anchor=tk.W)
+        
+        email_pass_var = tk.StringVar(value=self.config.get("alert_email_password", ""))
+        email_pass_entry = tk.Entry(
+            content,
+            textvariable=email_pass_var,
+            font=("Segoe UI", 9),
+            bg='white',
+            fg=self.colors['text'],
+            show="•"
+        )
+        email_pass_entry.pack(fill=tk.X, pady=(2, 5))
+        
+        # Provider-specific instructions
+        instruction_text = tk.StringVar()
+        instruction_label = tk.Label(
+            content,
+            textvariable=instruction_text,
+            font=("Segoe UI", 7),
+            bg=self.colors['card'],
+            fg=self.colors['text_secondary'],
+            wraplength=480,
+            justify=tk.LEFT
+        )
+        instruction_label.pack(anchor=tk.W, pady=(0, 10))
+        
+        def update_instructions(*args):
+            provider = provider_var.get()
+            if provider == "gmail":
+                instruction_text.set("💡 Gmail: Google Account → Security → 2-Step Verification → App Passwords → Generate")
+            elif provider == "outlook":
+                instruction_text.set("💡 Outlook/Hotmail: Use your regular email password (enable 2FA if required)")
+            elif provider == "yahoo":
+                instruction_text.set("💡 Yahoo: Account Settings → Security → Generate App Password")
+            elif provider == "office365":
+                instruction_text.set("💡 Office 365: Use your regular email password")
+            elif provider == "custom":
+                instruction_text.set("💡 Custom: Enter your SMTP server details below")
+                custom_smtp_frame.pack(fill=tk.X, pady=(5, 10), after=instruction_label)
+                return
+            # Hide custom SMTP fields for non-custom providers
+            custom_smtp_frame.pack_forget()
+        
+        provider_var.trace("w", update_instructions)
+        
+        # Custom SMTP Settings (hidden by default)
+        custom_smtp_frame = tk.Frame(content, bg=self.colors['card'])
+        
+        tk.Label(
+            custom_smtp_frame,
+            text="SMTP Server:",
+            font=("Segoe UI", 8),
+            bg=self.colors['card'],
+            fg=self.colors['text']
+        ).pack(anchor=tk.W)
+        
+        smtp_server_var = tk.StringVar(value=self.config.get("smtp_server", ""))
+        smtp_server_entry = tk.Entry(
+            custom_smtp_frame,
+            textvariable=smtp_server_var,
+            font=("Segoe UI", 9),
+            bg='white',
+            fg=self.colors['text']
+        )
+        smtp_server_entry.pack(fill=tk.X, pady=(2, 5))
+        
+        port_frame = tk.Frame(custom_smtp_frame, bg=self.colors['card'])
+        port_frame.pack(fill=tk.X, pady=(0, 5))
+        
+        tk.Label(
+            port_frame,
+            text="Port:",
+            font=("Segoe UI", 8),
+            bg=self.colors['card'],
+            fg=self.colors['text']
+        ).pack(side=tk.LEFT)
+        
+        smtp_port_var = tk.StringVar(value=str(self.config.get("smtp_port", "587")))
+        smtp_port_entry = tk.Entry(
+            port_frame,
+            textvariable=smtp_port_var,
+            font=("Segoe UI", 9),
+            bg='white',
+            fg=self.colors['text'],
+            width=10
+        )
+        smtp_port_entry.pack(side=tk.LEFT, padx=(5, 20))
+        
+        smtp_tls_var = tk.BooleanVar(value=self.config.get("smtp_tls", True))
+        tk.Checkbutton(
+            port_frame,
+            text="Use TLS/STARTTLS",
+            variable=smtp_tls_var,
+            font=("Segoe UI", 8),
+            bg=self.colors['card'],
+            fg=self.colors['text'],
+            selectcolor='white'
+        ).pack(side=tk.LEFT)
+        
+        # Additional Email Recipients
+        tk.Label(
+            content,
+            text="👥 Additional Email Recipients (Optional):",
+            font=("Segoe UI", 9, "bold"),
+            bg=self.colors['card'],
+            fg=self.colors['text']
+        ).pack(anchor=tk.W, pady=(15, 5))
+        
+        tk.Label(
+            content,
+            text="Add extra email addresses to receive alerts (comma-separated):",
+            font=("Segoe UI", 7),
+            bg=self.colors['card'],
+            fg=self.colors['text_secondary']
+        ).pack(anchor=tk.W)
+        
+        additional_emails_var = tk.StringVar(
+            value=", ".join(self.config.get("additional_alert_emails", []))
+        )
+        additional_emails_entry = tk.Entry(
+            content,
+            textvariable=additional_emails_var,
+            font=("Segoe UI", 9),
+            bg='white',
+            fg=self.colors['text']
+        )
+        additional_emails_entry.pack(fill=tk.X, pady=(2, 5))
+        
+        tk.Label(
+            content,
+            text="💡 Example: partner@email.com, manager@company.com",
+            font=("Segoe UI", 7),
+            bg=self.colors['card'],
+            fg=self.colors['text_secondary']
+        ).pack(anchor=tk.W, pady=(0, 15))
+        
+        # SMS Section
+        tk.Label(
+            content,
+            text="📱 SMS Notifications (Optional - Free via Email-to-SMS):",
+            font=("Segoe UI", 9, "bold"),
+            bg=self.colors['card'],
+            fg=self.colors['text']
+        ).pack(anchor=tk.W, pady=(0, 5))
+        
+        tk.Label(
+            content,
+            text="Phone Number (10 digits, no spaces):",
+            font=("Segoe UI", 8),
+            bg=self.colors['card'],
+            fg=self.colors['text']
+        ).pack(anchor=tk.W)
+        
+        phone_var = tk.StringVar(value=self.config.get("alert_phone", ""))
+        phone_entry = tk.Entry(
+            content,
+            textvariable=phone_var,
+            font=("Segoe UI", 9),
+            bg='white',
+            fg=self.colors['text']
+        )
+        phone_entry.pack(fill=tk.X, pady=(2, 10))
+        
+        tk.Label(
+            content,
+            text="Carrier:",
+            font=("Segoe UI", 8),
+            bg=self.colors['card'],
+            fg=self.colors['text']
+        ).pack(anchor=tk.W)
+        
+        carrier_var = tk.StringVar(value=self.config.get("alert_carrier", "verizon"))
+        carrier_dropdown = ttk.Combobox(
+            content,
+            textvariable=carrier_var,
+            values=[
+                "verizon", "att", "t-mobile", "sprint",
+                "boost", "cricket", "metro-pcs", "us-cellular",
+                "virgin", "google-fi", "xfinity", "mint",
+                "republic", "ting",
+                "rogers", "bell", "telus"
+            ],
+            font=("Segoe UI", 9),
+            state="readonly"
+        )
+        carrier_dropdown.pack(fill=tk.X, pady=(2, 15))
+        
+        # Initialize instructions
+        update_instructions()
+        
+        # Buttons
+        button_frame = tk.Frame(content, bg=self.colors['card'])
+        button_frame.pack(fill=tk.X, pady=(10, 0))
+        
+        def save_and_close():
+            # Parse additional emails
+            additional_emails = []
+            if additional_emails_var.get().strip():
+                additional_emails = [
+                    email.strip() 
+                    for email in additional_emails_var.get().split(",") 
+                    if email.strip()
+                ]
+            
+            self.config["smtp_provider"] = provider_var.get()
+            self.config["alert_email"] = email_var.get()
+            self.config["alert_email_password"] = email_pass_var.get()
+            self.config["additional_alert_emails"] = additional_emails
+            self.config["smtp_server"] = smtp_server_var.get()
+            self.config["smtp_port"] = int(smtp_port_var.get()) if smtp_port_var.get().isdigit() else 587
+            self.config["smtp_tls"] = smtp_tls_var.get()
+            self.config["alert_phone"] = phone_var.get()
+            self.config["alert_carrier"] = carrier_var.get()
+            self.save_config()
+            dialog.destroy()
+        
+        def cancel():
+            # User cancelled, disable alerts
+            self.alerts_enabled_var.set(False)
+            dialog.destroy()
+        
+        tk.Button(
+            button_frame,
+            text="Save Configuration",
+            command=save_and_close,
+            font=("Segoe UI", 9, "bold"),
+            bg=self.colors['success_dark'],
+            fg='white',
+            cursor="hand2",
+            relief=tk.FLAT,
+            padx=20,
+            pady=8
+        ).pack(side=tk.RIGHT, padx=(5, 0))
+        
+        tk.Button(
+            button_frame,
+            text="Cancel",
+            command=cancel,
+            font=("Segoe UI", 9),
+            bg=self.colors['card_elevated'],
+            fg=self.colors['text'],
+            cursor="hand2",
+            relief=tk.FLAT,
+            padx=20,
+            pady=8
+        ).pack(side=tk.RIGHT)
     
     def create_env_file(self):
         """Create .env file from GUI settings.

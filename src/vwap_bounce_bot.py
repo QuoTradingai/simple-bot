@@ -48,6 +48,7 @@ from config import load_config, BotConfiguration
 from event_loop import EventLoop, EventType, EventPriority, TimerManager
 from error_recovery import ErrorRecoveryManager, ErrorType as RecoveryErrorType
 from bid_ask_manager import BidAskManager, BidAskQuote
+from notifications import get_notifier
 from signal_confidence import SignalConfidenceRL
 
 # Conditionally import broker (only needed for live trading, not backtesting)
@@ -210,6 +211,16 @@ def initialize_broker() -> None:
         raise RuntimeError("Broker connection failed")
     
     logger.info("Broker connected successfully")
+    
+    # Send bot startup alert
+    try:
+        notifier = get_notifier()
+        notifier.send_error_alert(
+            error_message=f"Bot started successfully and connected to broker. Ready to trade {CONFIG.get('instrument', 'ES')}.",
+            error_type="Bot Started"
+        )
+    except Exception as e:
+        logger.debug(f"Failed to send startup alert: {e}")
 
 
 def check_broker_connection() -> None:
@@ -228,6 +239,17 @@ def check_broker_connection() -> None:
     # Check if broker reports as connected
     if not broker.connected:
         logger.warning("[HEALTH] Broker connection lost - attempting reconnection...")
+        
+        # Send connection error alert
+        try:
+            notifier = get_notifier()
+            notifier.send_error_alert(
+                error_message="Broker connection lost. Bot is attempting to reconnect automatically.",
+                error_type="Connection Error"
+            )
+        except Exception as e:
+            logger.debug(f"Failed to send connection error alert: {e}")
+        
         try:
             # Attempt to reconnect
             success = broker.connect(max_retries=2)
@@ -336,6 +358,17 @@ def place_market_order(symbol: str, side: str, quantity: int) -> Optional[Dict[s
             return order
         else:
             logger.error("Market order placement failed")
+            
+            # Send order error alert
+            try:
+                notifier = get_notifier()
+                notifier.send_error_alert(
+                    error_message=f"Failed to place market order: {side} {quantity} {symbol}",
+                    error_type="Order Error"
+                )
+            except Exception as e:
+                logger.debug(f"Failed to send order error alert: {e}")
+            
             action = recovery_manager.handle_error(
                 RecoveryErrorType.ORDER_REJECTION,
                 {"symbol": symbol, "side": side, "quantity": quantity}
@@ -343,6 +376,17 @@ def place_market_order(symbol: str, side: str, quantity: int) -> Optional[Dict[s
             return None
     except Exception as e:
         logger.error(f"Error placing market order: {e}")
+        
+        # Send order error alert
+        try:
+            notifier = get_notifier()
+            notifier.send_error_alert(
+                error_message=f"Exception placing market order: {str(e)}",
+                error_type="Order Error"
+            )
+        except Exception as alert_error:
+            logger.debug(f"Failed to send order error alert: {alert_error}")
+        
         action = recovery_manager.handle_error(
             RecoveryErrorType.SDK_CRASH,
             {"error": str(e), "function": "place_market_order"}
@@ -1493,6 +1537,18 @@ def validate_signal_requirements(symbol: str, bar_time: datetime) -> Tuple[bool,
     # Check daily trade limit
     if state[symbol]["daily_trade_count"] >= CONFIG["max_trades_per_day"]:
         logger.warning(f"Daily trade limit reached ({CONFIG['max_trades_per_day']}), stopping for the day")
+        
+        # Send max trades reached alert (only once)
+        if state[symbol]["daily_trade_count"] == CONFIG["max_trades_per_day"]:
+            try:
+                notifier = get_notifier()
+                notifier.send_error_alert(
+                    error_message=f"Max trades per day reached! Count: {state[symbol]['daily_trade_count']} / Limit: {CONFIG['max_trades_per_day']}. No more trades today.",
+                    error_type="Max Trades Reached"
+                )
+            except Exception as e:
+                logger.debug(f"Failed to send max trades alert: {e}")
+        
         return False, "Daily trade limit"
     
     # Daily loss limit DISABLED for backtesting
@@ -2790,6 +2846,19 @@ def execute_entry(symbol: str, side: str, entry_price: float) -> None:
     
     logger.info(f"  Final Entry Price: ${actual_fill_price:.2f}")
     
+    # Send trade entry alert
+    try:
+        notifier = get_notifier()
+        notifier.send_trade_alert(
+            trade_type="ENTRY",
+            symbol=symbol,
+            price=actual_fill_price,
+            contracts=contracts,
+            side="LONG" if side == 'buy' else "SHORT"
+        )
+    except Exception as e:
+        logger.debug(f"Failed to send entry alert: {e}")
+    
     # Record trade execution for cost tracking (Requirement 5)
     if bid_ask_manager is not None:
         try:
@@ -3532,6 +3601,19 @@ def check_time_decay_tightening(symbol: str, current_time: datetime) -> None:
     time_held = (current_time - entry_time).total_seconds() / 60.0  # minutes
     time_percentage = (time_held / max_holding_minutes) * 100.0
     
+    # Alert if position stuck (held > 120 minutes = 2 hours)
+    if time_held > 120 and not position.get("stuck_alert_sent", False):
+        try:
+            unrealized_pnl = position.get("unrealized_pnl", 0.0)
+            notifier = get_notifier()
+            notifier.send_error_alert(
+                error_message=f"Position stuck! Held for {time_held:.0f} minutes ({time_held/60:.1f} hours). Side: {side}. P&L: ${unrealized_pnl:.2f}",
+                error_type="Position Stuck"
+            )
+            position["stuck_alert_sent"] = True
+        except Exception as e:
+            logger.debug(f"Failed to send position stuck alert: {e}")
+    
     # Step 2 - Determine tightening level
     tightening_pct = None
     threshold_flag = None
@@ -3854,6 +3936,16 @@ def check_exit_conditions(symbol: str) -> None:
         logger.info(f"Time: {bar_time.strftime('%H:%M:%S %Z')}")
         logger.info("Flatten mode deactivated - ready for new entries")
         logger.info(SEPARATOR_LINE)
+        
+        # Send trading resumed alert
+        try:
+            notifier = get_notifier()
+            notifier.send_error_alert(
+                error_message=f"Market reopened at {bar_time.strftime('%I:%M %p %Z')}. Bot has resumed trading and is ready for new entries.",
+                error_type="Trading Resumed"
+            )
+        except Exception as e:
+            logger.debug(f"Failed to send trading resumed alert: {e}")
     
     # Phase Six: Enhanced flatten mode activation
     if trading_state == "flatten_mode" and not bot_status["flatten_mode"]:
@@ -3886,6 +3978,38 @@ def check_exit_conditions(symbol: str) -> None:
         logger.critical(SEPARATOR_LINE)
         logger.critical("FLATTEN MODE ACTIVATED - POSITION MUST CLOSE IN 15 MINUTES")
         logger.critical(SEPARATOR_LINE)
+        
+        # Send pre-maintenance daily recap alert
+        try:
+            notifier = get_notifier()
+            
+            # Calculate daily stats for recap
+            total_trades = state[symbol]["daily_trade_count"]
+            daily_pnl = state[symbol]["daily_pnl"]
+            stats = state[symbol]["session_stats"]
+            winning_trades = stats["win_count"]
+            losing_trades = stats["loss_count"]
+            total_completed = winning_trades + losing_trades
+            win_rate = (winning_trades / total_completed * 100) if total_completed > 0 else 0.0
+            
+            # Build recap message
+            recap_msg = f"📊 PRE-MAINTENANCE DAILY RECAP (4:45 PM ET)\n\n"
+            recap_msg += f"Trades Today: {total_trades}\n"
+            recap_msg += f"Daily P&L: ${daily_pnl:+.2f}\n"
+            recap_msg += f"Win Rate: {win_rate:.1f}% ({winning_trades}W/{losing_trades}L)\n"
+            
+            if position["quantity"] > 0:
+                recap_msg += f"\nOpen Position: {position['side'].upper()} {position['quantity']} @ ${position['entry_price']:.2f}\n"
+                recap_msg += f"Unrealized P&L: ${unrealized_pnl:+.2f}\n"
+            
+            recap_msg += f"\nBot entering flatten mode. All positions will close before 5:00 PM maintenance window."
+            
+            notifier.send_error_alert(
+                error_message=recap_msg,
+                error_type="Daily Recap"
+            )
+        except Exception as e:
+            logger.debug(f"Failed to send daily recap alert: {e}")
     
     # Minute-by-minute status logging during flatten mode
     if bot_status["flatten_mode"]:
@@ -4085,6 +4209,16 @@ def calculate_pnl(position: Dict[str, Any], exit_price: float) -> Tuple[float, f
             logger.warning(f"  Risk Taken: 4 ticks, Actual Loss: {slippage_ticks_actual + 4:.1f} ticks")
             logger.warning(f"  [WARN] Stop losses experiencing >{slippage_alert_threshold} tick slippage - consider tighter stops or avoid fast markets")
             logger.warning("=" * 80)
+            
+            # Send high slippage alert
+            try:
+                notifier = get_notifier()
+                notifier.send_error_alert(
+                    error_message=f"HIGH SLIPPAGE on stop loss! {slippage_ticks_actual:.1f} ticks (${slippage_cost_dollars:.2f}). Expected: ${exit_price:.2f}, Actual: ${actual_exit_price:.2f}. Fast market conditions detected.",
+                    error_type="High Slippage Warning"
+                )
+            except Exception as e:
+                logger.debug(f"Failed to send high slippage alert: {e}")
         elif slippage_ticks_actual > 0:
             # Normal slippage logging
             logger.info(f"  Exit Slippage: {slippage_ticks_actual:.1f} ticks (${slippage_cost_dollars:.2f})")
@@ -4223,8 +4357,18 @@ def handle_exit_orders(symbol: str, position: Dict[str, Any], exit_price: float,
         logger.critical("  [WARN] OVERNIGHT RISK - CONTACT BROKER TO FORCE CLOSE!")
         logger.critical("=" * 80)
         
-        # TODO: In production, send critical alert (email, SMS, webhook)
-        # send_critical_alert(f"FLATTEN FAILED: {symbol} {position['side']} {contracts} contracts")
+        # Send CRITICAL flatten failure alert
+        try:
+            unrealized_pnl = (exit_price - position['entry_price']) * contracts * CONFIG['tick_value'] / CONFIG['tick_size']
+            if position['side'] == 'short':
+                unrealized_pnl = -unrealized_pnl
+            notifier = get_notifier()
+            notifier.send_error_alert(
+                error_message=f"🆘 CRITICAL: FLATTEN FAILED after {max_attempts} attempts! Position: {position['side'].upper()} {contracts} {symbol}. Entry: ${position['entry_price']:.2f}. P&L: ${unrealized_pnl:.2f}. MANUAL INTERVENTION REQUIRED!",
+                error_type="FLATTEN FAILED - URGENT"
+            )
+        except Exception as e:
+            logger.debug(f"Failed to send flatten failure alert: {e}")
         
         return  # Cannot continue - manual intervention needed
     
@@ -4341,6 +4485,19 @@ def execute_exit(symbol: str, exit_price: float, reason: str) -> None:
     
     logger.info(f"  Entry: ${position['entry_price']:.2f}, Exit: ${exit_price:.2f}")
     logger.info(f"  Ticks: {ticks:+.1f}, P&L: ${pnl:+.2f}")
+    
+    # Send trade exit alert
+    try:
+        notifier = get_notifier()
+        notifier.send_trade_alert(
+            trade_type="EXIT",
+            symbol=symbol,
+            price=exit_price,
+            contracts=position['quantity'],
+            side="LONG" if position['side'] == 'long' else "SHORT"
+        )
+    except Exception as e:
+        logger.debug(f"Failed to send exit alert: {e}")
     
     # ADAPTIVE EXIT MANAGEMENT - Record trade result for streak tracking
     if CONFIG.get("adaptive_exits_enabled", True) and adaptive_manager is not None:
@@ -4858,6 +5015,16 @@ def check_daily_loss_limit(symbol: str) -> Tuple[bool, Optional[str]]:
             logger.critical("Trading STOPPED for the day")
             bot_status["trading_enabled"] = False
             bot_status["stop_reason"] = "daily_loss_limit"
+            
+            # Send daily loss limit breach alert
+            try:
+                notifier = get_notifier()
+                notifier.send_error_alert(
+                    error_message=f"DAILY LOSS LIMIT HIT! Trading stopped. Loss: ${state[symbol]['daily_pnl']:.2f} / Limit: ${-CONFIG['daily_loss_limit']:.2f}",
+                    error_type="Daily Loss Limit Breached"
+                )
+            except Exception as e:
+                logger.debug(f"Failed to send loss limit breach alert: {e}")
         return False, "Daily loss limit exceeded"
     return True, None
 
@@ -4891,6 +5058,17 @@ def check_approaching_failure(symbol: str) -> Tuple[bool, Optional[str], Optiona
     if daily_loss_limit > 0 and state[symbol]["daily_pnl"] <= -daily_loss_limit * RECOVERY_APPROACHING_THRESHOLD:
         daily_loss_severity = abs(state[symbol]["daily_pnl"]) / daily_loss_limit
         reason = f"Daily loss at {daily_loss_severity*100:.1f}% of limit (${state[symbol]['daily_pnl']:.2f}/${-daily_loss_limit:.2f})"
+        
+        # Send warning alert when approaching limit (80%)
+        try:
+            notifier = get_notifier()
+            notifier.send_daily_limit_warning(
+                current_loss=state[symbol]["daily_pnl"],
+                limit=daily_loss_limit
+            )
+        except Exception as e:
+            logger.debug(f"Failed to send daily limit warning: {e}")
+        
         return True, reason, daily_loss_severity
     
     return False, None, 0.0
@@ -5071,6 +5249,16 @@ def check_safety_conditions(symbol: str) -> Tuple[bool, Optional[str]]:
                     logger.warning("⚠️ CONFIDENCE TRADING: Will STOP trading if limit hit")
                 logger.warning("=" * 80)
                 bot_status["stop_reason"] = stop_reason
+                
+                # Send recovery/confidence mode activation alert
+                try:
+                    notifier = get_notifier()
+                    notifier.send_error_alert(
+                        error_message=f"{mode_name} ACTIVATED. Severity: {severity*100:.1f}%. {approach_reason}. Trading scaled down to highest-confidence signals only.",
+                        error_type=mode_name
+                    )
+                except Exception as e:
+                    logger.debug(f"Failed to send {mode_name} alert: {e}")
             
             # Store threshold and severity for use in signal evaluation and position sizing
             bot_status["recovery_confidence_threshold"] = required_confidence
@@ -5457,6 +5645,34 @@ def log_session_summary(symbol: str) -> None:
     format_time_statistics(stats)
     
     logger.info(SEPARATOR_LINE)
+    
+    # Send daily summary alert
+    try:
+        notifier = get_notifier()
+        total_trades = len(stats["trades"])
+        total_pnl = stats.get("total_pnl", 0.0)
+        win_count = stats.get("win_count", 0)
+        loss_count = stats.get("loss_count", 0)
+        win_rate = (win_count / total_trades * 100) if total_trades > 0 else 0.0
+        
+        # Calculate max drawdown from trade history
+        max_drawdown = 0.0
+        running_total = 0.0
+        peak = 0.0
+        for pnl in stats["trades"]:
+            running_total += pnl
+            peak = max(peak, running_total)
+            drawdown = peak - running_total
+            max_drawdown = max(max_drawdown, drawdown)
+        
+        notifier.send_daily_summary(
+            trades=total_trades,
+            profit_loss=total_pnl,
+            win_rate=win_rate,
+            max_drawdown=max_drawdown
+        )
+    except Exception as e:
+        logger.debug(f"Failed to send daily summary alert: {e}")
 
 
 def update_session_stats(symbol: str, pnl: float) -> None:
@@ -6193,6 +6409,16 @@ def handle_shutdown_event(data: Dict[str, Any]) -> None:
 def cleanup_on_shutdown() -> None:
     """Cleanup tasks on shutdown"""
     logger.info("Running cleanup tasks...")
+    
+    # Send bot shutdown alert
+    try:
+        notifier = get_notifier()
+        notifier.send_error_alert(
+            error_message="Bot is shutting down. All positions should be closed before shutdown.",
+            error_type="Bot Shutdown"
+        )
+    except Exception as e:
+        logger.debug(f"Failed to send shutdown alert: {e}")
     
     # Save state to disk
     if recovery_manager:

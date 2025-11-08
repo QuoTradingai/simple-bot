@@ -7,7 +7,7 @@
   "symbols": [
     "ES"
   ],
-  "account_size": "50000",
+  "account_size": "250000",
   "max_contracts": 1,
   "max_trades_per_day": 9999,
   "risk_per_trade": 0.012,
@@ -31,7 +31,7 @@
     "active": true
   },
   "broker_type": "Prop Firm",
-  "account_type": "Trading Combine $50K",
+  "account_type": "Trading Combine $250K",
   "broker_validated": true,
   "accounts": [
     {
@@ -42,7 +42,7 @@
       "type": "prop_firm"
     }
   ],
-  "selected_account": "Click 'Fetch Account Info' to load accounts",
+  "selected_account": "TopStep Account (alvarezjose4201@gmail.com) - $50,000.00",
   "fetched_account_balance": 50000.0,
   "fetched_account_type": "prop_firm",
   "max_trades": 12,
