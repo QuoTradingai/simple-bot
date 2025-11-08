@@ -5,17 +5,20 @@ FROM python:3.11-slim
 WORKDIR /app
 
 # Copy requirements
-COPY requirements-azure.txt .
+COPY requirements-signal.txt .
 
 # Install dependencies
-RUN pip install --no-cache-dir -r requirements-azure.txt
+RUN pip install --no-cache-dir -r requirements-signal.txt
 
 # Copy application files
-COPY main.py .
-COPY signal_engine.py .
+COPY signal_engine_v2.py .
 
 # Expose port
 EXPOSE 8000
 
-# Run the application
-CMD ["gunicorn", "main:app", "--workers", "2", "--worker-class", "uvicorn.workers.UvicornWorker", "--bind", "0.0.0.0:8000"]
+# Health check
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
+  CMD python -c "import requests; requests.get('http://localhost:8000/health')"
+
+# Run the signal engine
+CMD ["uvicorn", "signal_engine_v2:app", "--host", "0.0.0.0", "--port", "8000"]
