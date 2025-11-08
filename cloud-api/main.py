@@ -391,6 +391,85 @@ async def get_user_info(email: str, db: Session = Depends(get_db)):
         "created_at": user.created_at
     }
 
+@app.get("/api/v1/admin/dashboard")
+async def admin_dashboard(
+    admin_key: str = Header(None, alias="X-Admin-Key"),
+    db: Session = Depends(get_db)
+):
+    """
+    Admin dashboard - Get all users and stats
+    Requires admin key in X-Admin-Key header
+    """
+    # Verify admin key
+    if admin_key != "QUOTRADING_ADMIN_MASTER_2025":
+        raise HTTPException(status_code=403, detail="Invalid admin key")
+    
+    # Get all users
+    all_users = db.query(User).all()
+    
+    # Calculate stats
+    total_users = len(all_users)
+    active_subscriptions = len([u for u in all_users if u.subscription_status == "active"])
+    inactive_users = len([u for u in all_users if u.subscription_status == "inactive"])
+    past_due = len([u for u in all_users if u.subscription_status == "past_due"])
+    canceled = len([u for u in all_users if u.subscription_status == "canceled"])
+    
+    # Revenue calculation (monthly)
+    tier_prices = {"basic": 99, "pro": 199, "enterprise": 499}
+    monthly_revenue = sum(
+        tier_prices.get(u.subscription_tier, 0) 
+        for u in all_users 
+        if u.subscription_status == "active"
+    )
+    
+    # Tier breakdown
+    tier_counts = {
+        "basic": len([u for u in all_users if u.subscription_tier == "basic" and u.subscription_status == "active"]),
+        "pro": len([u for u in all_users if u.subscription_tier == "pro" and u.subscription_status == "active"]),
+        "enterprise": len([u for u in all_users if u.subscription_tier == "enterprise" and u.subscription_status == "active"])
+    }
+    
+    # Expiring soon (next 7 days)
+    from datetime import timedelta
+    seven_days = datetime.utcnow() + timedelta(days=7)
+    expiring_soon = [
+        {
+            "email": u.email,
+            "tier": u.subscription_tier,
+            "expires": u.subscription_end
+        }
+        for u in all_users 
+        if u.subscription_end and u.subscription_end <= seven_days and u.subscription_status == "active"
+    ]
+    
+    # User list
+    users_list = [
+        {
+            "email": u.email,
+            "status": u.subscription_status,
+            "tier": u.subscription_tier,
+            "expires": u.subscription_end,
+            "last_login": u.last_login,
+            "total_logins": u.total_logins,
+            "created": u.created_at
+        }
+        for u in all_users
+    ]
+    
+    return {
+        "summary": {
+            "total_users": total_users,
+            "active_subscriptions": active_subscriptions,
+            "inactive_users": inactive_users,
+            "past_due": past_due,
+            "canceled": canceled,
+            "monthly_revenue": f"${monthly_revenue:,.2f}"
+        },
+        "tier_breakdown": tier_counts,
+        "expiring_soon": expiring_soon,
+        "users": users_list
+    }
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)

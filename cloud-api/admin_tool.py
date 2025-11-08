@@ -71,6 +71,66 @@ def health_check():
     print_response(response)
     return response
 
+def view_dashboard():
+    """View complete admin dashboard"""
+    print("\n📊 Loading Admin Dashboard")
+    response = requests.get(
+        f"{API_URL}/api/v1/admin/dashboard",
+        headers={"X-Admin-Key": "QUOTRADING_ADMIN_MASTER_2025"}
+    )
+    print(f"Status: {response.status_code}")
+    
+    if response.status_code == 200:
+        data = response.json()
+        
+        print("\n" + "="*60)
+        print("📈 QUOTRADING DASHBOARD")
+        print("="*60)
+        
+        # Summary
+        summary = data["summary"]
+        print("\n📊 SUMMARY:")
+        print(f"  Total Users: {summary['total_users']}")
+        print(f"  Active Subscriptions: {summary['active_subscriptions']}")
+        print(f"  Inactive Users: {summary['inactive_users']}")
+        print(f"  Past Due: {summary['past_due']}")
+        print(f"  Canceled: {summary['canceled']}")
+        print(f"  💰 Monthly Revenue: {summary['monthly_revenue']}")
+        
+        # Tier breakdown
+        tiers = data["tier_breakdown"]
+        print("\n🎯 TIER BREAKDOWN:")
+        print(f"  Basic ($99/mo): {tiers['basic']} users")
+        print(f"  Pro ($199/mo): {tiers['pro']} users")
+        print(f"  Enterprise ($499/mo): {tiers['enterprise']} users")
+        
+        # Expiring soon
+        expiring = data["expiring_soon"]
+        if expiring:
+            print(f"\n⚠️  EXPIRING SOON ({len(expiring)}):")
+            for user in expiring:
+                print(f"  - {user['email']} ({user['tier']}) expires {user['expires']}")
+        else:
+            print("\n✅ No subscriptions expiring in next 7 days")
+        
+        # Users list
+        users = data["users"]
+        if users:
+            print(f"\n👥 ALL USERS ({len(users)}):")
+            for user in users[:10]:  # Show first 10
+                print(f"  - {user['email']}")
+                print(f"    Status: {user['status']} | Tier: {user['tier']}")
+                print(f"    Logins: {user['total_logins']} | Last: {user['last_login']}")
+            
+            if len(users) > 10:
+                print(f"  ... and {len(users) - 10} more users")
+        
+        print("\n" + "="*60)
+    else:
+        print_response(response)
+    
+    return response
+
 def main_menu():
     """Interactive menu"""
     while True:
@@ -82,7 +142,8 @@ def main_menu():
         print("3. Register New User")
         print("4. Validate License")
         print("5. Get User Info")
-        print("6. Run Full Test Suite")
+        print("6. 📊 View Dashboard (ALL USERS & STATS)")
+        print("7. Run Full Test Suite")
         print("0. Exit")
         print("="*50)
         
@@ -108,6 +169,9 @@ def main_menu():
             get_user_info(email)
         
         elif choice == "6":
+            view_dashboard()
+        
+        elif choice == "7":
             run_test_suite()
         
         elif choice == "0":
@@ -161,5 +225,7 @@ if __name__ == "__main__":
             health_check()
         elif sys.argv[1] == "admin":
             test_admin_key()
+        elif sys.argv[1] == "dashboard":
+            view_dashboard()
     else:
         main_menu()
