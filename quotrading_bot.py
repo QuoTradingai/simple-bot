@@ -434,7 +434,7 @@ class QuoTradingBot:
             ) as response:
                 if response.status == 200:
                     data = await response.json()
-                    logger.info(f"Trade experience saved - User trades: {data.get('user_total_trades')}, Win rate: {data.get('user_win_rate', 0):.1%}")
+                    logger.info(f"Trade experience saved - Shared pool: {data.get('total_shared_trades')} trades, Win rate: {data.get('shared_win_rate', 0):.1%}")
                 else:
                     logger.warning(f"Failed to save trade experience: {response.status}")
         except Exception as e:

@@ -368,18 +368,18 @@ async def update_market_data(bar: Dict):
 # ML/RL ENDPOINTS
 # ============================================================================
 
-# In-memory storage for trade experiences (will move to database later)
-# CRITICAL: Separated by user_id + symbol to prevent data contamination
-# Format: {user_id: {symbol: [experiences]}}
-user_experiences = {}
+# ============================================================================
+# RL EXPERIENCE STORAGE
+# ============================================================================
 
-def get_user_experiences(user_id: str, symbol: str) -> List:
-    """Get experiences for specific user + symbol (isolated data)"""
-    if user_id not in user_experiences:
-        user_experiences[user_id] = {}
-    if symbol not in user_experiences[user_id]:
-        user_experiences[user_id][symbol] = []
-    return user_experiences[user_id][symbol]
+# Single shared RL experience pool (everyone runs same strategy)
+# All users contribute to and learn from the same proven strategy
+signal_experiences = []  # Shared across all users
+exit_experiences = []    # Shared across all users
+
+def get_all_experiences() -> List:
+    """Get all RL experiences (shared learning - same strategy for everyone)"""
+    return signal_experiences
 
 @app.post("/api/ml/get_confidence")
 async def get_ml_confidence(request: Dict):
@@ -419,25 +419,25 @@ async def get_ml_confidence(request: Dict):
         price = request.get('price', 0.0)
         signal = request.get('signal', 'NONE')
         
-        # Get user-specific experiences for ML calculation
-        user_trades = get_user_experiences(user_id, symbol)
+        # Get ALL experiences (everyone learns from same strategy)
+        all_trades = signal_experiences
         
-        # Simple ML confidence based on user's historical performance
-        # TODO: Replace with actual RL model inference per user
+        # Simple ML confidence based on shared RL experiences
+        # Everyone contributes to and learns from the same pool
         confidence = calculate_signal_confidence(
-            user_experiences=user_trades,
+            all_experiences=all_trades,
             vwap_distance=abs(price - vwap) / vwap if vwap > 0 else 0,
             rsi=rsi,
             signal=signal
         )
         
-        logger.info(f"[{user_id}] ML Confidence: {symbol} {signal} @ {price}, RSI={rsi:.1f}, Confidence={confidence:.2%}, Trades={len(user_trades)}")
+        logger.info(f"ML Confidence: {symbol} {signal} @ {price}, RSI={rsi:.1f}, Confidence={confidence:.2%}, Total Trades={len(all_trades)}")
         
         return {
             "ml_confidence": confidence,
             "action": signal if confidence >= 0.5 else "NONE",
-            "model_version": "v2.0-user-isolated",
-            "user_trade_count": len(user_trades),
+            "model_version": "v4.0-shared-learning",
+            "total_trade_count": len(all_trades),
             "timestamp": datetime.utcnow().isoformat()
         }
         
@@ -452,30 +452,30 @@ async def get_ml_confidence(request: Dict):
         }
 
 
-def calculate_signal_confidence(user_experiences: List, vwap_distance: float, rsi: float, signal: str) -> float:
+def calculate_signal_confidence(all_experiences: List, vwap_distance: float, rsi: float, signal: str) -> float:
     """
-    Calculate ML confidence based on user's historical patterns
+    Calculate ML confidence based on shared RL experiences
     
-    This is a simple heuristic model that learns from each user's trades.
-    Will be replaced with trained RL model.
+    Everyone runs the same strategy, so everyone learns from the same data pool.
+    This is FASTER learning - more trades = better ML predictions sooner!
     
     Args:
-        user_experiences: List of this user's past trades (user-specific learning)
+        all_experiences: All trade results from all users (shared learning)
         vwap_distance: Distance from VWAP
         rsi: Current RSI value
         signal: 'LONG' or 'SHORT'
     """
     confidence = 0.5  # Start neutral
     
-    # Learn from user's past performance (user-specific RL)
-    if len(user_experiences) > 5:
-        # Calculate user's win rate for this signal type
-        similar_trades = [t for t in user_experiences if t.get('signal') == signal]
+    # Learn from ALL users' past performance (shared strategy = shared learning)
+    if len(all_experiences) > 20:
+        # Calculate win rate for this signal type across ALL users
+        similar_trades = [t for t in all_experiences if t.get('signal') == signal]
         if len(similar_trades) > 0:
             wins = sum(1 for t in similar_trades if t.get('pnl', 0) > 0)
-            user_win_rate = wins / len(similar_trades)
-            # Adjust confidence based on user's history
-            confidence = (confidence + user_win_rate) / 2
+            shared_win_rate = wins / len(similar_trades)
+            # Adjust confidence based on collective wisdom
+            confidence = (confidence + shared_win_rate) / 2
     
     # RSI confidence (stronger signals at extremes)
     if signal == "LONG":
@@ -551,25 +551,24 @@ async def save_trade_experience(trade: Dict):
             "experience_id": f"{user_id}_{symbol}_{datetime.utcnow().timestamp()}"
         }
         
-        # Store in user-specific array (data isolation!)
-        user_trades = get_user_experiences(user_id, symbol)
-        user_trades.append(experience)
+        # Store in SHARED array (everyone contributes to same strategy learning)
+        signal_experiences.append(experience)
         
-        # Calculate THIS USER's win rate (not global)
-        if len(user_trades) > 0:
-            wins = sum(1 for exp in user_trades if exp.get('pnl', 0) > 0)
-            win_rate = wins / len(user_trades)
+        # Calculate SHARED win rate (collective wisdom)
+        if len(signal_experiences) > 0:
+            wins = sum(1 for exp in signal_experiences if exp.get('pnl', 0) > 0)
+            win_rate = wins / len(signal_experiences)
         else:
             win_rate = 0.0
         
         logger.info(f"[{user_id}] Trade Saved: {symbol} {trade['side']} P&L=${trade['pnl']:.2f} | "
-                   f"User Total: {len(user_trades)} trades, Win Rate: {win_rate:.1%}")
+                   f"Total Shared Trades: {len(signal_experiences)}, Shared Win Rate: {win_rate:.1%}")
         
         return {
             "saved": True,
             "experience_id": experience["experience_id"],
-            "user_total_trades": len(user_trades),
-            "user_win_rate": win_rate
+            "total_shared_trades": len(signal_experiences),
+            "shared_win_rate": win_rate
         }
         
     except HTTPException:
@@ -580,52 +579,30 @@ async def save_trade_experience(trade: Dict):
 
 
 @app.get("/api/ml/stats")
-async def get_ml_stats(user_id: str = None, symbol: str = None):
+async def get_ml_stats():
     """
-    Get ML model statistics
+    Get shared ML statistics (everyone learns from same strategy)
+    """
+    if len(signal_experiences) == 0:
+        return {
+            "total_trades": 0,
+            "win_rate": 0.0,
+            "avg_pnl": 0.0,
+            "total_pnl": 0.0,
+            "message": "No trades yet - shared learning pool is empty"
+        }
     
-    Query params:
-        user_id: Optional - get stats for specific user
-        symbol: Optional - get stats for specific symbol
-    """
-    if user_id and symbol:
-        # User-specific stats
-        user_trades = get_user_experiences(user_id, symbol)
-        if len(user_trades) == 0:
-            return {
-                "user_id": user_id,
-                "symbol": symbol,
-                "total_trades": 0,
-                "win_rate": 0.0,
-                "avg_pnl": 0.0,
-                "total_pnl": 0.0
-            }
-        
-        wins = sum(1 for exp in user_trades if exp.get('pnl', 0) > 0)
-        total_pnl = sum(exp.get('pnl', 0) for exp in user_trades)
-        
-        return {
-            "user_id": user_id,
-            "symbol": symbol,
-            "total_trades": len(user_trades),
-            "win_rate": wins / len(user_trades),
-            "avg_pnl": total_pnl / len(user_trades),
-            "total_pnl": total_pnl,
-            "last_updated": datetime.utcnow().isoformat()
-        }
-    else:
-        # Global stats (all users)
-        total_users = len(user_experiences)
-        total_trades = sum(len(symbols.get(sym, [])) 
-                          for symbols in user_experiences.values() 
-                          for sym in symbols)
-        
-        return {
-            "total_users": total_users,
-            "total_trades": total_trades,
-            "message": "Use ?user_id=XXX&symbol=XXX for user-specific stats",
-            "last_updated": datetime.utcnow().isoformat()
-        }
+    wins = sum(1 for exp in signal_experiences if exp.get('pnl', 0) > 0)
+    total_pnl = sum(exp.get('pnl', 0) for exp in signal_experiences)
+    
+    return {
+        "total_trades": len(signal_experiences),
+        "win_rate": wins / len(signal_experiences),
+        "avg_pnl": total_pnl / len(signal_experiences),
+        "total_pnl": total_pnl,
+        "message": "Shared learning - all users contribute and benefit",
+        "last_updated": datetime.utcnow().isoformat()
+    }
 
 
 # ============================================================================
