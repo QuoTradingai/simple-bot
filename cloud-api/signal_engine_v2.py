@@ -560,15 +560,16 @@ async def save_trade_experience(trade: Dict):
         entry_vwap: float,
         entry_rsi: float,
         exit_reason: str,
-        duration_seconds: int,
-        ml_confidence_used: float
+        duration_minutes: float,  # Changed from duration_seconds
+        volatility: float,
+        streak: int
     }
     
     Returns: {
         saved: bool,
         experience_id: str,
-        user_total_trades: int,
-        user_win_rate: float
+        total_shared_trades: int,
+        shared_win_rate: float
     }
     """
     try:
@@ -580,8 +581,8 @@ async def save_trade_experience(trade: Dict):
                 "error": "user_id required"
             }
         
-        # Validate required fields
-        required_fields = ['symbol', 'side', 'entry_price', 'exit_price', 'pnl']
+        # Validate required fields (relaxed - only critical fields)
+        required_fields = ['symbol', 'side', 'pnl']
         for field in required_fields:
             if field not in trade:
                 raise HTTPException(status_code=400, detail=f"Missing required field: {field}")
