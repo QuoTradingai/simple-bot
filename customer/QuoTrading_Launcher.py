@@ -384,14 +384,10 @@ class QuoTradingLauncher:
             self.loading_window.destroy()
     
     def validate_api_call(self, api_type, credentials, success_callback, error_callback):
-        """Validate credentials with API call.
+        """Validate credentials with cloud API.
         
-        For production use, this validates credentials against appropriate endpoints:
-        - QuoTrading: Basic format validation (real API integration available via QUOTRADING_API_URL)
-        - Brokers: Credential presence validation (broker-specific APIs would go here)
-        
-        Note: This uses local validation. For cloud-based validation, integrate with
-        actual broker APIs by replacing the validation logic below.
+        QuoTrading: Validates against cloud subscription API
+        Brokers: Local format validation
         
         Args:
             api_type: "quotrading" or "broker"
@@ -402,21 +398,42 @@ class QuoTradingLauncher:
         def api_call():
             try:
                 if api_type == "quotrading":
+                    import requests
                     email = credentials.get("email", "")
                     api_key = credentials.get("api_key", "")
                     
-                    # Validate email format
-                    if not email or "@" not in email or "." not in email:
-                        self.root.after(0, lambda: error_callback("Invalid email format"))
-                        return
+                    # Get API URL from environment or use default
+                    import os
+                    api_url = os.getenv("QUOTRADING_API_URL", "https://quotrading-api.onrender.com")
                     
-                    # Validate API key presence and minimum length
-                    if not api_key or len(api_key) < 20:
-                        self.root.after(0, lambda: error_callback("Invalid API key format"))
-                        return
+                    # Call cloud API to validate license
+                    try:
+                        response = requests.post(
+                            f"{api_url}/api/v1/license/validate",
+                            json={"email": email, "api_key": api_key},
+                            timeout=10
+                        )
+                        
+                        if response.status_code == 200:
+                            data = response.json()
+                            # Save subscription limits to config
+                            self.config["max_contract_size"] = data.get("max_contract_size", 3)
+                            self.config["max_accounts"] = data.get("max_accounts", 1)
+                            self.config["subscription_tier"] = data.get("subscription_tier", "basic")
+                            self.config["subscription_end"] = data.get("subscription_end")
+                            self.save_config()
+                            self.root.after(0, success_callback)
+                        else:
+                            error_data = response.json()
+                            error_msg = error_data.get("detail", "License validation failed")
+                            self.root.after(0, lambda: error_callback(error_msg))
                     
-                    # Credentials are valid format
-                    self.root.after(0, success_callback)
+                    except requests.exceptions.Timeout:
+                        self.root.after(0, lambda: error_callback("Connection timeout - please check your internet connection"))
+                    except requests.exceptions.ConnectionError:
+                        self.root.after(0, lambda: error_callback("Cannot connect to QuoTrading servers - please check your internet"))
+                    except Exception as e:
+                        self.root.after(0, lambda: error_callback(f"API error: {str(e)}"))
                 
                 elif api_type == "broker":
                     broker = credentials.get("broker", "")
