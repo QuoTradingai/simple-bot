@@ -980,6 +980,300 @@ async def create_checkout_session():
         raise HTTPException(status_code=500, detail=str(e))
 
 # ============================================================================
+# ECONOMIC CALENDAR - FOMC AUTO-SCRAPER
+# ============================================================================
+
+import asyncio
+import threading
+from bs4 import BeautifulSoup
+import requests as req_lib
+
+# Global calendar state
+economic_calendar = {
+    "events": [],
+    "last_updated": None,
+    "next_update": None,
+    "source": "Federal Reserve + Manual"
+}
+
+def scrape_fomc_dates() -> List[Dict]:
+    """
+    Scrape FOMC meeting dates from Federal Reserve website
+    Returns list of FOMC events
+    """
+    fomc_events = []
+    
+    try:
+        logger.info("📅 Fetching FOMC dates from federalreserve.gov...")
+        
+        # Fetch Federal Reserve calendar page
+        url = "https://www.federalreserve.gov/monetarypolicy/fomccalendars.htm"
+        response = req_lib.get(url, timeout=10)
+        response.raise_for_status()
+        
+        soup = BeautifulSoup(response.text, 'html.parser')
+        
+        # Find FOMC meeting dates in the page
+        # The structure typically has dates in specific div/table elements
+        # This is a simplified parser - may need adjustment if Fed changes format
+        
+        # Look for date patterns (MM/DD/YYYY or Month DD, YYYY)
+        import re
+        date_pattern = r'(\d{1,2}/\d{1,2}/\d{4}|\w+ \d{1,2}, \d{4})'
+        
+        # Find all text containing potential dates
+        page_text = soup.get_text()
+        potential_dates = re.findall(date_pattern, page_text)
+        
+        logger.info(f"Found {len(potential_dates)} potential FOMC dates on Fed website")
+        
+        # Parse and format dates
+        from dateutil import parser as date_parser
+        
+        for date_str in potential_dates[:20]:  # Limit to next 20 meetings (years ahead)
+            try:
+                parsed_date = date_parser.parse(date_str)
+                
+                # Only include future dates
+                if parsed_date.date() > datetime.now().date():
+                    # Add FOMC Statement (2 PM ET)
+                    fomc_events.append({
+                        "date": parsed_date.strftime("%Y-%m-%d"),
+                        "time": "2:00pm",
+                        "currency": "USD",
+                        "event": "FOMC Statement",
+                        "impact": "high"
+                    })
+                    
+                    # Add FOMC Press Conference (2:30 PM ET)
+                    fomc_events.append({
+                        "date": parsed_date.strftime("%Y-%m-%d"),
+                        "time": "2:30pm",
+                        "currency": "USD",
+                        "event": "FOMC Press Conference",
+                        "impact": "high"
+                    })
+            except Exception as e:
+                logger.debug(f"Could not parse date: {date_str}")
+                continue
+        
+        logger.info(f"✅ Scraped {len(fomc_events)} FOMC events from Federal Reserve")
+        
+    except Exception as e:
+        logger.error(f"❌ Failed to scrape FOMC dates: {e}")
+        logger.info("Will use manual FOMC dates as fallback")
+    
+    return fomc_events
+
+def generate_predictable_events() -> List[Dict]:
+    """
+    Generate predictable economic events (NFP, CPI, PPI)
+    These follow consistent schedules
+    """
+    events = []
+    current_date = datetime.now().date()
+    
+    # Generate 12 months of events
+    for month_offset in range(12):
+        year = current_date.year + (current_date.month + month_offset - 1) // 12
+        month = (current_date.month + month_offset - 1) % 12 + 1
+        
+        # NFP - First Friday of month at 8:30 AM ET
+        first_day = datetime(year, month, 1).date()
+        days_until_friday = (4 - first_day.weekday()) % 7
+        first_friday = first_day + timedelta(days=days_until_friday)
+        
+        if first_friday > current_date:
+            events.append({
+                "date": first_friday.strftime("%Y-%m-%d"),
+                "time": "8:30am",
+                "currency": "USD",
+                "event": "Non-Farm Employment Change",
+                "impact": "high"
+            })
+        
+        # CPI - Typically around 13th of month at 8:30 AM ET
+        cpi_date = datetime(year, month, 13).date()
+        if cpi_date > current_date:
+            events.append({
+                "date": cpi_date.strftime("%Y-%m-%d"),
+                "time": "8:30am",
+                "currency": "USD",
+                "event": "Core CPI m/m",
+                "impact": "high"
+            })
+        
+        # PPI - Typically around 14th of month at 8:30 AM ET
+        ppi_date = datetime(year, month, 14).date()
+        if ppi_date > current_date:
+            events.append({
+                "date": ppi_date.strftime("%Y-%m-%d"),
+                "time": "8:30am",
+                "currency": "USD",
+                "event": "Core PPI m/m",
+                "impact": "high"
+            })
+    
+    return events
+
+def update_calendar():
+    """
+    Update economic calendar with latest FOMC + predictable events
+    Runs daily at 5 PM ET (Sunday-Friday)
+    """
+    try:
+        logger.info("📅 Updating economic calendar...")
+        
+        # Scrape FOMC dates from Federal Reserve
+        fomc_events = scrape_fomc_dates()
+        
+        # Generate predictable events
+        predictable_events = generate_predictable_events()
+        
+        # Combine and sort by date
+        all_events = fomc_events + predictable_events
+        all_events.sort(key=lambda x: x["date"])
+        
+        # Remove duplicates (keep first occurrence)
+        seen_dates = set()
+        unique_events = []
+        for event in all_events:
+            event_key = (event["date"], event["event"])
+            if event_key not in seen_dates:
+                seen_dates.add(event_key)
+                unique_events.append(event)
+        
+        # Update global calendar
+        economic_calendar["events"] = unique_events
+        economic_calendar["last_updated"] = datetime.utcnow().isoformat()
+        economic_calendar["next_update"] = get_next_update_time().isoformat()
+        
+        logger.info(f"✅ Calendar updated: {len(unique_events)} events ({len(fomc_events)} FOMC + {len(predictable_events)} NFP/CPI/PPI)")
+        
+    except Exception as e:
+        logger.error(f"❌ Calendar update failed: {e}")
+
+def get_next_update_time() -> datetime:
+    """
+    Calculate next update time: 5 PM ET, Sunday-Friday
+    """
+    et_tz = pytz.timezone("America/New_York")
+    now_et = datetime.now(et_tz)
+    
+    # Target time: 5 PM ET
+    target_time = now_et.replace(hour=17, minute=0, second=0, microsecond=0)
+    
+    # If past 5 PM today, schedule for tomorrow
+    if now_et >= target_time:
+        target_time += timedelta(days=1)
+    
+    # Skip Saturday (day 5)
+    while target_time.weekday() == 5:  # Saturday
+        target_time += timedelta(days=1)
+    
+    return target_time
+
+async def calendar_update_loop():
+    """
+    Background task that updates calendar daily at 5 PM ET (Sunday-Friday)
+    """
+    while True:
+        try:
+            next_update = get_next_update_time()
+            now = datetime.now(pytz.timezone("America/New_York"))
+            sleep_seconds = (next_update - now).total_seconds()
+            
+            logger.info(f"📅 Next calendar update: {next_update.strftime('%Y-%m-%d %I:%M %p ET')} ({sleep_seconds/3600:.1f} hours)")
+            
+            await asyncio.sleep(sleep_seconds)
+            
+            # Update calendar
+            update_calendar()
+            
+        except Exception as e:
+            logger.error(f"❌ Calendar update loop error: {e}")
+            # Wait 1 hour and retry
+            await asyncio.sleep(3600)
+
+def start_calendar_updater():
+    """Start background calendar updater in separate thread"""
+    def run_loop():
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        loop.run_until_complete(calendar_update_loop())
+    
+    thread = threading.Thread(target=run_loop, daemon=True)
+    thread.start()
+    logger.info("📅 Calendar updater started (5 PM ET, Sunday-Friday)")
+
+@app.get("/api/calendar/events")
+async def get_calendar_events(days: int = 7):
+    """
+    Get upcoming economic events for next N days
+    
+    Query params:
+        days: Number of days ahead to fetch (default 7)
+    """
+    today = datetime.now().date()
+    end_date = today + timedelta(days=days)
+    
+    upcoming_events = [
+        event for event in economic_calendar["events"]
+        if today <= datetime.strptime(event["date"], "%Y-%m-%d").date() <= end_date
+    ]
+    
+    return {
+        "events": upcoming_events,
+        "count": len(upcoming_events),
+        "last_updated": economic_calendar["last_updated"],
+        "next_update": economic_calendar["next_update"]
+    }
+
+@app.get("/api/calendar/today")
+async def get_todays_events():
+    """
+    Get today's high-impact economic events
+    Bots check this before placing trades
+    """
+    today = datetime.now().date().strftime("%Y-%m-%d")
+    
+    todays_events = [
+        event for event in economic_calendar["events"]
+        if event["date"] == today and event["impact"] == "high"
+    ]
+    
+    has_fomc = any("FOMC" in event["event"] for event in todays_events)
+    has_nfp = any("Non-Farm" in event["event"] for event in todays_events)
+    has_cpi = any("CPI" in event["event"] for event in todays_events)
+    
+    return {
+        "date": today,
+        "events": todays_events,
+        "count": len(todays_events),
+        "has_fomc": has_fomc,
+        "has_nfp": has_nfp,
+        "has_cpi": has_cpi,
+        "trading_recommended": len(todays_events) == 0
+    }
+
+@app.post("/api/admin/refresh_calendar")
+async def refresh_calendar(data: dict):
+    """
+    ADMIN ONLY: Manually trigger calendar refresh
+    """
+    admin_key = data.get("admin_key")
+    if admin_key != "QUOTRADING_ADMIN_2025":
+        raise HTTPException(status_code=403, detail="Invalid admin key")
+    
+    update_calendar()
+    
+    return {
+        "status": "refreshed",
+        "events_count": len(economic_calendar["events"]),
+        "last_updated": economic_calendar["last_updated"]
+    }
+
+# ============================================================================
 # STARTUP
 # ============================================================================
 
@@ -997,6 +1291,11 @@ async def startup_event():
     logger.info("=" * 60)
     logger.info("Signal Engine Ready! Waiting for market data...")
     logger.info("=" * 60)
+    
+    # Initialize economic calendar
+    logger.info("📅 Initializing economic calendar...")
+    update_calendar()  # Initial fetch
+    start_calendar_updater()  # Start background updater
 
 
 if __name__ == "__main__":
