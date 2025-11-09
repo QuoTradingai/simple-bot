@@ -12,6 +12,8 @@ RUN pip install --no-cache-dir -r requirements-signal.txt
 
 # Copy application files
 COPY cloud-api/signal_engine_v2.py .
+COPY cloud-api/database.py .
+COPY cloud-api/redis_manager.py .
 
 # Copy Kevin's proven RL experiences (178K signals + 121K exits)
 COPY data/signal_experience.json .

@@ -99,15 +99,6 @@ async def rate_limit_middleware(request: Request, call_next):
     # Process request
     response = await call_next(request)
     return response
-        
-        return JSONResponse(
-            status_code=429,
-            content={
-                "error": "Rate limit exceeded",
-                "message": f"Too many requests. Please try again in {remaining} seconds.",
-                "retry_after": remaining
-            }
-        )
     
     response = await call_next(request)
     return response
