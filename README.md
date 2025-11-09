@@ -173,16 +173,7 @@ export QUOTRADING_API_URL="https://your-app.azurewebsites.net"
 
 Proprietary - QuoTrading LLC
 
-## 🔑 Admin Access
-
-For development/testing, use the admin master key:
-```
-QUOTRADING_ADMIN_MASTER_2025
-```
-
-This bypasses all validation and grants immediate access.
-
-## 📧 Support
+##  Support
 
 - **Email**: support@quotrading.com
 - **Website**: https://quotrading.com

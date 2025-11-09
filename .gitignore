@@ -155,10 +155,13 @@ bot.pid
 /backups/
 /locks/
 
-# Customer builds
+# Build output
+/build/
 customer/dist/
 customer/build/
 customer/*.exe
+
+# Customer config (contains credentials)
 customer/config.json
 
 # Keep example/template files

@@ -148,9 +148,9 @@ async def rate_limit_middleware(request: Request, call_next):
 # STRIPE CONFIGURATION
 # ============================================================================
 
-# Stripe API keys (test mode)
-stripe.api_key = "sk_test_51SRMPJBcgS15fNXbqjX4EzgNBMwwMwMghcOmS8TbZsW5YloTMotI1TUtP2VccSxDKCtWMGOmrgyHB41DAwAwQkAw10@Ls9K2BHU"
-STRIPE_WEBHOOK_SECRET = None  # Set this after creating webhook in Stripe dashboard
+# Stripe API keys - Load from environment variables
+stripe.api_key = os.getenv("STRIPE_API_KEY", "")
+STRIPE_WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET", None)
 
 # In-memory license storage (for beta - will move to database later)
 active_licenses = {}  # {license_key: {email, expires_at, stripe_customer_id, stripe_subscription_id}}
