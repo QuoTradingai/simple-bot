@@ -63,7 +63,7 @@
   "smtp_tls": true,
   "alert_phone": "",
   "alert_carrier": "verizon",
-  "theme": "light",
+  "theme": "dark",
   "selected_account_id": "TOPSTEP_MAIN",
   "avoid_news_days": false,
   "alerts_enabled": false,

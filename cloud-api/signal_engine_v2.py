@@ -6,12 +6,16 @@ This runs 24/7 on Azure, calculates signals, and broadcasts them via API.
 Customers connect to fetch signals and execute locally on their TopStep accounts.
 """
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from datetime import datetime, time as datetime_time, timedelta
 from typing import Dict, Optional, List
 from collections import deque
 import pytz
 import logging
+import stripe
+import secrets
+import hashlib
+import json
 
 # Initialize FastAPI
 app = FastAPI(
@@ -23,6 +27,17 @@ app = FastAPI(
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# ============================================================================
+# STRIPE CONFIGURATION
+# ============================================================================
+
+# Stripe API keys (test mode)
+stripe.api_key = "sk_test_51SRMPJBcgS15fNXbqjX4EzgNBMwwMwMghcOmS8TbZsW5YloTMotI1TUtP2VccSxDKCtWMGOmrgyHB41DAwAwQkAw10@Ls9K2BHU"
+STRIPE_WEBHOOK_SECRET = None  # Set this after creating webhook in Stripe dashboard
+
+# In-memory license storage (for beta - will move to database later)
+active_licenses = {}  # {license_key: {email, expires_at, stripe_customer_id, stripe_subscription_id}}
 
 # ============================================================================
 # CONFIGURATION - Iteration 3 Settings (Your Proven Profitable Settings!)
@@ -661,6 +676,184 @@ async def get_ml_stats():
         "last_updated": datetime.utcnow().isoformat()
     }
 
+# ============================================================================
+# LICENSE MANAGEMENT ENDPOINTS
+# ============================================================================
+
+def generate_license_key() -> str:
+    """Generate a unique license key"""
+    random_bytes = secrets.token_bytes(16)
+    return hashlib.sha256(random_bytes).hexdigest()[:24].upper()
+
+@app.post("/api/license/validate")
+async def validate_license(data: dict):
+    """Validate if a license key is active"""
+    license_key = data.get("license_key", "").strip().upper()
+    
+    if not license_key:
+        raise HTTPException(status_code=400, detail="License key required")
+    
+    if license_key not in active_licenses:
+        raise HTTPException(status_code=403, detail="Invalid license key")
+    
+    license_info = active_licenses[license_key]
+    
+    # Check if expired
+    if license_info.get("expires_at"):
+        expires_at = datetime.fromisoformat(license_info["expires_at"])
+        if datetime.utcnow() > expires_at:
+            raise HTTPException(status_code=403, detail="License expired")
+    
+    return {
+        "valid": True,
+        "email": license_info.get("email"),
+        "expires_at": license_info.get("expires_at"),
+        "subscription_status": license_info.get("status", "active")
+    }
+
+@app.post("/api/license/activate")
+async def activate_license(data: dict):
+    """Manually activate a license (for beta testing)"""
+    email = data.get("email")
+    days = data.get("days", 30)  # Default 30 days
+    
+    if not email:
+        raise HTTPException(status_code=400, detail="Email required")
+    
+    license_key = generate_license_key()
+    expires_at = datetime.utcnow() + timedelta(days=days)
+    
+    active_licenses[license_key] = {
+        "email": email,
+        "expires_at": expires_at.isoformat(),
+        "status": "active",
+        "created_at": datetime.utcnow().isoformat()
+    }
+    
+    logger.info(f"🔑 License created: {license_key} for {email} (expires: {expires_at})")
+    
+    return {
+        "license_key": license_key,
+        "email": email,
+        "expires_at": expires_at.isoformat()
+    }
+
+@app.get("/api/license/list")
+async def list_licenses():
+    """List all active licenses (admin only - add auth later)"""
+    return {
+        "total": len(active_licenses),
+        "licenses": [
+            {
+                "key": key[:8] + "..." + key[-4:],  # Partially hide key
+                "email": info.get("email"),
+                "status": info.get("status"),
+                "expires_at": info.get("expires_at")
+            }
+            for key, info in active_licenses.items()
+        ]
+    }
+
+# ============================================================================
+# STRIPE WEBHOOK HANDLER
+# ============================================================================
+
+@app.post("/api/stripe/webhook")
+async def stripe_webhook(request: Request):
+    """Handle Stripe webhook events"""
+    payload = await request.body()
+    sig_header = request.headers.get("stripe-signature")
+    
+    if not STRIPE_WEBHOOK_SECRET:
+        logger.warning("⚠️ Stripe webhook secret not configured - skipping verification")
+        event = json.loads(payload)
+    else:
+        try:
+            event = stripe.Webhook.construct_event(
+                payload, sig_header, STRIPE_WEBHOOK_SECRET
+            )
+        except ValueError as e:
+            logger.error(f"Invalid payload: {e}")
+            raise HTTPException(status_code=400, detail="Invalid payload")
+        except stripe.error.SignatureVerificationError as e:
+            logger.error(f"Invalid signature: {e}")
+            raise HTTPException(status_code=400, detail="Invalid signature")
+    
+    # Handle the event
+    event_type = event["type"]
+    data = event["data"]["object"]
+    
+    logger.info(f"📬 Stripe webhook: {event_type}")
+    
+    if event_type == "checkout.session.completed":
+        # Payment successful - create license
+        customer_email = data.get("customer_email")
+        subscription_id = data.get("subscription")
+        customer_id = data.get("customer")
+        
+        if customer_email:
+            license_key = generate_license_key()
+            
+            # Subscription licenses don't expire (auto-renew)
+            active_licenses[license_key] = {
+                "email": customer_email,
+                "expires_at": None,  # Subscription - no expiry
+                "status": "active",
+                "stripe_customer_id": customer_id,
+                "stripe_subscription_id": subscription_id,
+                "created_at": datetime.utcnow().isoformat()
+            }
+            
+            logger.info(f"🎉 License created from payment: {license_key} for {customer_email}")
+            
+            # TODO: Send email with license key (add later)
+    
+    elif event_type == "customer.subscription.deleted":
+        # Subscription cancelled - revoke license
+        subscription_id = data.get("id")
+        
+        for key, info in list(active_licenses.items()):
+            if info.get("stripe_subscription_id") == subscription_id:
+                active_licenses[key]["status"] = "cancelled"
+                logger.info(f"❌ License cancelled: {key} (subscription ended)")
+    
+    elif event_type == "invoice.payment_failed":
+        # Payment failed - suspend license
+        subscription_id = data.get("subscription")
+        
+        for key, info in list(active_licenses.items()):
+            if info.get("stripe_subscription_id") == subscription_id:
+                active_licenses[key]["status"] = "suspended"
+                logger.warning(f"⚠️ License suspended: {key} (payment failed)")
+    
+    return {"status": "success"}
+
+# ============================================================================
+# STRIPE CHECKOUT
+# ============================================================================
+
+@app.post("/api/stripe/create-checkout")
+async def create_checkout_session():
+    """Create a Stripe Checkout session for subscription"""
+    try:
+        # Get the price ID from Stripe (you'll need to update this)
+        # For now, using a placeholder - you'll get this from Stripe dashboard
+        PRICE_ID = "price_PLACEHOLDER"  # TODO: Update with actual price ID
+        
+        checkout_session = stripe.checkout.Session.create(
+            mode="subscription",
+            line_items=[{
+                "price": PRICE_ID,
+                "quantity": 1,
+            }],
+            success_url="https://quotrading.com/success?session_id={CHECKOUT_SESSION_ID}",
+            cancel_url="https://quotrading.com/cancel",
+        )
+        
+        return {"session_id": checkout_session.id}
+    except Exception as e:
+        logger.error(f"Checkout error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 # ============================================================================
 # STARTUP
