@@ -68,7 +68,7 @@ _backtest_mode = os.getenv("BOT_BACKTEST_MODE", "false").lower() == "true"
 _bot_config = load_config(backtest_mode=_backtest_mode)
 
 # Only validate if not importing for live mode (live mode will validate after loading .env)
-if _backtest_mode or os.getenv("TOPSTEP_API_TOKEN"):
+if _backtest_mode or os.getenv("BROKER_API_TOKEN"):
     _bot_config.validate()  # Validate configuration at startup
 
 # Convert BotConfiguration to dictionary for backward compatibility with existing code
@@ -191,8 +191,8 @@ USE_CLOUD_SIGNALS = os.getenv("USE_CLOUD_SIGNALS", "true").lower() == "true"
 
 # Generate privacy-preserving user ID
 def get_user_id() -> str:
-    """Generate consistent user ID from TopStep username"""
-    username = CONFIG.get("topstep_username", "default_user")
+    """Generate consistent user ID from broker username"""
+    username = CONFIG.get("broker_username", "default_user")
     return hashlib.md5(username.encode()).hexdigest()[:12]
 
 USER_ID = get_user_id()

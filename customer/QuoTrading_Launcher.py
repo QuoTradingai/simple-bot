@@ -117,9 +117,6 @@ class QuoTradingLauncher:
             250000: 25   # $250k account = max 25 contracts
         }
         
-        # Cloud validation API URL
-        self.VALIDATION_API_URL = "http://localhost:5000/api/validate"  # Update with your cloud server URL
-        
         self.root.configure(bg=self.colors['background'])
         
         # Load saved config
@@ -483,372 +480,8 @@ class QuoTradingLauncher:
         thread = threading.Thread(target=api_call, daemon=True)
         thread.start()
     
-    def setup_username_screen(self):
-        """Screen 0: Login screen with cloud validation."""
-        # Clear window
-        for widget in self.root.winfo_children():
-            widget.destroy()
-        
-        self.current_screen = 0
-        self.root.title("QuoTrading - Login")
-        
-        # Header
-        header = self.create_header("QuoTrading Login", "Enter your credentials")
-        
-        # Main container
-        main = tk.Frame(self.root, bg=self.colors['background'], padx=30, pady=15)
-        main.pack(fill=tk.BOTH, expand=True)
-        
-        # Card
-        card = tk.Frame(main, bg=self.colors['card'], relief=tk.FLAT, bd=0)
-        card.pack(fill=tk.BOTH, expand=True, padx=15, pady=10)
-        card.configure(highlightbackground=self.colors['border'], highlightthickness=2)
-        
-        # Card content
-        content = tk.Frame(card, bg=self.colors['card'], padx=25, pady=20)
-        content.pack(fill=tk.BOTH, expand=True)
-        
-        # Welcome message
-        welcome = tk.Label(
-            content,
-            text="Sign In",
-            font=("Segoe UI", 14, "bold"),
-            bg=self.colors['card'],
-            fg=self.colors['text']
-        )
-        welcome.pack(pady=(0, 5))
-        
-        info = tk.Label(
-            content,
-            text="Enter your credentials to access QuoTrading AI",
-            font=("Segoe UI", 9),
-            bg=self.colors['card'],
-            fg=self.colors['text_light'],
-            justify=tk.CENTER
-        )
-        info.pack(pady=(0, 15))
-        
-        # Username input
-        self.username_entry = self.create_input_field(content, "Username:", placeholder=self.config.get("username", "Enter your username"))
-        
-        # Password input
-        self.password_entry = self.create_input_field(content, "Password:", is_password=True, placeholder="Enter your password")
-        
-        # API Key input
-        self.api_key_entry = self.create_input_field(content, "API Key:", is_password=True, placeholder=self.config.get("user_api_key", "Enter your API key"))
-        
-        # Instructions
-        instructions = tk.Label(
-            content,
-            text="All fields are required for authentication",
-            font=("Segoe UI", 8),
-            bg=self.colors['card'],
-            fg=self.colors['text_secondary'],
-            justify=tk.CENTER
-        )
-        instructions.pack(pady=(5, 15))
-        
-        # Button container
-        button_frame = tk.Frame(content, bg=self.colors['card'])
-        button_frame.pack(fill=tk.X, pady=10)
-        
-        # Next button (with validation)
-        next_btn = self.create_button(button_frame, "NEXT →", self.validate_login, "next")
-        next_btn.pack(side=tk.RIGHT)
-    
-    def validate_login(self):
-        """Validate login credentials with cloud server."""
-        username = self.username_entry.get().strip()
-        password = self.password_entry.get().strip()
-        api_key = self.api_key_entry.get().strip()
-        
-        # Remove placeholders if present (but don't remove actual values)
-        if username == "Enter your username" or username == self.config.get("username", ""):
-            username = ""
-        if password == "Enter your password":
-            password = ""
-        if api_key == "Enter your API key":
-            api_key = ""
-        
-        # Basic validation
-        if not username:
-            messagebox.showerror(
-                "Username Required",
-                "Please enter your username."
-            )
-            return
-        
-        if not password:
-            messagebox.showerror(
-                "Password Required",
-                "Please enter your password."
-            )
-            return
-        
-        if not api_key:
-            messagebox.showerror(
-                "API Key Required",
-                "Please enter your API key."
-            )
-            return
-        
-        # ADMIN BYPASS - Skip cloud validation for admin key
-        if api_key == "QUOTRADING_ADMIN_MASTER_2025":
-            # Save credentials
-            self.config["username"] = username
-            self.config["password"] = password
-            self.config["user_api_key"] = api_key
-            self.config["validated"] = True
-            self.config["user_data"] = {
-                "email": "admin@quotrading.com",
-                "account_type": "admin",
-                "active": True
-            }
-            self.save_config()
-            
-            # Show success and proceed immediately
-            messagebox.showinfo(
-                "Admin Access Granted",
-                f"Welcome, {username}!\n\nAdmin access granted."
-            )
-            self.setup_broker_screen()
-            return
-        
-        # Show loading spinner
-        self.show_loading("Validating credentials...")
-        
-        # Define success callback
-        def on_success(user_data):
-            self.hide_loading()
-            # Save credentials
-            self.config["username"] = username
-            self.config["password"] = password
-            self.config["user_api_key"] = api_key
-            self.config["validated"] = True
-            if user_data:
-                self.config["user_data"] = user_data
-            self.save_config()
-            
-            # Show success message
-            messagebox.showinfo(
-                "Login Successful",
-                f"Welcome, {username}!\n\nYour credentials have been validated."
-            )
-            
-            # Proceed to Broker setup
-            self.setup_broker_screen()
-        
-        # Define error callback
-        def on_error(error_msg):
-            self.hide_loading()
-            messagebox.showerror(
-                "Login Failed",
-                f"Authentication failed: {error_msg}\n\n"
-                f"Please check your credentials and try again."
-            )
-        
-        # Make cloud API validation call
-        credentials = {
-            "username": username,
-            "password": password,
-            "api_key": api_key
-        }
-        self.validate_cloud_credentials(credentials, on_success, on_error)
-    
-    def validate_cloud_credentials(self, credentials, success_callback, error_callback):
-        """Validate credentials with cloud API.
-        
-        This method makes an HTTP request to the cloud validation server.
-        
-        Args:
-            credentials: dict with username, password, and api_key
-            success_callback: function to call on successful validation (receives user_data)
-            error_callback: function to call on validation failure (receives error message)
-        """
-        def api_call():
-            try:
-                # Make HTTP POST request to cloud validation server
-                response = requests.post(
-                    self.VALIDATION_API_URL,
-                    json=credentials,
-                    timeout=10
-                )
-                
-                if response.status_code == 200:
-                    data = response.json()
-                    if data.get("valid"):
-                        # Successful validation
-                        user_data = data.get("user_data", {})
-                        self.root.after(0, lambda: success_callback(user_data))
-                    else:
-                        # Invalid credentials
-                        error_msg = data.get("message", "Invalid credentials")
-                        self.root.after(0, lambda: error_callback(error_msg))
-                else:
-                    # Server error
-                    error_msg = f"Server error: {response.status_code}"
-                    self.root.after(0, lambda: error_callback(error_msg))
-                    
-            except requests.exceptions.ConnectionError:
-                self.root.after(0, lambda: error_callback(
-                    "Cannot connect to validation server. Please check your internet connection."
-                ))
-            except requests.exceptions.Timeout:
-                self.root.after(0, lambda: error_callback(
-                    "Request timed out. Please try again."
-                ))
-            except Exception as e:
-                self.root.after(0, lambda: error_callback(
-                    f"Validation error: {str(e)}"
-                ))
-        
-        # Start API call in background thread
-        thread = threading.Thread(target=api_call, daemon=True)
-        thread.start()
-    
-    def setup_quotrading_screen(self):
-        """Screen 1: QuoTrading Account Setup with Email + API Key validation."""
-        # Clear window
-        for widget in self.root.winfo_children():
-            widget.destroy()
-        
-        self.current_screen = 1
-        self.root.title("QuoTrading - Account Setup")
-        
-        # Header
-        header = self.create_header("QuoTrading Account", "Enter your subscription credentials")
-        
-        # Main container
-        main = tk.Frame(self.root, bg=self.colors['background'], padx=30, pady=15)
-        main.pack(fill=tk.BOTH, expand=True)
-        
-        # Card
-        card = tk.Frame(main, bg=self.colors['card'], relief=tk.FLAT, bd=0)
-        card.pack(fill=tk.BOTH, expand=True)
-        card.configure(highlightbackground=self.colors['border'], highlightthickness=2)
-        
-        # Card content
-        content = tk.Frame(card, bg=self.colors['card'], padx=25, pady=20)
-        content.pack(fill=tk.BOTH, expand=True)
-        
-        # Info message
-        info = tk.Label(
-            content,
-            text="Enter your QuoTrading subscription details.\nWe'll validate your access before proceeding.",
-            font=("Segoe UI", 9),
-            bg=self.colors['card'],
-            fg=self.colors['text_light'],
-            justify=tk.CENTER
-        )
-        info.pack(pady=(0, 15))
-        
-        # Email input
-        self.email_entry = self.create_input_field(
-            content, 
-            "Email Address:",
-            placeholder=self.config.get("quotrading_email", "your.email@example.com")
-        )
-        
-        # API Key input
-        self.api_key_entry = self.create_input_field(
-            content,
-            "API Key:",
-            is_password=True,
-            placeholder=self.config.get("quotrading_api_key", "")
-        )
-        
-        # Help text
-        help_text = tk.Label(
-            content,
-            text="📧 Check your email for your API key\n💡 Contact support@quotrading.com if you need help",
-            font=("Segoe UI", 8),
-            bg=self.colors['card'],
-            fg=self.colors['text_secondary'],
-            justify=tk.CENTER
-        )
-        help_text.pack(pady=(5, 15))
-        
-        # Button container
-        button_frame = tk.Frame(content, bg=self.colors['card'])
-        button_frame.pack(fill=tk.X, pady=10)
-        
-        # Back button
-        back_btn = self.create_button(button_frame, "← BACK", self.setup_username_screen, "back")
-        back_btn.pack(side=tk.LEFT, padx=(0, 10))
-        
-        # Next button
-        next_btn = self.create_button(button_frame, "NEXT →", self.validate_quotrading, "next")
-        next_btn.pack(side=tk.RIGHT)
-    
-    def validate_quotrading(self):
-        """Validate QuoTrading credentials before proceeding."""
-        email = self.email_entry.get().strip()
-        api_key = self.api_key_entry.get().strip()
-        
-        # Remove placeholders
-        if email == "your.email@example.com":
-            email = ""
-        
-        # Validation
-        if not email or not api_key:
-            messagebox.showerror(
-                "Missing Information",
-                "Please enter both your email and API key."
-            )
-            return
-        
-        # Validate email format
-        email_pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
-        if not re.match(email_pattern, email):
-            messagebox.showerror(
-                "Invalid Email",
-                "Please enter a valid email address."
-            )
-            return
-        
-        # Admin master key - instant access
-        if api_key == "QUOTRADING_ADMIN_MASTER_2025":
-            self.config["quotrading_email"] = email
-            self.config["quotrading_api_key"] = api_key
-            self.config["quotrading_validated"] = True
-            self.save_config()
-            self.setup_broker_screen()
-            return
-        
-        # Validate API key format (basic check)
-        if len(api_key) < 20:
-            messagebox.showerror(
-                "Invalid API Key",
-                "API key appears to be invalid.\nPlease check your email for the correct API key."
-            )
-            return
-        
-        # Show loading spinner
-        self.show_loading("Validating QuoTrading credentials...")
-        
-        # Define success callback
-        def on_success():
-            self.hide_loading()
-            # Save credentials
-            self.config["quotrading_email"] = email
-            self.config["quotrading_api_key"] = api_key
-            self.config["quotrading_validated"] = True
-            self.save_config()
-            # Proceed to broker setup
-            self.setup_broker_screen()
-        
-        # Define error callback
-        def on_error(error_msg):
-            self.hide_loading()
-            messagebox.showerror(
-                "Validation Failed",
-                f"❌ {error_msg}\n\nPlease check your credentials and try again.\n\n"
-                f"If you continue to have issues, contact support@quotrading.com"
-            )
-        
-        # Make API validation call
-        credentials = {"email": email, "api_key": api_key}
-        self.validate_api_call("quotrading", credentials, on_success, on_error)
+        # Run validation in background thread
+        threading.Thread(target=validate, daemon=True).start()
     
     def setup_broker_screen(self):
         """Screen 0: Broker Connection Setup with QuoTrading API Key and Account Size."""
@@ -1198,14 +831,14 @@ class QuoTradingLauncher:
         if saved_token:
             self.broker_token_entry.insert(0, saved_token)
         
-        # QuoTrading API Key
+        # QuoTrading License Key
         self.quotrading_api_key_entry = self.create_input_field(
             content,
-            "QuoTrading API Key:",
+            "QuoTrading License Key:",
             is_password=True,
             placeholder=""
         )
-        # Load saved QuoTrading key if exists
+        # Load saved QuoTrading license key if exists
         saved_quotrading_key = self.config.get("quotrading_api_key", "")
         if saved_quotrading_key:
             self.quotrading_api_key_entry.insert(0, saved_quotrading_key)
@@ -1332,11 +965,39 @@ class QuoTradingLauncher:
         # Require quo key unless using admin key
         if not is_admin and not quotrading_api_key:
             messagebox.showerror(
-                "Missing API Key",
-                "Please enter your QuoTrading API Key."
+                "Missing License Key",
+                "Please enter your QuoTrading License Key."
             )
             return
         
+        # Validate license key with Azure (unless admin key)
+        if not is_admin:
+            self.show_loading("Validating license...")
+            
+            def on_license_success(license_data):
+                self.hide_loading()
+                # License valid - proceed with broker validation
+                self._continue_broker_validation(broker, token, username, quotrading_api_key, account_size, account_type)
+            
+            def on_license_error(error_msg):
+                self.hide_loading()
+                messagebox.showerror(
+                    "License Validation Failed",
+                    f"Invalid license key: {error_msg}\n\n"
+                    f"Please check your license key and try again.\n\n"
+                    f"If you need a license, visit:\n"
+                    f"https://quotrading.com/subscribe"
+                )
+            
+            # Validate license with Azure
+            self.validate_license_key(quotrading_api_key, on_license_success, on_license_error)
+            return
+        
+        # Admin key - skip license validation and proceed directly
+        self._continue_broker_validation(broker, token, username, quotrading_api_key, account_size, account_type)
+    
+    def _continue_broker_validation(self, broker, token, username, quotrading_api_key, account_size, account_type):
+        """Continue broker validation after license is confirmed valid."""
         # Validate by actually connecting and fetching accounts
         def validate_in_thread():
             import traceback
@@ -3691,12 +3352,6 @@ ACCOUNT_SIZE={self.config.get("account_size", 50000)}
 BROKER={broker}
 BROKER_API_TOKEN={self.config.get("broker_token", "")}
 BROKER_USERNAME={self.config.get("broker_username", "")}
-
-# Legacy TopStep/Tradovate variables (for compatibility)
-TOPSTEP_API_TOKEN={self.config.get("broker_token", "")}
-TOPSTEP_USERNAME={self.config.get("broker_username", "")}
-TRADOVATE_API_KEY={self.config.get("broker_token", "")}
-TRADOVATE_USERNAME={self.config.get("broker_username", "")}
 
 # Trading Configuration - Multi-Symbol Support
 BOT_INSTRUMENTS={symbols_str}

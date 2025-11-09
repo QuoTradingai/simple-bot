@@ -24,7 +24,7 @@ class BotConfiguration:
     timezone: str = "America/New_York"
     
     # Broker Configuration
-    broker: str = "TopStep"  # USER CONFIGURABLE - TopStep, Tradovate, Rithmic, NinjaTrader, etc.
+    broker: str = ""  # USER CONFIGURABLE - TopStep, Tradovate, Rithmic, NinjaTrader, etc.
     api_token: str = ""
     username: str = ""  # Broker username/email
     
@@ -662,6 +662,8 @@ def load_from_env() -> BotConfiguration:
     # API Token (support both old TOPSTEP and new TOPSTEPX variable names, plus generic)
     if os.getenv("BOT_API_TOKEN"):
         config.api_token = os.getenv("BOT_API_TOKEN")
+    elif os.getenv("BROKER_API_TOKEN"):
+        config.api_token = os.getenv("BROKER_API_TOKEN")
     elif os.getenv("TOPSTEPX_API_TOKEN"):
         config.api_token = os.getenv("TOPSTEPX_API_TOKEN")
     elif os.getenv("TOPSTEP_API_TOKEN"):
@@ -670,6 +672,8 @@ def load_from_env() -> BotConfiguration:
     # Username (support both old TOPSTEP and new TOPSTEPX variable names, plus generic)
     if os.getenv("BOT_USERNAME"):
         config.username = os.getenv("BOT_USERNAME")
+    elif os.getenv("BROKER_USERNAME"):
+        config.username = os.getenv("BROKER_USERNAME")
     elif os.getenv("TOPSTEPX_USERNAME"):
         config.username = os.getenv("TOPSTEPX_USERNAME")
     elif os.getenv("TOPSTEP_USERNAME"):
