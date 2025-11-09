@@ -6,7 +6,7 @@ This runs 24/7 on Azure, calculates signals, and broadcasts them via API.
 Customers connect to fetch signals and execute locally on their TopStep accounts.
 """
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, Depends
 from fastapi.responses import JSONResponse
 from datetime import datetime, time as datetime_time, timedelta
 from typing import Dict, Optional, List
@@ -19,71 +19,61 @@ import hashlib
 import json
 import time as time_module
 
+# Import database and Redis managers
+from database import (
+    DatabaseManager, db_manager as global_db_manager, get_db,
+    User, APILog, TradeHistory,
+    get_user_by_license_key, get_user_by_account_id,
+    create_user, log_api_call, update_user_activity
+)
+from redis_manager import RedisManager, get_redis
+from sqlalchemy.orm import Session
+
 # Initialize FastAPI
 app = FastAPI(
     title="QuoTrading Signal Engine",
-    description="Real-time VWAP mean reversion signals",
-    version="2.0"
+    description="Real-time VWAP mean reversion signals with user management",
+    version="2.1"
 )
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# ============================================================================
-# RATE LIMITING (Beta Protection)
-# ============================================================================
+# Global instances (initialized on startup)
+db_manager: Optional[DatabaseManager] = None
+redis_manager: Optional[RedisManager] = None
 
-# Simple in-memory rate limiting for beta
-# Format: {ip_address: {"requests": deque([timestamps]), "blocked_until": timestamp}}
-rate_limit_storage = {}
+# ============================================================================
+# RATE LIMITING (Redis-backed with in-memory fallback)
+# ============================================================================
 
 # Rate limit settings
 RATE_LIMIT_REQUESTS = 100  # requests
 RATE_LIMIT_WINDOW = 60  # seconds (1 minute)
 RATE_LIMIT_BLOCK_TIME = 300  # 5 minutes block after exceeding
 
-def check_rate_limit(request: Request) -> bool:
+def check_rate_limit(request: Request) -> dict:
     """
-    Check if request should be rate limited
+    Check if request should be rate limited using Redis or fallback
     
     Returns:
-        True if allowed, False if rate limited
+        dict with 'allowed' and 'retry_after' keys
     """
     client_ip = request.client.host
-    current_time = time_module.time()
     
-    # Initialize storage for new IPs
-    if client_ip not in rate_limit_storage:
-        rate_limit_storage[client_ip] = {
-            "requests": deque(),
-            "blocked_until": 0
-        }
+    # Use Redis manager if available
+    if redis_manager:
+        return redis_manager.check_rate_limit(
+            identifier=client_ip,
+            max_requests=RATE_LIMIT_REQUESTS,
+            window_seconds=RATE_LIMIT_WINDOW,
+            block_duration=RATE_LIMIT_BLOCK_TIME
+        )
     
-    client_data = rate_limit_storage[client_ip]
-    
-    # Check if still blocked
-    if current_time < client_data["blocked_until"]:
-        remaining = int(client_data["blocked_until"] - current_time)
-        logger.warning(f"⛔ Rate limit: {client_ip} blocked for {remaining}s more")
-        return False
-    
-    # Remove requests outside the time window
-    requests = client_data["requests"]
-    while requests and requests[0] < current_time - RATE_LIMIT_WINDOW:
-        requests.popleft()
-    
-    # Check if limit exceeded
-    if len(requests) >= RATE_LIMIT_REQUESTS:
-        # Block this IP
-        client_data["blocked_until"] = current_time + RATE_LIMIT_BLOCK_TIME
-        logger.warning(f"🚫 Rate limit exceeded: {client_ip} blocked for {RATE_LIMIT_BLOCK_TIME}s ({len(requests)} requests in {RATE_LIMIT_WINDOW}s)")
-        return False
-    
-    # Add current request
-    requests.append(current_time)
-    
-    return True
+    # Should never happen since redis_manager has in-memory fallback
+    # But just in case, allow the request
+    return {'allowed': True, 'retry_after': 0}
 
 @app.middleware("http")
 async def rate_limit_middleware(request: Request, call_next):
@@ -94,10 +84,21 @@ async def rate_limit_middleware(request: Request, call_next):
         return await call_next(request)
     
     # Check rate limit
-    if not check_rate_limit(request):
-        client_ip = request.client.host
-        client_data = rate_limit_storage[client_ip]
-        remaining = int(client_data["blocked_until"] - time_module.time())
+    limit_result = check_rate_limit(request)
+    
+    if not limit_result['allowed']:
+        return JSONResponse(
+            status_code=429,
+            content={
+                "error": "Rate limit exceeded",
+                "message": f"Too many requests. Try again in {limit_result['retry_after']} seconds.",
+                "retry_after": limit_result['retry_after']
+            }
+        )
+    
+    # Process request
+    response = await call_next(request)
+    return response
         
         return JSONResponse(
             status_code=429,
@@ -152,37 +153,243 @@ async def health():
 async def rate_limit_status(request: Request):
     """Check current rate limit status for this IP"""
     client_ip = request.client.host
-    current_time = time_module.time()
     
-    if client_ip not in rate_limit_storage:
-        return {
-            "ip": client_ip,
-            "requests_used": 0,
-            "requests_remaining": RATE_LIMIT_REQUESTS,
-            "limit": RATE_LIMIT_REQUESTS,
-            "window_seconds": RATE_LIMIT_WINDOW,
-            "blocked": False
-        }
+    if redis_manager:
+        status = redis_manager.get_rate_limit_status(
+            identifier=client_ip,
+            max_requests=RATE_LIMIT_REQUESTS,
+            window_seconds=RATE_LIMIT_WINDOW
+        )
+        return status
     
-    client_data = rate_limit_storage[client_ip]
-    
-    # Remove old requests
-    requests = client_data["requests"]
-    while requests and requests[0] < current_time - RATE_LIMIT_WINDOW:
-        requests.popleft()
-    
-    # Check if blocked
-    blocked = current_time < client_data["blocked_until"]
-    blocked_seconds = int(client_data["blocked_until"] - current_time) if blocked else 0
-    
+    # Fallback (should never happen)
     return {
         "ip": client_ip,
-        "requests_used": len(requests),
-        "requests_remaining": max(0, RATE_LIMIT_REQUESTS - len(requests)),
+        "requests_used": 0,
+        "requests_remaining": RATE_LIMIT_REQUESTS,
         "limit": RATE_LIMIT_REQUESTS,
         "window_seconds": RATE_LIMIT_WINDOW,
-        "blocked": blocked,
-        "blocked_seconds_remaining": blocked_seconds
+        "blocked": False
+    }
+
+# ============================================================================
+# USER MANAGEMENT & ADMIN ENDPOINTS
+# ============================================================================
+
+def verify_admin_license(license_key: str, db: Session) -> User:
+    """Verify admin license and return user"""
+    if not db_manager:
+        raise HTTPException(status_code=503, detail="Database not available")
+    
+    user = get_user_by_license_key(db, license_key)
+    if not user:
+        raise HTTPException(status_code=403, detail="Invalid license key")
+    
+    if not user.is_admin:
+        raise HTTPException(status_code=403, detail="Admin privileges required")
+    
+    if not user.is_license_valid:
+        raise HTTPException(status_code=403, detail="License expired or inactive")
+    
+    return user
+
+@app.get("/api/admin/users")
+async def get_all_users(
+    license_key: str,
+    db: Session = Depends(get_db)
+):
+    """Get all users (admin only)"""
+    verify_admin_license(license_key, db)
+    
+    users = db.query(User).all()
+    return {
+        "total_users": len(users),
+        "users": [user.to_dict() for user in users]
+    }
+
+@app.get("/api/admin/user/{account_id}")
+async def get_user_details(
+    account_id: str,
+    license_key: str,
+    db: Session = Depends(get_db)
+):
+    """Get specific user details (admin only)"""
+    verify_admin_license(license_key, db)
+    
+    user = get_user_by_account_id(db, account_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    # Get recent API calls
+    recent_calls = db.query(APILog).filter(
+        APILog.user_id == user.id
+    ).order_by(APILog.timestamp.desc()).limit(20).all()
+    
+    # Get trade stats
+    from sqlalchemy import func
+    trade_stats = db.query(
+        func.count(TradeHistory.id).label('total_trades'),
+        func.sum(TradeHistory.pnl).label('total_pnl'),
+        func.avg(TradeHistory.pnl).label('avg_pnl')
+    ).filter(TradeHistory.user_id == user.id).first()
+    
+    return {
+        "user": user.to_dict(),
+        "recent_api_calls": len(recent_calls),
+        "trade_stats": {
+            "total_trades": trade_stats.total_trades or 0,
+            "total_pnl": float(trade_stats.total_pnl or 0),
+            "avg_pnl": float(trade_stats.avg_pnl or 0)
+        }
+    }
+
+@app.post("/api/admin/add-user")
+async def add_user(
+    license_key: str,
+    account_id: str,
+    email: Optional[str] = None,
+    license_type: str = "BETA",
+    license_duration_days: Optional[int] = None,
+    notes: Optional[str] = None,
+    db: Session = Depends(get_db)
+):
+    """Create a new user (admin only)"""
+    verify_admin_license(license_key, db)
+    
+    # Check if user already exists
+    existing = get_user_by_account_id(db, account_id)
+    if existing:
+        raise HTTPException(status_code=400, detail="User already exists")
+    
+    # Create user
+    new_user = create_user(
+        db_session=db,
+        account_id=account_id,
+        email=email,
+        license_type=license_type,
+        license_duration_days=license_duration_days,
+        is_admin=False,
+        notes=notes
+    )
+    
+    return {
+        "message": "User created successfully",
+        "user": new_user.to_dict()
+    }
+
+@app.put("/api/admin/extend-license/{account_id}")
+async def extend_license(
+    account_id: str,
+    license_key: str,
+    additional_days: int,
+    db: Session = Depends(get_db)
+):
+    """Extend user license (admin only)"""
+    verify_admin_license(license_key, db)
+    
+    user = get_user_by_account_id(db, account_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    # Extend license
+    if user.license_expiration:
+        user.license_expiration = user.license_expiration + timedelta(days=additional_days)
+    else:
+        user.license_expiration = datetime.utcnow() + timedelta(days=additional_days)
+    
+    db.commit()
+    db.refresh(user)
+    
+    return {
+        "message": f"License extended by {additional_days} days",
+        "user": user.to_dict()
+    }
+
+@app.put("/api/admin/suspend-user/{account_id}")
+async def suspend_user(
+    account_id: str,
+    license_key: str,
+    db: Session = Depends(get_db)
+):
+    """Suspend user account (admin only)"""
+    verify_admin_license(license_key, db)
+    
+    user = get_user_by_account_id(db, account_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    user.license_status = "SUSPENDED"
+    db.commit()
+    db.refresh(user)
+    
+    return {
+        "message": "User suspended",
+        "user": user.to_dict()
+    }
+
+@app.put("/api/admin/activate-user/{account_id}")
+async def activate_user(
+    account_id: str,
+    license_key: str,
+    db: Session = Depends(get_db)
+):
+    """Activate suspended user (admin only)"""
+    verify_admin_license(license_key, db)
+    
+    user = get_user_by_account_id(db, account_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    user.license_status = "ACTIVE"
+    db.commit()
+    db.refresh(user)
+    
+    return {
+        "message": "User activated",
+        "user": user.to_dict()
+    }
+
+@app.get("/api/admin/stats")
+async def get_stats(
+    license_key: str,
+    db: Session = Depends(get_db)
+):
+    """Get overall system stats (admin only)"""
+    verify_admin_license(license_key, db)
+    
+    from sqlalchemy import func
+    
+    # User stats
+    total_users = db.query(func.count(User.id)).scalar()
+    active_users = db.query(func.count(User.id)).filter(User.license_status == 'ACTIVE').scalar()
+    
+    # License type breakdown
+    license_breakdown = db.query(
+        User.license_type,
+        func.count(User.id)
+    ).group_by(User.license_type).all()
+    
+    # API call stats (last 24 hours)
+    yesterday = datetime.utcnow() - timedelta(days=1)
+    api_calls_24h = db.query(func.count(APILog.id)).filter(
+        APILog.timestamp >= yesterday
+    ).scalar()
+    
+    # Trade stats
+    total_trades = db.query(func.count(TradeHistory.id)).scalar()
+    total_pnl = db.query(func.sum(TradeHistory.pnl)).scalar()
+    
+    return {
+        "users": {
+            "total": total_users,
+            "active": active_users,
+            "by_license_type": {lt: count for lt, count in license_breakdown}
+        },
+        "api_calls_24h": api_calls_24h,
+        "trades": {
+            "total": total_trades,
+            "total_pnl": float(total_pnl or 0)
+        }
     }
 
 # ============================================================================
@@ -551,13 +758,40 @@ def generate_license_key() -> str:
     return hashlib.sha256(random_bytes).hexdigest()[:24].upper()
 
 @app.post("/api/license/validate")
-async def validate_license(data: dict):
+async def validate_license(data: dict, db: Session = Depends(get_db)):
     """Validate if a license key is active"""
-    license_key = data.get("license_key", "").strip().upper()
+    license_key = data.get("license_key", "").strip()
     
     if not license_key:
         raise HTTPException(status_code=400, detail="License key required")
     
+    # Check database if available
+    if db_manager:
+        user = get_user_by_license_key(db, license_key)
+        if not user:
+            raise HTTPException(status_code=403, detail="Invalid license key")
+        
+        if not user.is_license_valid:
+            if user.license_status == 'SUSPENDED':
+                raise HTTPException(status_code=403, detail="License suspended")
+            elif user.license_expiration and user.license_expiration < datetime.utcnow():
+                raise HTTPException(status_code=403, detail="License expired")
+            else:
+                raise HTTPException(status_code=403, detail="License inactive")
+        
+        # Update last active
+        update_user_activity(db, user.id)
+        
+        return {
+            "valid": True,
+            "account_id": user.account_id,
+            "email": user.email,
+            "license_type": user.license_type,
+            "expires_at": user.license_expiration.isoformat() if user.license_expiration else None,
+            "message": "License is valid"
+        }
+    
+    # Fallback to hardcoded licenses if database unavailable
     if license_key not in active_licenses:
         raise HTTPException(status_code=403, detail="Invalid license key")
     
@@ -573,7 +807,8 @@ async def validate_license(data: dict):
         "valid": True,
         "email": license_info.get("email"),
         "expires_at": license_info.get("expires_at"),
-        "subscription_status": license_info.get("status", "active")
+        "subscription_status": license_info.get("status", "active"),
+        "message": "License is valid (fallback mode)"
     }
 
 @app.post("/api/license/activate")
@@ -1341,20 +1576,50 @@ async def get_simple_time():
 @app.on_event("startup")
 async def startup_event():
     """Initialize signal engine on startup"""
+    global db_manager, redis_manager
+    
     logger.info("=" * 60)
-    logger.info("QuoTrading Signal Engine v2.0 - STARTING")
+    logger.info("QuoTrading Signal Engine v2.1 - STARTING")
     logger.info("=" * 60)
     logger.info("Multi-instrument support: ES, NQ, YM, RTY")
-    logger.info("Features: ML/RL signals, licensing, economic calendar")
+    logger.info("Features: ML/RL signals, licensing, economic calendar, user management")
     logger.info("=" * 60)
     
+    # Initialize Database
+    logger.info("💾 Initializing database connection...")
+    try:
+        import database as db_module
+        db_manager = DatabaseManager()
+        db_module.db_manager = db_manager  # Set global instance
+        
+        # Create tables if they don't exist
+        db_manager.create_tables()
+        logger.info(f"✅ Database connected: {db_manager.database_url}")
+    except Exception as e:
+        logger.error(f"❌ Database initialization failed: {e}")
+        logger.warning("⚠️  Running without database - license validation will be limited")
+        db_manager = None
+    
+    # Initialize Redis
+    logger.info("🔴 Initializing Redis connection...")
+    try:
+        redis_manager = RedisManager(fallback_to_memory=True)
+        if redis_manager.using_memory_fallback:
+            logger.info("📦 Using in-memory fallback for rate limiting")
+        else:
+            logger.info("✅ Redis connected for rate limiting")
+    except Exception as e:
+        logger.error(f"❌ Redis initialization failed: {e}")
+        logger.info("� Using in-memory fallback for rate limiting")
+        redis_manager = RedisManager(fallback_to_memory=True)
+    
     # Initialize economic calendar
-    logger.info("📅 Initializing economic calendar...")
+    logger.info("�📅 Initializing economic calendar...")
     update_calendar()  # Initial fetch
     start_calendar_updater()  # Start background updater
     
     logger.info("=" * 60)
-    logger.info("Signal Engine Ready!")
+    logger.info("✅ Signal Engine Ready!")
     logger.info("=" * 60)
 
 
