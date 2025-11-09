@@ -4600,14 +4600,10 @@ def check_exit_conditions(symbol: str) -> None:
     # Phase Two: Check trading state and handle market close/open
     trading_state = get_trading_state(bar_time)
     
-    # AUTO-FLATTEN: Market closing OR economic event - flatten all positions immediately
-    if (trading_state == "closed" or trading_state == "event_block") and position["active"]:
-        event_reason = "MARKET CLOSING"
-        if trading_state == "event_block":
-            event_reason = f"ECONOMIC EVENT - {bot_status.get('halt_reason', 'Event active')}"
-        
+    # AUTO-FLATTEN: Market closing - ALWAYS flatten (no config option)
+    if trading_state == "closed" and position["active"]:
         logger.critical(SEPARATOR_LINE)
-        logger.critical(f"{event_reason} - AUTO-FLATTENING POSITION")
+        logger.critical("MARKET CLOSING - AUTO-FLATTENING POSITION")
         logger.critical(f"Time: {bar_time.strftime('%H:%M:%S %Z')}")
         logger.critical(f"Position: {side.upper()} {position['quantity']} @ ${entry_price:.2f}")
         logger.critical(SEPARATOR_LINE)
@@ -4617,26 +4613,63 @@ def check_exit_conditions(symbol: str) -> None:
         flatten_price = get_flatten_price(symbol, side, current_bar["close"])
         
         log_time_based_action(
-            "event_flatten" if trading_state == "event_block" else "market_close_flatten",
-            f"{event_reason} - auto-flattening position for risk management",
+            "market_close_flatten",
+            "Market closed - auto-flattening position for 24/7 operation",
             {
                 "side": side,
                 "quantity": position["quantity"],
                 "entry_price": f"${entry_price:.2f}",
                 "exit_price": f"${flatten_price:.2f}",
-                "time": bar_time.strftime('%H:%M:%S %Z'),
-                "reason": event_reason
+                "time": bar_time.strftime('%H:%M:%S %Z')
             }
         )
         
         # Execute close order
-        handle_exit_orders(symbol, position, flatten_price, "event_flatten" if trading_state == "event_block" else "market_close")
-        
-        if trading_state == "event_block":
-            logger.info("Position flattened for economic event - will auto-resume after event window")
-        else:
-            logger.info("Position flattened - bot will continue running and auto-resume when market opens")
+        handle_exit_orders(symbol, position, flatten_price, "market_close")
+        logger.info("Position flattened - bot will continue running and auto-resume when market opens")
         return
+    
+    # ECONOMIC EVENT: Force close ONLY if user enabled it
+    if trading_state == "event_block" and position["active"]:
+        fomc_force_close = CONFIG.get("fomc_force_close", False)
+        
+        if fomc_force_close:
+            # User wants to force close during economic events
+            event_reason = bot_status.get('halt_reason', 'Economic event active')
+            
+            logger.critical(SEPARATOR_LINE)
+            logger.critical(f"ECONOMIC EVENT - AUTO-FLATTENING POSITION")
+            logger.critical(f"Event: {event_reason}")
+            logger.critical(f"Time: {bar_time.strftime('%H:%M:%S %Z')}")
+            logger.critical(f"Position: {side.upper()} {position['quantity']} @ ${entry_price:.2f}")
+            logger.critical("(User enabled 'Force Close During FOMC')")
+            logger.critical(SEPARATOR_LINE)
+            
+            # Force close immediately
+            flatten_price = get_flatten_price(symbol, side, current_bar["close"])
+            
+            log_time_based_action(
+                "event_flatten",
+                f"{event_reason} - auto-flattening position per user preference",
+                {
+                    "side": side,
+                    "quantity": position["quantity"],
+                    "entry_price": f"${entry_price:.2f}",
+                    "exit_price": f"${flatten_price:.2f}",
+                    "time": bar_time.strftime('%H:%M:%S %Z'),
+                    "reason": event_reason
+                }
+            )
+            
+            # Execute close order
+            handle_exit_orders(symbol, position, flatten_price, "event_flatten")
+            logger.info("Position flattened for economic event - will auto-resume after event window")
+            return
+        else:
+            # User wants to keep position during events, just block new entries
+            logger.info(f"📅 Economic event active: {bot_status.get('halt_reason', 'Event')}")
+            logger.info("  Keeping existing position (Force Close disabled)")
+            logger.info("  New entries blocked until event window closes")
     
     # AUTO-RESUME: Reset flatten mode when market reopens
     if trading_state == "entry_window" and bot_status["flatten_mode"]:

@@ -1411,6 +1411,77 @@ class QuoTradingLauncher:
             fg=self.colors['text_light']
         ).pack(anchor=tk.W, padx=(20, 0))
         
+        # FOMC Block (NEW)
+        fomc_block_frame = tk.Frame(modes_section, bg=self.colors['card'])
+        fomc_block_frame.pack(fill=tk.X, pady=(8, 0))
+        
+        self.fomc_block_var = tk.BooleanVar(value=self.config.get("fomc_block_enabled", True))
+        
+        def on_fomc_toggle():
+            """Handle FOMC block toggle - show force close option"""
+            if self.fomc_block_var.get():
+                # FOMC blocking enabled - show force close option
+                force_close_frame.pack(fill=tk.X, pady=(4, 8))
+            else:
+                # FOMC blocking disabled - hide force close option
+                force_close_frame.pack_forget()
+            self.save_config()
+        
+        tk.Checkbutton(
+            fomc_block_frame,
+            text="📅 Block FOMC/NFP/CPI Events",
+            variable=self.fomc_block_var,
+            command=on_fomc_toggle,
+            font=("Segoe UI", 8, "bold"),
+            bg=self.colors['card'],
+            fg=self.colors['text'],
+            selectcolor=self.colors['secondary'],
+            activebackground=self.colors['card'],
+            activeforeground=self.colors['success'],
+            cursor="hand2"
+        ).pack(anchor=tk.W)
+        
+        tk.Label(
+            fomc_block_frame,
+            text="Prevents new entries during high-impact economic events",
+            font=("Segoe UI", 7, "bold"),
+            bg=self.colors['card'],
+            fg=self.colors['text_light']
+        ).pack(anchor=tk.W, padx=(20, 0))
+        
+        # FOMC Force Close (sub-option, only shown when FOMC blocking enabled)
+        force_close_frame = tk.Frame(modes_section, bg=self.colors['card'])
+        
+        self.fomc_force_close_var = tk.BooleanVar(value=self.config.get("fomc_force_close", False))
+        
+        tk.Checkbutton(
+            force_close_frame,
+            text="⚠️ Force Close Positions During Events",
+            variable=self.fomc_force_close_var,
+            command=self.save_config,
+            font=("Segoe UI", 8),
+            bg=self.colors['card'],
+            fg=self.colors['warning'],
+            selectcolor=self.colors['secondary'],
+            activebackground=self.colors['card'],
+            activeforeground=self.colors['warning'],
+            cursor="hand2"
+        ).pack(anchor=tk.W, padx=(20, 0))
+        
+        tk.Label(
+            force_close_frame,
+            text="⚠️ Exits all positions before events (conservative)",
+            font=("Segoe UI", 7, "bold"),
+            bg=self.colors['card'],
+            fg=self.colors['text_light']
+        ).pack(anchor=tk.W, padx=(40, 0))
+        
+        # Initially show/hide force close based on FOMC block setting
+        if self.fomc_block_var.get():
+            force_close_frame.pack(fill=tk.X, pady=(4, 8))
+        else:
+            force_close_frame.pack_forget()
+        
         # Confidence Trading
         conf_mode_frame = tk.Frame(modes_section, bg=self.colors['card'])
         conf_mode_frame.pack(fill=tk.X, pady=(0, 5))
@@ -2323,6 +2394,8 @@ class QuoTradingLauncher:
         
         self.config["recovery_mode"] = self.recovery_mode_var.get()
         self.config["avoid_news_days"] = self.avoid_news_var.get()
+        self.config["fomc_block_enabled"] = self.fomc_block_var.get()
+        self.config["fomc_force_close"] = self.fomc_force_close_var.get()
         
         # Auto-enable alerts if email is configured
         self.config["alerts_enabled"] = bool(self.config.get("alert_email") and self.config.get("alert_email_password"))
