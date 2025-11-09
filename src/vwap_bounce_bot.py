@@ -1915,10 +1915,23 @@ def validate_signal_requirements(symbol: str, bar_time: datetime) -> Tuple[bool,
         
         return False, "Daily trade limit"
     
-    # Daily loss limit DISABLED for backtesting
-    # if state[symbol]["daily_pnl"] <= -CONFIG["daily_loss_limit"]:
-    #     logger.warning(f"Daily loss limit hit (${state[symbol]['daily_pnl']:.2f}), stopping for the day")
-    #     return False, "Daily loss limit"
+    # Daily loss limit - ENABLED for safety
+    if state[symbol]["daily_pnl"] <= -CONFIG["daily_loss_limit"]:
+        logger.warning(f"Daily loss limit hit (${state[symbol]['daily_pnl']:.2f}), stopping for the day")
+        
+        # Send alert once when limit hit
+        if not state[symbol].get("loss_limit_alerted", False):
+            try:
+                notifier = get_notifier()
+                notifier.send_error_alert(
+                    error_message=f"💰 Daily Loss Limit Reached: ${state[symbol]['daily_pnl']:.2f} / -${CONFIG['daily_loss_limit']:.2f}. Bot stopped trading for today. Will auto-resume tomorrow.",
+                    error_type="Daily Loss Limit"
+                )
+                state[symbol]["loss_limit_alerted"] = True
+            except Exception as e:
+                logger.debug(f"Failed to send loss limit alert: {e}")
+        
+        return False, "Daily loss limit"
     
     # Check data availability
     if len(state[symbol]["bars_1min"]) < 2:
