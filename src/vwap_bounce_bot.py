@@ -697,20 +697,129 @@ def check_cloud_kill_switch() -> None:
         logger.debug(f"Kill switch check skipped (cloud unreachable): {e}")
 
 
+def check_azure_time_service() -> str:
+    """
+    Check Azure time service for trading permission.
+    Called every 30 seconds alongside kill switch check.
+    
+    Azure provides single source of truth for:
+    - Current ET time (timezone-accurate)
+    - Market hours status
+    - Maintenance windows (Mon-Thu 5-6 PM, Fri 5 PM - Sun 6 PM)
+    - Economic events (FOMC/NFP/CPI blocking)
+    - Trading permission (go/no-go flag)
+    
+    Returns:
+        Trading state: 'entry_window', 'flatten_mode', 'closed', or 'event_block'
+    """
+    try:
+        import requests
+        
+        cloud_api_url = CONFIG.get("cloud_api_url", "https://quotrading-signals.icymeadow-86b2969e.eastus.azurecontainerapps.io")
+        
+        response = requests.get(
+            f"{cloud_api_url}/api/time/simple",
+            timeout=5
+        )
+        
+        if response.status_code == 200:
+            data = response.json()
+            trading_allowed = data.get("trading_allowed", False)
+            halt_reason = data.get("halt_reason", "")
+            current_et = data.get("current_et", "")
+            
+            # Store Azure time for bot awareness
+            bot_status["azure_time"] = current_et
+            bot_status["trading_allowed"] = trading_allowed
+            bot_status["halt_reason"] = halt_reason
+            
+            # Determine state based on Azure response
+            if not trading_allowed:
+                if "maintenance" in halt_reason.lower():
+                    state = "closed"  # Maintenance window
+                elif "event" in halt_reason.lower() or "fomc" in halt_reason.lower() or "nfp" in halt_reason.lower():
+                    # Check if FOMC blocking is enabled in config
+                    fomc_enabled = CONFIG.get("fomc_block_enabled", True)
+                    if fomc_enabled:
+                        state = "event_block"  # Economic event blocking
+                        # Log FOMC block (only once when it activates)
+                        if not bot_status.get("event_block_active", False):
+                            logger.warning("=" * 80)
+                            logger.warning(f"📅 ECONOMIC EVENT BLOCK ACTIVATED: {halt_reason}")
+                            logger.warning("  Trading halted 30 min before to 1 hour after event")
+                            logger.warning("  Will auto-resume when event window closes")
+                            logger.warning("=" * 80)
+                            bot_status["event_block_active"] = True
+                    else:
+                        logger.info(f"[TIME SERVICE] Economic event active but FOMC blocking disabled: {halt_reason}")
+                        state = "entry_window"  # User disabled event blocking
+                elif "weekend" in halt_reason.lower() or "closed" in halt_reason.lower():
+                    state = "closed"  # Weekend or market closed
+                else:
+                    state = "closed"  # Unknown halt reason - be safe
+            else:
+                # Clear event block flag when trading resumes
+                if bot_status.get("event_block_active", False):
+                    logger.info("=" * 80)
+                    logger.info("✅ ECONOMIC EVENT ENDED - Trading resumed")
+                    logger.info("=" * 80)
+                    bot_status["event_block_active"] = False
+                
+                # Trading allowed - check if we're approaching maintenance (flatten mode)
+                # Azure doesn't send flatten mode, so we check local time
+                # If current ET time is 4:45-5:00 PM, enter flatten mode
+                try:
+                    from datetime import datetime as dt_class
+                    et_time = dt_class.fromisoformat(current_et.replace('Z', '+00:00'))
+                    et_hour = et_time.hour
+                    et_minute = et_time.minute
+                    
+                    # Flatten mode: 4:45-5:00 PM (16:45-17:00)
+                    if et_hour == 16 and et_minute >= 45:
+                        state = "flatten_mode"
+                    elif et_hour == 17 and et_minute == 0:
+                        state = "flatten_mode"
+                    else:
+                        state = "entry_window"
+                except Exception as e:
+                    logger.debug(f"Time parsing error: {e}")
+                    state = "entry_window"
+            
+            # Cache state for get_trading_state() to use
+            bot_status["azure_trading_state"] = state
+            return state
+        else:
+            # Azure unreachable - clear cached state to trigger fallback
+            logger.debug(f"Time service returned {response.status_code}, using local time")
+            bot_status["azure_trading_state"] = None
+            return None  # Signal to use local get_trading_state()
+            
+    except Exception as e:
+        # Non-critical - if cloud unreachable, fall back to local time
+        logger.debug(f"Time service check skipped (cloud unreachable): {e}")
+        bot_status["azure_trading_state"] = None
+        return None  # Signal to use local get_trading_state()
+
+
 def check_broker_connection() -> None:
     """
-    Periodic health check for broker connection AND cloud kill switch.
+    Periodic health check for broker connection AND cloud services.
     Verifies connection is alive and attempts reconnection if needed.
     Called every 30 seconds by timer manager.
     Only logs when there's an issue to avoid spam.
     """
     global broker
     
-    # CRITICAL: Check cloud kill switch FIRST (before broker check)
+    # CRITICAL: Check cloud services FIRST (kill switch + time service)
     try:
         check_cloud_kill_switch()
     except Exception as e:
         logger.debug(f"Kill switch check failed (non-critical): {e}")
+    
+    try:
+        check_azure_time_service()
+    except Exception as e:
+        logger.debug(f"Time service check failed (non-critical): {e}")
     
     if broker is None:
         logger.error("[HEALTH] Broker is None - cannot check connection")
@@ -2048,7 +2157,7 @@ def calculate_vwap(symbol: str) -> None:
 def validate_signal_requirements(symbol: str, bar_time: datetime) -> Tuple[bool, Optional[str]]:
     """
     Validate that all requirements are met for signal generation.
-    24/5 trading - signals allowed anytime except maintenance/weekend.
+    24/5 trading - signals allowed anytime except maintenance/weekend/economic events.
     
     Args:
         symbol: Instrument symbol
@@ -2065,6 +2174,12 @@ def validate_signal_requirements(symbol: str, bar_time: datetime) -> Tuple[bool,
     if trading_state == "closed":
         logger.debug(f"Market closed, skipping signal check")
         return False, f"Market closed"
+    
+    if trading_state == "event_block":
+        # FOMC/NFP/CPI event blocking (if enabled in config)
+        halt_reason = bot_status.get("halt_reason", "Economic event")
+        logger.debug(f"Event block active: {halt_reason}")
+        return False, f"Economic event block: {halt_reason}"
     
     if trading_state == "flatten_mode":
         logger.debug(f"Flatten mode active (4:45-5:00 PM), no new entries")
@@ -4431,10 +4546,14 @@ def check_exit_conditions(symbol: str) -> None:
     # Phase Two: Check trading state and handle market close/open
     trading_state = get_trading_state(bar_time)
     
-    # AUTO-FLATTEN: Market closing - flatten all positions immediately
-    if trading_state == "closed" and position["active"]:
+    # AUTO-FLATTEN: Market closing OR economic event - flatten all positions immediately
+    if (trading_state == "closed" or trading_state == "event_block") and position["active"]:
+        event_reason = "MARKET CLOSING"
+        if trading_state == "event_block":
+            event_reason = f"ECONOMIC EVENT - {bot_status.get('halt_reason', 'Event active')}"
+        
         logger.critical(SEPARATOR_LINE)
-        logger.critical("MARKET CLOSING - AUTO-FLATTENING POSITION")
+        logger.critical(f"{event_reason} - AUTO-FLATTENING POSITION")
         logger.critical(f"Time: {bar_time.strftime('%H:%M:%S %Z')}")
         logger.critical(f"Position: {side.upper()} {position['quantity']} @ ${entry_price:.2f}")
         logger.critical(SEPARATOR_LINE)
@@ -4444,21 +4563,25 @@ def check_exit_conditions(symbol: str) -> None:
         flatten_price = get_flatten_price(symbol, side, current_bar["close"])
         
         log_time_based_action(
-            "market_close_flatten",
-            "Market closed - auto-flattening position for 24/7 operation",
+            "event_flatten" if trading_state == "event_block" else "market_close_flatten",
+            f"{event_reason} - auto-flattening position for risk management",
             {
                 "side": side,
                 "quantity": position["quantity"],
                 "entry_price": f"${entry_price:.2f}",
                 "exit_price": f"${flatten_price:.2f}",
-                "time": bar_time.strftime('%H:%M:%S %Z')
+                "time": bar_time.strftime('%H:%M:%S %Z'),
+                "reason": event_reason
             }
         )
         
         # Execute close order
-        handle_exit_orders(symbol, position, flatten_price, "market_close")
+        handle_exit_orders(symbol, position, flatten_price, "event_flatten" if trading_state == "event_block" else "market_close")
         
-        logger.info("Position flattened - bot will continue running and auto-resume when market opens")
+        if trading_state == "event_block":
+            logger.info("Position flattened for economic event - will auto-resume after event window")
+        else:
+            logger.info("Position flattened - bot will continue running and auto-resume when market opens")
         return
     
     # AUTO-RESUME: Reset flatten mode when market reopens
@@ -6293,8 +6416,12 @@ def get_trading_state(dt: datetime = None) -> str:
     Centralized time checking function that returns current trading state.
     24/5 trading - supports multi-user global operation with UTC-first approach.
     
-    **MULTI-USER READY**: Works for users in any timezone by using UTC internally,
-    then converting to exchange timezone (Eastern Time for ES futures).
+    **AZURE-FIRST DESIGN**: Checks Azure time service first for:
+    - Maintenance windows (Mon-Thu 5-6 PM, Fri 5 PM - Sun 6 PM)
+    - Economic events (FOMC/NFP/CPI blocking)
+    - Single source of truth for all time-based decisions
+    
+    Falls back to local time logic if Azure unreachable.
     
     Args:
         dt: Datetime to check (defaults to current time - live or backtest)
@@ -6305,8 +6432,16 @@ def get_trading_state(dt: datetime = None) -> str:
         - 'entry_window': Market open, ready to trade
         - 'flatten_mode': 4:45-5:00 PM ET, close positions before maintenance
         - 'closed': Market closed (flatten all positions immediately)
-        - 'before_open': Before Sunday 6 PM ET open
+        - 'event_block': Economic event active (FOMC/NFP/CPI)
     """
+    # AZURE-FIRST: Try cloud time service (unless in backtest mode)
+    if backtest_current_time is None:  # Live mode only
+        azure_state = bot_status.get("azure_trading_state")
+        if azure_state:
+            # Use cached Azure state (updated every 30s by check_azure_time_service)
+            return azure_state
+    
+    # FALLBACK: Local time logic (backtest mode or Azure unreachable)
     # Get current time (UTC-first for multi-user)
     if dt is None:
         dt = get_current_time()
