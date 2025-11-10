@@ -25,7 +25,7 @@ import re
 import threading
 import time
 import requests  # For cloud API calls
-import platform  # For cross-platform mouse wheel support
+import platform  # For cross-platform detection
 import psutil  # For process checking (stale lock detection)
 
 # ========================================
@@ -2430,27 +2430,52 @@ class QuoTradingLauncher:
         if not result:
             return
         
-        # Launch AI in PowerShell terminal
+        # Launch AI in terminal
         try:
             # Get the AI directory (parent of launcher folder)
             bot_dir = Path(__file__).parent.parent.absolute()
             
-            # PowerShell command to run the QuoTrading AI bot
-            ps_command = [
-                "powershell.exe",
-                "-NoExit",  # Keep window open
-                "-Command",
-                f"cd '{bot_dir}'; python src/quotrading_engine.py"
-            ]
+            # Get Python executable path
+            python_exe = sys.executable
+            bot_script = bot_dir / "src" / "quotrading_engine.py"
             
-            # Start PowerShell process in a NEW CONSOLE WINDOW
-            self.bot_process = subprocess.Popen(
-                ps_command,
-                creationflags=subprocess.CREATE_NEW_CONSOLE,
-                cwd=str(bot_dir)
-            )
+            if platform.system() == "Windows":
+                # Windows: Use PowerShell for better console window
+                ps_command = [
+                    "powershell.exe",
+                    "-NoExit",  # Keep window open
+                    "-Command",
+                    f"cd '{bot_dir}'; python src/quotrading_engine.py"
+                ]
+                self.bot_process = subprocess.Popen(
+                    ps_command,
+                    creationflags=subprocess.CREATE_NEW_CONSOLE,
+                    cwd=str(bot_dir)
+                )
+            elif platform.system() == "Darwin":
+                # Mac: Launch bot directly and let it run in background
+                # Terminal window will show via Console.app or user can monitor via Activity Monitor
+                self.bot_process = subprocess.Popen(
+                    [python_exe, str(bot_script)],
+                    cwd=str(bot_dir),
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE
+                )
+            else:
+                # Linux: Use gnome-terminal or xterm
+                try:
+                    self.bot_process = subprocess.Popen(
+                        ["gnome-terminal", "--", python_exe, str(bot_script)],
+                        cwd=str(bot_dir)
+                    )
+                except FileNotFoundError:
+                    # Fallback to xterm if gnome-terminal not available
+                    self.bot_process = subprocess.Popen(
+                        ["xterm", "-hold", "-e", python_exe, str(bot_script)],
+                        cwd=str(bot_dir)
+                    )
             
-            # CREATE ACCOUNT LOCK with bot's PowerShell PID
+            # CREATE ACCOUNT LOCK with bot's process PID
             bot_pid = self.bot_process.pid
             if selected_account_id:
                 self.create_account_lock(selected_account_id, bot_pid)

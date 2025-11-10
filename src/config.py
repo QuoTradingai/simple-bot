@@ -9,6 +9,20 @@ from typing import Dict, Any, Optional
 from datetime import time
 from dataclasses import dataclass, field
 import pytz
+from pathlib import Path
+
+# Load .env file if it exists
+try:
+    from dotenv import load_dotenv
+    # Look for .env in the project root (parent of src/)
+    env_path = Path(__file__).parent.parent / '.env'
+    if env_path.exists():
+        load_dotenv(env_path)
+        print(f"✓ Loaded configuration from {env_path}")
+    else:
+        print(f"⚠ No .env file found at {env_path}")
+except ImportError:
+    print("⚠ python-dotenv not installed, using system environment variables only")
 
 
 @dataclass

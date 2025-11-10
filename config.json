@@ -5,8 +5,8 @@
   "broker_token": "0lqxI8Gt4JRDhbuP9wOoHmdxJE49fIQCxIU+mSbPqGs=",
   "broker_username": "alvarezjose4201@gmail.com",
   "symbols": [
-    "ES",
-    "YM"
+    "MES",
+    "MNQ"
   ],
   "account_size": 50000.0,
   "max_contracts": 3,
@@ -57,7 +57,7 @@
   "remember_credentials": true,
   "dynamic_confidence": true,
   "topstep_starting_balance": 50000.0,
-  "confidence_trading": false,
+  "confidence_trading": true,
   "smtp_provider": "gmail",
   "alert_email": "",
   "alert_email_password": "",
