@@ -19,6 +19,7 @@ import secrets
 import hashlib
 import json
 import time as time_module
+import os
 
 # Import database and Redis managers
 from database import (
@@ -657,12 +658,18 @@ def load_initial_experiences():
     import os
     
     try:
+        # Debug: Check current directory
+        logger.info(f"📂 Current working directory: {os.getcwd()}")
+        logger.info(f"📂 Files in directory: {os.listdir('.')}")
+        
         # Load signal experiences (6,880 trades)
         if os.path.exists("signal_experience.json"):
             with open("signal_experience.json", "r") as f:
                 data = json.load(f)
                 signal_experiences = data.get("experiences", [])
             logger.info(f"✅ Loaded {len(signal_experiences):,} signal experiences from Kevin's backtests")
+        else:
+            logger.warning("⚠️  signal_experience.json not found!")
         
         # Load exit experiences (2,961 exits)
         if os.path.exists("exit_experience.json"):
@@ -670,6 +677,8 @@ def load_initial_experiences():
                 data = json.load(f)
                 exit_experiences = data.get("exit_experiences", [])
             logger.info(f"✅ Loaded {len(exit_experiences):,} exit experiences from Kevin's backtests")
+        else:
+            logger.warning("⚠️  exit_experience.json not found!")
         
         logger.info(f"🧠 HIVE MIND INITIALIZED: {len(signal_experiences):,} signals + {len(exit_experiences):,} exits")
         logger.info(f"   All users will learn from and contribute to this shared wisdom pool!")
@@ -840,7 +849,10 @@ async def should_take_signal(request: Dict):
         entry_price: float,
         vwap: float,
         rsi: float,
-        vix: float  # Optional, default 15.0
+        vix: float,  # Optional, default 15.0
+        volume_ratio: float,  # Optional, default 1.0
+        recent_pnl: float,  # Optional, default 0.0
+        streak: int  # Optional, default 0
     }
     
     Returns: {
@@ -869,6 +881,9 @@ async def should_take_signal(request: Dict):
         vwap = request.get('vwap', 0.0)
         rsi = request.get('rsi', 50.0)
         vix = request.get('vix', 15.0)
+        volume_ratio = request.get('volume_ratio', 1.0)
+        recent_pnl = request.get('recent_pnl', 0.0)
+        streak = request.get('streak', 0)
         
         # Calculate VWAP distance
         vwap_distance = abs(entry_price - vwap) / vwap if vwap > 0 else 0
@@ -881,7 +896,10 @@ async def should_take_signal(request: Dict):
             signal=signal,
             current_time=datetime.now(pytz.timezone('US/Eastern')),
             current_vix=vix,
-            similarity_threshold=0.6
+            similarity_threshold=0.6,
+            volume_ratio=volume_ratio,
+            recent_pnl=recent_pnl,
+            streak=streak
         )
         
         # Determine risk level
@@ -918,7 +936,9 @@ async def should_take_signal(request: Dict):
         }
 
 
-def calculate_similarity_score(exp: Dict, current_rsi: float, current_vwap_dist: float, current_time: datetime_time, current_vix: float) -> float:
+def calculate_similarity_score(exp: Dict, current_rsi: float, current_vwap_dist: float, current_time: datetime_time, current_vix: float, 
+                               current_volume_ratio: float = 1.0, current_hour: int = 12, current_day_of_week: int = 0,
+                               current_recent_pnl: float = 0.0, current_streak: int = 0) -> float:
     """
     Calculate how similar a past experience is to current market conditions
     
@@ -927,27 +947,30 @@ def calculate_similarity_score(exp: Dict, current_rsi: float, current_vwap_dist:
     score = 0.0
     weights = []
     
-    # RSI similarity (±5 range = very similar)
-    exp_rsi = exp.get('rsi', 50)
+    # Handle both flat and nested (state-based) experience structures
+    state = exp.get('state', exp)
+    
+    # RSI similarity (±5 range = very similar) - 25% weight
+    exp_rsi = state.get('rsi', 50)
     rsi_diff = abs(exp_rsi - current_rsi)
     if rsi_diff <= 5:
         rsi_similarity = 1.0 - (rsi_diff / 5)
-        score += rsi_similarity * 0.35  # 35% weight
-        weights.append(0.35)
+        score += rsi_similarity * 0.25
+        weights.append(0.25)
     elif rsi_diff <= 10:
         rsi_similarity = 1.0 - ((rsi_diff - 5) / 5) * 0.5
-        score += rsi_similarity * 0.35
-        weights.append(0.35)
+        score += rsi_similarity * 0.25
+        weights.append(0.25)
     
-    # VWAP distance similarity (±0.002 range)
-    exp_vwap_dist = exp.get('vwap_distance', 0)
+    # VWAP distance similarity (±0.002 range) - 20% weight
+    exp_vwap_dist = state.get('vwap_distance', 0)
     vwap_diff = abs(exp_vwap_dist - current_vwap_dist)
     if vwap_diff <= 0.002:
         vwap_similarity = 1.0 - (vwap_diff / 0.002)
-        score += vwap_similarity * 0.25  # 25% weight
-        weights.append(0.25)
+        score += vwap_similarity * 0.20
+        weights.append(0.20)
     
-    # Time-of-day similarity (±30 min = similar)
+    # Time-of-day similarity (±30 min = similar) - 15% weight
     if 'timestamp' in exp:
         try:
             exp_time = datetime.fromisoformat(exp['timestamp']).time() if isinstance(exp['timestamp'], str) else exp['timestamp'].time()
@@ -956,22 +979,61 @@ def calculate_similarity_score(exp: Dict, current_rsi: float, current_vwap_dist:
             time_diff = abs(exp_minutes - current_minutes)
             if time_diff <= 30:
                 time_similarity = 1.0 - (time_diff / 30)
-                score += time_similarity * 0.20  # 20% weight
-                weights.append(0.20)
+                score += time_similarity * 0.15
+                weights.append(0.15)
             elif time_diff <= 60:
                 time_similarity = 1.0 - ((time_diff - 30) / 30) * 0.5
-                score += time_similarity * 0.20
-                weights.append(0.20)
+                score += time_similarity * 0.15
+                weights.append(0.15)
         except:
             pass
     
-    # VIX similarity (±5 range)
-    exp_vix = exp.get('vix', 15)
+    # VIX similarity (±5 range) - 10% weight
+    exp_vix = state.get('vix', 15)
     vix_diff = abs(exp_vix - current_vix)
     if vix_diff <= 5:
         vix_similarity = 1.0 - (vix_diff / 5)
-        score += vix_similarity * 0.20  # 20% weight
-        weights.append(0.20)
+        score += vix_similarity * 0.10
+        weights.append(0.10)
+    
+    # Volume ratio similarity (±0.5 range) - 15% weight
+    exp_volume_ratio = state.get('volume_ratio', 1.0)
+    volume_diff = abs(exp_volume_ratio - current_volume_ratio)
+    if volume_diff <= 0.5:
+        volume_similarity = 1.0 - (volume_diff / 0.5)
+        score += volume_similarity * 0.15
+        weights.append(0.15)
+    
+    # Hour similarity (±2 hours = similar) - 5% weight
+    exp_hour = state.get('hour', 12)
+    hour_diff = abs(exp_hour - current_hour)
+    if hour_diff <= 2:
+        hour_similarity = 1.0 - (hour_diff / 2)
+        score += hour_similarity * 0.05
+        weights.append(0.05)
+    
+    # Day of week similarity (same day = 1.0, adjacent = 0.5) - 5% weight
+    exp_day = state.get('day_of_week', 0)
+    day_diff = abs(exp_day - current_day_of_week)
+    if day_diff == 0:
+        score += 1.0 * 0.05
+        weights.append(0.05)
+    elif day_diff == 1 or day_diff == 6:  # Adjacent days (or Monday-Sunday wrap)
+        score += 0.5 * 0.05
+        weights.append(0.05)
+    
+    # Streak similarity (same direction, ±2 range) - 5% weight
+    exp_streak = state.get('streak', 0)
+    # Both winning streaks or both losing streaks = similar
+    if (current_streak > 0 and exp_streak > 0) or (current_streak < 0 and exp_streak < 0):
+        streak_diff = abs(abs(exp_streak) - abs(current_streak))
+        if streak_diff <= 2:
+            streak_similarity = 1.0 - (streak_diff / 2)
+            score += streak_similarity * 0.05
+            weights.append(0.05)
+    elif current_streak == 0 and exp_streak == 0:
+        score += 1.0 * 0.05
+        weights.append(0.05)
     
     # Normalize score by sum of applied weights
     total_weight = sum(weights)
@@ -995,21 +1057,36 @@ def filter_experiences_by_context(experiences: List, signal_type: str, current_d
         Filtered list of relevant experiences
     """
     filtered = []
+    total_checked = 0
+    signal_mismatch = 0
+    vix_mismatch = 0
     
     for exp in experiences:
-        # Must match signal type
-        if exp.get('signal_type', exp.get('signal')) != signal_type:
+        total_checked += 1
+        # Handle both flat and nested (state-based) experience structures
+        # Nested: exp['state']['side'], Flat: exp['side']
+        state = exp.get('state', exp)  # Use 'state' dict if exists, otherwise use exp itself
+        
+        # Must match signal type (check all possible field names: signal_type, signal, or side)
+        exp_signal = state.get('signal_type') or state.get('signal') or state.get('side', '').upper()
+        if not exp_signal or exp_signal.upper() != signal_type.upper():
+            signal_mismatch += 1
             continue
         
         # Filter by VIX (only consider trades in similar volatility environments)
-        exp_vix = exp.get('vix', 15)
+        exp_vix = state.get('vix', 15)
         if abs(exp_vix - current_vix) > 10:  # Skip if VIX difference > 10
+            vix_mismatch += 1
             continue
         
         # Filter by day of week (optional - can enable for day-specific patterns)
         # For now, include all days but could add: if exp.get('day_of_week') == current_day
         
         filtered.append(exp)
+    
+    # Debug logging
+    if total_checked > 0:
+        logger.info(f"📊 Filter Stats: {total_checked} total, {signal_mismatch} signal mismatch, {vix_mismatch} VIX mismatch, {len(filtered)} matched")
     
     return filtered
 
@@ -1035,8 +1112,18 @@ def calculate_advanced_confidence(similar_experiences: List, recency_hours: int 
         }
     
     # Separate wins and losses
-    wins = [exp for exp in similar_experiences if exp.get('outcome') == 'WIN' or exp.get('pnl', 0) > 0]
-    losses = [exp for exp in similar_experiences if exp.get('outcome') == 'LOSS' or exp.get('pnl', 0) <= 0]
+    # Handle both flat and nested structures: exp['reward'] (nested) or exp['pnl'] (flat)
+    wins = []
+    losses = []
+    for exp in similar_experiences:
+        # Get PnL from either 'reward' (nested RL format) or 'pnl' (flat format)
+        pnl = exp.get('reward', exp.get('pnl', 0))
+        outcome = exp.get('outcome', '')
+        
+        if outcome == 'WIN' or pnl > 0:
+            wins.append(exp)
+        else:
+            losses.append(exp)
     
     # Calculate basic win rate
     win_rate = len(wins) / len(similar_experiences)
@@ -1065,14 +1152,16 @@ def calculate_advanced_confidence(similar_experiences: List, recency_hours: int 
         total_weight = recency_weight * quality_weight
         
         weighted_total += total_weight
-        if exp.get('outcome') == 'WIN' or exp.get('pnl', 0) > 0:
+        # Check both 'reward' (nested RL) and 'pnl' (flat) formats
+        pnl = exp.get('reward', exp.get('pnl', 0))
+        if exp.get('outcome') == 'WIN' or pnl > 0:
             weighted_wins += total_weight
     
     # Weighted win rate
     weighted_win_rate = weighted_wins / weighted_total if weighted_total > 0 else win_rate
     
-    # Calculate average P&L
-    total_pnl = sum(exp.get('pnl', 0) for exp in similar_experiences)
+    # Calculate average P&L (check both 'reward' and 'pnl' fields)
+    total_pnl = sum(exp.get('reward', exp.get('pnl', 0)) for exp in similar_experiences)
     avg_pnl = total_pnl / len(similar_experiences)
     
     # Calculate confidence score
@@ -1111,7 +1200,10 @@ def calculate_signal_confidence(
     signal: str,
     current_time: Optional[datetime] = None,
     current_vix: float = 15.0,
-    similarity_threshold: float = 0.6
+    similarity_threshold: float = 0.6,
+    volume_ratio: float = 1.0,
+    recent_pnl: float = 0.0,
+    streak: int = 0
 ) -> Dict:
     """
     ADVANCED ML confidence based on pattern matching across ALL RL experiences
@@ -1120,7 +1212,7 @@ def calculate_signal_confidence(
     2,961+ exit experiences to make intelligent trading decisions.
     
     Features:
-    - Pattern matching: Finds similar past setups (RSI, VWAP, time, VIX)
+    - Pattern matching: Finds similar past setups (RSI, VWAP, time, VIX, volume, hour, day, streak)
     - Context-aware: Filters by day of week, time of day, volatility
     - Recency-weighted: Recent trades matter more than old ones
     - Quality-weighted: Better trades (higher quality_score) matter more
@@ -1134,6 +1226,9 @@ def calculate_signal_confidence(
         current_time: Current timestamp (for time-of-day filtering)
         current_vix: Current VIX level (for volatility filtering)
         similarity_threshold: Minimum similarity score (0.0-1.0) to consider a past trade
+        volume_ratio: Current volume / 20-bar average
+        recent_pnl: Sum of last 5 trades P&L
+        streak: Consecutive wins (positive) or losses (negative)
     
     Returns:
         Dict with:
@@ -1149,6 +1244,7 @@ def calculate_signal_confidence(
     
     current_time_only = current_time.time()
     current_day_of_week = current_time.weekday()  # 0=Monday, 6=Sunday
+    current_hour = current_time.hour  # 0-23
     
     # STEP 1: Filter experiences by context (signal type, VIX, day of week)
     logger.info(f"🧠 RL Pattern Matching: Analyzing {len(all_experiences)} total experiences for {signal} signal")
@@ -1172,7 +1268,12 @@ def calculate_signal_confidence(
             current_rsi=rsi,
             current_vwap_dist=vwap_distance,
             current_time=current_time_only,
-            current_vix=current_vix
+            current_vix=current_vix,
+            current_volume_ratio=volume_ratio,
+            current_hour=current_hour,
+            current_day_of_week=current_day_of_week,
+            current_recent_pnl=recent_pnl,
+            current_streak=streak
         )
         
         if similarity >= similarity_threshold:

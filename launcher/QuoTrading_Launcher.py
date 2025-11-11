@@ -2328,6 +2328,7 @@ class QuoTradingLauncher:
         self.config["max_contracts"] = self.contracts_var.get()
         self.config["max_trades"] = self.trades_var.get()
         self.config["confidence_threshold"] = self.confidence_var.get()
+        self.config["rl_confidence_threshold"] = self.confidence_var.get() / 100.0  # Convert to decimal for bot
         self.config["shadow_mode"] = self.shadow_mode_var.get()
         self.config["confidence_trading"] = self.confidence_trading_var.get()
         self.config["selected_account"] = self.account_dropdown_var.get()

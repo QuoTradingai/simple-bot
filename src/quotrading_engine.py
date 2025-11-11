@@ -209,6 +209,7 @@ dashboard: Optional[Dashboard] = None
 # Dashboard refresh throttle - prevent constant flickering
 # Use list for mutable reference in closures
 last_dashboard_refresh = [0.0]
+dashboard_tick_counter = [0]  # Counter for dashboard updates (updates every 1000 ticks)
 
 # State management dictionary
 state: Dict[str, Any] = {}
@@ -292,17 +293,15 @@ async def get_ml_confidence_async(rl_state: Dict[str, Any], side: str) -> Tuple[
     max_retries = 3
     for attempt in range(max_retries):
         try:
-            # Prepare payload for cloud API
+            # Prepare payload for cloud API (FIXED: using correct field names)
             payload = {
                 "user_id": USER_ID,
                 "symbol": CONFIG["instrument"],
-                "side": side,
+                "signal": side.upper(),  # FIXED: was 'side', now 'signal'
                 "rsi": rl_state.get("rsi", 50),
-                "vwap_distance": rl_state.get("vwap_distance", 0),
-                "volume_ratio": rl_state.get("volume_ratio", 1.0),
-                "streak": rl_state.get("streak", 0),
-                "time_of_day_score": rl_state.get("time_of_day_score", 0.5),
-                "volatility": rl_state.get("volatility", 1.0)
+                "price": rl_state.get("price", 0),  # ADDED: need price for VWAP calc
+                "vwap": rl_state.get("vwap", 0),    # ADDED: need VWAP reference
+                "vix": rl_state.get("vix", 15.0)    # ADDED: volatility context
             }
             
             # Increase timeout slightly on retries
@@ -1615,11 +1614,11 @@ def on_quote(symbol: str, bid_price: float, ask_price: float, bid_size: int,
                 'current_volume': current_volume
             })
             
-            # Throttled refresh - max 2x per second to prevent flickering
-            current_time = time_module.time()
-            if current_time - last_dashboard_refresh[0] >= 0.5:  # 500ms throttle
+            # Refresh dashboard every 1000 ticks to reduce flicker
+            dashboard_tick_counter[0] += 1
+            if dashboard_tick_counter[0] >= 1000:
                 dashboard.display()
-                last_dashboard_refresh[0] = current_time
+                dashboard_tick_counter[0] = 0  # Reset counter
     
     # Also process as tick data to build bars
     # Use last_price and estimated volume of 1 (quote updates don't have volume)
@@ -1831,8 +1830,8 @@ def update_1min_bar(symbol: str, price: float, volume: int, dt: datetime) -> Non
             state[symbol]["bars_1min"].append(current_bar)
             state[symbol]["bars_1min_count"] += 1  # Increment total bar counter
             bar_count = state[symbol]["bars_1min_count"]
-            # Log at INFO level to avoid spamming the dashboard
-            logger.info(f"[BAR CLOSED] Bar #{bar_count} | Time: {current_bar['timestamp'].strftime('%H:%M')} | Price: ${current_bar['close']:.2f} | Vol: {current_bar['volume']}")
+            # Log at CRITICAL level so it shows on dashboard
+            logger.critical(f"📊 BAR #{bar_count} CLOSED | {current_bar['timestamp'].strftime('%H:%M')} | ${current_bar['close']:.2f} | Vol: {current_bar['volume']}")
             
             # Calculate VWAP after new bar is added
             calculate_vwap(symbol)
@@ -1859,6 +1858,7 @@ def update_1min_bar(symbol: str, price: float, volume: int, dt: datetime) -> Non
             # Check for exit conditions if position is active
             check_exit_conditions(symbol)
             # Check for entry signals if no position
+            logger.critical(f"🔍 CHECKING FOR SIGNALS | Bar #{bar_count} | Bars available: {len(state[symbol]['bars_1min'])}")
             check_for_signals(symbol)
         
         # Start new bar
@@ -2430,6 +2430,11 @@ def validate_signal_requirements(symbol: str, bar_time: datetime) -> Tuple[bool,
     
     # Trading state is "entry_window" - market is open, proceed with checks
     
+    # Daily entry cutoff - no new positions after 4:00 PM ET (can still hold existing)
+    if current_time.time() >= CONFIG["daily_entry_cutoff"]:
+        logger.debug(f"After 4:00 PM entry cutoff, no new trades (can hold existing)")
+        return False, "After 4:00 PM - no new entries"
+    
     # Friday restriction - close before weekend (use current time, not bar time)
     if current_time.weekday() == 4 and current_time.time() >= CONFIG["friday_entry_cutoff"]:
         log_time_based_action(
@@ -2767,7 +2772,9 @@ def capture_rl_state(symbol: str, side: str, current_price: float) -> Dict[str, 
         "recent_pnl": recent_pnl,
         "streak": streak,
         "side": side,
-        "price": current_price
+        "price": current_price,
+        "vwap": vwap,  # ADDED: need for cloud RL API
+        "vix": 15.0    # ADDED: default VIX (could fetch real VIX later)
     }
     
     return rl_state
@@ -2841,12 +2848,35 @@ def check_for_signals(symbol: str) -> None:
     
     # Check for long signal
     if check_long_signal_conditions(symbol, prev_bar, current_bar):
+        logger.critical(f"🎯 LONG SIGNAL DETECTED! Prev Low: ${prev_bar['low']:.2f} | Lower Band: ${vwap_bands['lower_2']:.2f}")
+        
+        # ADAPTIVE LEARNING - Check if we should skip this trade based on learned patterns
+        should_skip, skip_reason = adaptive_exit_manager.should_skip_trade(symbol, state[symbol])
+        if should_skip:
+            logger.info(f"❌ ADAPTIVE FILTER REJECTED LONG: {skip_reason}")
+            state[symbol]["last_rejected_signal"] = {
+                "time": get_current_time(),
+                "side": "long",
+                "price": current_bar["close"],
+                "reason": skip_reason
+            }
+            if dashboard:
+                sig_time = get_current_time().strftime("%H:%M")
+                dashboard.update_symbol_data(symbol, {
+                    "last_rejected_signal": f"{sig_time} LONG @ ${current_bar['close']:.2f} (Adaptive filter)",
+                    "status": "Signal rejected - learned filter"
+                })
+                dashboard.display()
+            return
+        
         # REINFORCEMENT LEARNING - Get confidence from cloud API (shared learning pool)
         # Capture market state
         rl_state = capture_rl_state(symbol, "long", current_bar["close"])
         
         # Ask cloud RL API for decision (or local RL as fallback)
         take_signal, confidence, reason = get_ml_confidence(rl_state, "long")
+        
+        logger.critical(f"🤖 ML DECISION: {'✅ TAKE' if take_signal else '❌ REJECT'} | Confidence: {confidence:.1%} | Reason: {reason}")
         
         # Check if in recovery mode and need higher confidence
         if take_signal and bot_status.get("recovery_confidence_threshold"):
@@ -2925,12 +2955,35 @@ def check_for_signals(symbol: str) -> None:
     
     # Check for short signal
     if check_short_signal_conditions(symbol, prev_bar, current_bar):
+        logger.critical(f"🎯 SHORT SIGNAL DETECTED! Prev High: ${prev_bar['high']:.2f} | Upper Band: ${vwap_bands['upper_2']:.2f}")
+        
+        # ADAPTIVE LEARNING - Check if we should skip this trade based on learned patterns
+        should_skip, skip_reason = adaptive_exit_manager.should_skip_trade(symbol, state[symbol])
+        if should_skip:
+            logger.info(f"❌ ADAPTIVE FILTER REJECTED SHORT: {skip_reason}")
+            state[symbol]["last_rejected_signal"] = {
+                "time": get_current_time(),
+                "side": "short",
+                "price": current_bar["close"],
+                "reason": skip_reason
+            }
+            if dashboard:
+                sig_time = get_current_time().strftime("%H:%M")
+                dashboard.update_symbol_data(symbol, {
+                    "last_rejected_signal": f"{sig_time} SHORT @ ${current_bar['close']:.2f} (Adaptive filter)",
+                    "status": "Signal rejected - learned filter"
+                })
+                dashboard.display()
+            return
+        
         # REINFORCEMENT LEARNING - Get confidence from cloud API (shared learning pool)
         # Capture market state
         rl_state = capture_rl_state(symbol, "short", current_bar["close"])
         
         # Ask cloud RL API for decision (or local RL as fallback)
         take_signal, confidence, reason = get_ml_confidence(rl_state, "short")
+        
+        logger.critical(f"🤖 ML DECISION: {'✅ TAKE' if take_signal else '❌ REJECT'} | Confidence: {confidence:.1%} | Reason: {reason}")
         
         # Check if in recovery mode and need higher confidence
         if take_signal and bot_status.get("recovery_confidence_threshold"):
@@ -3048,30 +3101,47 @@ def calculate_position_size(symbol: str, side: str, entry_price: float, rl_confi
         atr = calculate_atr(symbol, CONFIG.get("atr_period", 14))
         
         if atr > 0:
-            # Use ATR multipliers from ITERATION 3
-            stop_multiplier = CONFIG.get("stop_loss_atr_multiplier", 3.6)  # Iteration 3
-            target_multiplier = CONFIG.get("profit_target_atr_multiplier", 4.75)  # Iteration 3
+            # LEARNED STOP MULTIPLIER: Get from adaptive exit manager based on regime
+            global adaptive_manager
+            stop_multiplier = 3.6  # Fallback default
             
+            if adaptive_manager is not None:
+                try:
+                    # Detect current regime
+                    from adaptive_exits import detect_market_regime
+                    bars = state[symbol]["bars_1min"]
+                    regime = detect_market_regime(bars, entry_price, CONFIG)
+                    
+                    # Get learned stop multiplier for this regime
+                    stop_multiplier = adaptive_manager.get_stop_multiplier(regime)
+                    logger.info(f"[EXIT RL] Using learned stop: {stop_multiplier:.1f}x ATR for {regime}")
+                except Exception as e:
+                    logger.warning(f"[EXIT RL] Failed to get learned stop, using default 3.6x: {e}")
+                    stop_multiplier = 3.6
+            else:
+                logger.info(f"[EXIT RL] No adaptive manager, using default stop: 3.6x ATR")
+            
+            # NO HARDCODED TARGET - Learned partials control ALL profit exits
             if side == "long":
                 stop_price = entry_price - (atr * stop_multiplier)
-                target_price = entry_price + (atr * target_multiplier)
+                target_price = None  # No fixed target - partials handle exits
             else:  # short
                 stop_price = entry_price + (atr * stop_multiplier)
-                target_price = entry_price - (atr * target_multiplier)
+                target_price = None  # No fixed target - partials handle exits
             
             stop_price = round_to_tick(stop_price)
-            target_price = round_to_tick(target_price)
+            # target_price = None (no rounding needed)
         else:
             # Fallback to fixed stops if ATR can't be calculated
             max_stop_ticks = 11
             if side == "long":
                 stop_price = entry_price - (max_stop_ticks * tick_size)
-                target_price = vwap_bands["upper_3"]
+                target_price = None  # No fixed target - learned partials handle exits
             else:
                 stop_price = entry_price + (max_stop_ticks * tick_size)
-                target_price = vwap_bands["lower_3"]
+                target_price = None  # No fixed target - learned partials handle exits
             stop_price = round_to_tick(stop_price)
-            target_price = round_to_tick(target_price)
+            # target_price = None (no rounding needed)
     else:
         # Use fixed stops (original logic)
         max_stop_ticks = 11  # Optimized to 11 ticks
@@ -3081,18 +3151,18 @@ def calculate_position_size(symbol: str, side: str, entry_price: float, rl_confi
             band_stop = vwap_bands["lower_3"] - (2 * tick_size)  # 2 tick buffer
             tight_stop = entry_price - (max_stop_ticks * tick_size)
             stop_price = max(tight_stop, band_stop)  # Use tighter of the two
-            # Target at upper band
-            target_price = vwap_bands["upper_3"]
+            # No fixed target - learned partials handle exits
+            target_price = None
         else:  # short
             # Stop 11 ticks above entry (or at upper band 3, whichever is tighter)
             band_stop = vwap_bands["upper_3"] + (2 * tick_size)  # 2 tick buffer
             tight_stop = entry_price + (max_stop_ticks * tick_size)
             stop_price = min(tight_stop, band_stop)  # Use tighter of the two
-            # Target at lower band
-            target_price = vwap_bands["lower_3"]
+            # No fixed target - learned partials handle exits
+            target_price = None
         
         stop_price = round_to_tick(stop_price)
-        target_price = round_to_tick(target_price)
+        # target_price = None (no rounding needed)
     
     # Calculate stop distance in ticks
     stop_distance = abs(entry_price - stop_price)
@@ -3108,11 +3178,12 @@ def calculate_position_size(symbol: str, side: str, entry_price: float, rl_confi
     else:
         contracts = 0
     
-    # Get user's max contracts limit
+    # Get user's max contracts limit - THIS IS YOUR HARD CEILING
     user_max_contracts = CONFIG["max_contracts"]
     
-    # Apply RL confidence to dynamically scale WITHIN user's limit
-    # Check if dynamic contracts feature is enabled (GUI setting)
+    # Two modes:
+    # FIXED MODE: Use exact max_contracts, no adjustments
+    # DYNAMIC MODE: Apply confidence/streak/session multipliers WITHIN your max
     dynamic_contracts_enabled = CONFIG.get("dynamic_contracts", False)
     
     if rl_confidence is not None and dynamic_contracts_enabled:
@@ -3155,13 +3226,11 @@ def calculate_position_size(symbol: str, side: str, entry_price: float, rl_confi
             dashboard.update_bot_data({"contract_adjustment": adjustment_msg})
             dashboard.display()
     else:
-        # No RL confidence or dynamic contracts disabled - use fixed max
+        # FIXED MODE - Use exact max_contracts, no learning adjustments
         contracts = min(contracts, user_max_contracts)
-        # Only log once when dynamic contracts are first disabled (avoid spamming logs)
-        if not dynamic_contracts_enabled and rl_confidence is not None:
-            if not hasattr(calculate_position_size, '_logged_fixed_mode'):
-                logger.info(f"[FIXED CONTRACTS] Using fixed max of {user_max_contracts} contracts (dynamic contracts disabled)")
-                calculate_position_size._logged_fixed_mode = True
+        if not hasattr(calculate_position_size, '_logged_fixed_mode'):
+            logger.info(f"[FIXED MODE] Using exact max of {user_max_contracts} contracts - no dynamic adjustments")
+            calculate_position_size._logged_fixed_mode = True
     
     # RECOVERY MODE: Further reduce position size when approaching limits
     if bot_status.get("recovery_confidence_threshold") is not None:
@@ -4338,6 +4407,8 @@ def check_breakeven_protection(symbol: str, current_price: float) -> None:
         try:
             from adaptive_exits import get_adaptive_exit_params
             
+            # CONTINUOUS ADAPTATION: Recalculate exit params on EVERY bar
+            # This allows the bot to adapt as market conditions change mid-trade
             adaptive_params = get_adaptive_exit_params(
                 bars=state[symbol]["bars_1min"],
                 position=position,
@@ -4349,7 +4420,16 @@ def check_breakeven_protection(symbol: str, current_price: float) -> None:
             breakeven_threshold_ticks = adaptive_params["breakeven_threshold_ticks"]
             breakeven_offset_ticks = adaptive_params["breakeven_offset_ticks"]
             
-            # STORE exit params for learning when trade closes
+            # UPDATE exit params continuously (market conditions change!)
+            # Compare with previous params to detect regime shifts
+            prev_regime = position.get("exit_params_used", {}).get("market_regime", "UNKNOWN")
+            new_regime = adaptive_params["market_regime"]
+            
+            if prev_regime != new_regime and prev_regime != "UNKNOWN":
+                logger.info(f" [REGIME SHIFT] {prev_regime} → {new_regime}")
+                logger.info(f"   Adjusting exit parameters mid-trade for new conditions")
+            
+            # Store updated exit params for learning when trade closes
             position["exit_params_used"] = adaptive_params
             
         except Exception as e:
@@ -4453,6 +4533,8 @@ def check_trailing_stop(symbol: str, current_price: float) -> None:
         try:
             from adaptive_exits import get_adaptive_exit_params
             
+            # CONTINUOUS ADAPTATION: Recalculate trailing params on EVERY bar
+            # Market conditions change while holding → trailing should adapt too!
             adaptive_params = get_adaptive_exit_params(
                 bars=state[symbol]["bars_1min"],
                 position=position,
@@ -4464,7 +4546,20 @@ def check_trailing_stop(symbol: str, current_price: float) -> None:
             trailing_distance_ticks = adaptive_params["trailing_distance_ticks"]
             min_profit_ticks = adaptive_params["trailing_min_profit_ticks"]
             
-            # STORE exit params for learning when trade closes
+            # UPDATE exit params continuously (already done in breakeven, but update here too)
+            # This ensures trailing stop reflects latest market conditions
+            prev_regime = position.get("exit_params_used", {}).get("market_regime", "UNKNOWN")
+            new_regime = adaptive_params["market_regime"]
+            
+            # Log significant changes in trailing distance (regime shift mid-trade)
+            prev_trail = position.get("exit_params_used", {}).get("trailing_distance_ticks", 0)
+            if prev_trail > 0 and abs(trailing_distance_ticks - prev_trail) >= 2:
+                change_pct = ((trailing_distance_ticks - prev_trail) / prev_trail * 100)
+                logger.info(f" [TRAILING ADAPT] {prev_trail}t → {trailing_distance_ticks}t ({change_pct:+.0f}%)")
+                if new_regime != prev_regime:
+                    logger.info(f"   Reason: Regime shift ({prev_regime} → {new_regime})")
+            
+            # Store updated exit params for learning
             position["exit_params_used"] = adaptive_params
             
         except Exception as e:
@@ -4732,12 +4827,24 @@ def check_time_decay_tightening(symbol: str, current_time: datetime) -> None:
 # PHASE SIX: Partial Exit Logic
 # ============================================================================
 
+def get_current_hour() -> int:
+    """Get current hour in EST/EDT trading timezone."""
+    from datetime import datetime
+    import pytz
+    try:
+        tz = pytz.timezone('America/New_York')
+        now = datetime.now(tz)
+        return now.hour
+    except:
+        # Fallback to UTC if timezone fails
+        return datetime.utcnow().hour - 5  # Approximate EST
+
+
 def check_partial_exits(symbol: str, current_price: float) -> None:
     """
-    Execute partial exits at predefined R-multiple thresholds.
+    Execute partial exits using LEARNED scaling strategies.
     
-    Scales out of position at 2R, 3R, and 5R to lock in profits while
-    maintaining exposure to further gains.
+    Bot learns WHEN and HOW MUCH to scale based on market context.
     
     Args:
         symbol: Instrument symbol
@@ -4775,42 +4882,73 @@ def check_partial_exits(symbol: str, current_price: float) -> None:
         logger.debug("Skipping partial exits: only 1 contract")
         return
     
-    # Check each partial exit threshold in order
+    # Get learned scaling strategy from adaptive exit manager
+    from adaptive_exits import get_recommended_scaling_strategy, detect_market_regime
     
-    # Step 2 & 3 & 4 - First partial (50% at 2.0R)
-    if (r_multiple >= CONFIG.get("partial_exit_1_r_multiple", 2.0) and 
+    # Build market state for scaling decision
+    market_state = {
+        'rsi': position.get('entry_rsi', calculate_rsi(bars)),
+        'volume_ratio': bars[-1]['volume'] / (sum(b['volume'] for b in bars[-20:]) / 20) if len(bars) >= 20 else 1.0,
+        'hour': get_current_hour(),
+        'streak': position.get('signal_streak', 0)
+    }
+    
+    # Detect regime
+    regime = detect_market_regime(bars, current_price, CONFIG)
+    
+    # Get adaptive scaling strategy
+    adaptive_manager = position.get('adaptive_exit_manager')
+    scaling = get_recommended_scaling_strategy(market_state, regime, adaptive_manager)
+    
+    # Log strategy with learning mode
+    if scaling.get('learning_mode') == 'EXPERIENCE_BASED':
+        logger.info(f"[SCALING STRATEGY] {scaling['strategy']} | "
+                   f"Found {scaling.get('similar_count', 0)} similar past exits | "
+                   f"Avg P&L: ${scaling.get('avg_pnl', 0):.0f} | Avg R: {scaling.get('avg_r', 0):.1f}")
+    else:
+        logger.info(f"[SCALING STRATEGY] {scaling['strategy']} (rule-based fallback)")
+    
+    # Store scaling strategy in position for exit learning
+    if "exit_params_used" not in position:
+        position["exit_params_used"] = {}
+    position["exit_params_used"]["scaling_strategy"] = scaling['strategy']
+    position["exit_params_used"]["scaling_r_multiples"] = [scaling['partial_1_r'], scaling['partial_2_r'], scaling['partial_3_r']]
+    position["exit_params_used"]["scaling_percentages"] = [scaling['partial_1_pct'], scaling['partial_2_pct'], scaling['partial_3_pct']]
+    
+    # Check each partial exit threshold using LEARNED strategy
+    
+    # First partial
+    if (r_multiple >= scaling['partial_1_r'] and 
         not position["partial_exit_1_completed"]):
         
-        partial_pct = CONFIG.get("partial_exit_1_percentage", 0.50)
-        contracts_to_close = int(original_quantity * partial_pct)
+        contracts_to_close = int(original_quantity * scaling['partial_1_pct'])
         
         if contracts_to_close >= 1:
             execute_partial_exit(symbol, contracts_to_close, current_price, r_multiple, 
-                                "partial_exit_1_completed", 1, partial_pct)
+                                "partial_exit_1_completed", 1, scaling['partial_1_pct'])
             return  # Exit one partial per bar to avoid race conditions
     
-    # Step 5 & 6 & 7 - Second partial (30% at 3.0R)
-    if (r_multiple >= CONFIG.get("partial_exit_2_r_multiple", 3.0) and 
+    # Second partial
+    if (r_multiple >= scaling['partial_2_r'] and 
         not position["partial_exit_2_completed"]):
         
-        partial_pct = CONFIG.get("partial_exit_2_percentage", 0.30)
-        contracts_to_close = int(original_quantity * partial_pct)
+        contracts_to_close = int(original_quantity * scaling['partial_2_pct'])
         
         if contracts_to_close >= 1:
             execute_partial_exit(symbol, contracts_to_close, current_price, r_multiple,
-                                "partial_exit_2_completed", 2, partial_pct)
+                                "partial_exit_2_completed", 2, scaling['partial_2_pct'])
             return
     
-    # Step 8 & 9 - Third partial (remaining 20% at 5.0R)
-    if (r_multiple >= CONFIG.get("partial_exit_3_r_multiple", 5.0) and 
+    # Third partial (final runner)
+    if (r_multiple >= scaling['partial_3_r'] and 
         not position["partial_exit_3_completed"]):
         
-        # Close all remaining contracts (the final runner)
+        # Close all remaining contracts
         remaining_quantity = position["remaining_quantity"]
         
         if remaining_quantity >= 1:
             execute_partial_exit(symbol, remaining_quantity, current_price, r_multiple,
-                                "partial_exit_3_completed", 3, 1.0, is_final=True)
+                                "partial_exit_3_completed", 3, scaling['partial_3_pct'], is_final=True)
             return
 
 
@@ -4868,6 +5006,60 @@ def execute_partial_exit(symbol: str, contracts: int, exit_price: float, r_multi
             "r_multiple": r_multiple,
             "level": level
         })
+        
+        # ADAPTIVE EXIT LEARNING - Record partial exit for pattern learning
+        global adaptive_manager
+        try:
+            if adaptive_manager is not None and hasattr(adaptive_manager, 'record_exit_outcome'):
+                # Get exit parameters that were used
+                if "exit_params_used" in position:
+                    exit_params = position["exit_params_used"]
+                    regime = exit_params.get("market_regime", "UNKNOWN")
+                    
+                    # Capture current market state for context-aware learning
+                    try:
+                        current_rl_state = capture_rl_state(symbol, side, exit_price)
+                        market_state = {
+                            'rsi': current_rl_state.get('rsi', 50.0),
+                            'volume_ratio': current_rl_state.get('volume_ratio', 1.0),
+                            'hour': current_rl_state.get('hour', 12),
+                            'day_of_week': current_rl_state.get('day_of_week', 0),
+                            'streak': current_rl_state.get('streak', 0),
+                            'recent_pnl': current_rl_state.get('recent_pnl', 0.0),
+                            'vix': current_rl_state.get('vix', 15.0),
+                            'vwap_distance': current_rl_state.get('vwap_distance', 0.0),
+                            'atr': current_rl_state.get('atr', exit_params.get('current_atr', 0))
+                        }
+                    except Exception as e:
+                        logger.debug(f"Failed to capture market state for partial exit: {e}")
+                        market_state = None
+                    
+                    # Record partial exit outcome WITH SCALING STRATEGY
+                    adaptive_manager.record_exit_outcome(
+                        regime=regime,
+                        exit_params=exit_params,
+                        trade_outcome={
+                            'pnl': profit_dollars,
+                            'duration': 0,  # Don't have duration for partials
+                            'exit_reason': f'partial_exit_{level}_{r_multiple:.1f}R',
+                            'side': side,
+                            'contracts': contracts,
+                            'win': profit_dollars > 0,
+                            'partial': True,
+                            'r_multiple': r_multiple
+                        },
+                        market_state=market_state,
+                        partial_exits=[{
+                            'level': level,
+                            'r_multiple': r_multiple,
+                            'contracts': contracts,
+                            'percentage': percentage
+                        }]
+                    )
+                    
+                    logger.info(f"  [EXIT RL] Learned partial exit @ {r_multiple:.1f}R -> ${profit_dollars:+.2f} ({exit_params.get('scaling_strategy', 'UNKNOWN')})")
+        except Exception as e:
+            logger.debug(f"Partial exit learning failed: {e}")
         
         # Step 10 - Handle edge case: check if position should be fully closed
         if position["remaining_quantity"] < 1 or is_final:
@@ -5655,7 +5847,25 @@ def execute_exit(symbol: str, exit_price: float, reason: str) -> None:
                     duration = exit_time - entry_time
                     duration_minutes = duration.total_seconds() / 60
                 
-                # Record for learning
+                # Capture current market state for context-aware learning
+                try:
+                    current_rl_state = capture_rl_state(symbol, position["side"], exit_price)
+                    market_state = {
+                        'rsi': current_rl_state.get('rsi', 50.0),
+                        'volume_ratio': current_rl_state.get('volume_ratio', 1.0),
+                        'hour': current_rl_state.get('hour', 12),
+                        'day_of_week': current_rl_state.get('day_of_week', 0),
+                        'streak': current_rl_state.get('streak', 0),
+                        'recent_pnl': current_rl_state.get('recent_pnl', 0.0),
+                        'vix': current_rl_state.get('vix', 15.0),
+                        'vwap_distance': current_rl_state.get('vwap_distance', 0.0),
+                        'atr': current_rl_state.get('atr', exit_params.get('current_atr', 0))
+                    }
+                except Exception as e:
+                    logger.debug(f"Failed to capture market state for exit: {e}")
+                    market_state = None
+                
+                # Record for learning with market context
                 adaptive_manager.record_exit_outcome(
                     regime=regime,
                     exit_params=exit_params,
@@ -5666,10 +5876,11 @@ def execute_exit(symbol: str, exit_price: float, reason: str) -> None:
                         'side': position["side"],
                         'contracts': position["quantity"],
                         'win': pnl > 0
-                    }
+                    },
+                    market_state=market_state
                 )
                 
-                logger.info(f"[EXIT RL] Learned {regime} exit -> ${pnl:+.2f} in {duration_minutes:.1f}min")
+                logger.info(f"[EXIT RL] Learned {regime} exit -> ${pnl:+.2f} in {duration_minutes:.1f}min with market context")
     except Exception as e:
         logger.debug(f"Exit learning failed: {e}")
     

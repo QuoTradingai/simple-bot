@@ -92,6 +92,9 @@ class BotConfiguration:
     shutdown_time: time = field(default_factory=lambda: time(18, 0))  # 6:00 PM ET - after maintenance, session restarts
     vwap_reset_time: time = field(default_factory=lambda: time(18, 0))  # 6 PM ET - futures daily session reset
     
+    # Entry Cutoff - Stop new entries (can still hold existing positions)
+    daily_entry_cutoff: time = field(default_factory=lambda: time(16, 0))  # Stop entries 4:00 PM ET daily
+    
     # Friday Special Rules - Close before weekend
     friday_entry_cutoff: time = field(default_factory=lambda: time(16, 30))  # Stop entries 4:30 PM Friday
     friday_close_target: time = field(default_factory=lambda: time(16, 45))  # Flatten by 4:45 PM Friday
@@ -456,6 +459,7 @@ class BotConfiguration:
             "forced_flatten_time": self.forced_flatten_time,
             "shutdown_time": self.shutdown_time,
             "vwap_reset_time": self.vwap_reset_time,
+            "daily_entry_cutoff": self.daily_entry_cutoff,
             "friday_entry_cutoff": self.friday_entry_cutoff,
             "friday_close_target": self.friday_close_target,
             "daily_loss_limit": self.daily_loss_limit,
