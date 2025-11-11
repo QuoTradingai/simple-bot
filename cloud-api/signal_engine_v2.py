@@ -1405,26 +1405,19 @@ def calculate_signal_confidence(
     current_day_of_week = current_time.weekday()  # 0=Monday, 6=Sunday
     current_hour = current_time.hour  # 0-23
     
-    # STEP 1: Filter experiences by context (signal type, VIX, day of week)
-    # SMART APPROACH: Filter by relevance FIRST, then limit to most recent 3000
-    # This gives maximum relevant data without stale patterns or slow queries
+    # STEP 1: Filter ALL experiences by context (signal type, VIX, day of week)
+    # NO arbitrary limits - let similarity scoring find what's relevant
     logger.info(f"🧠 RL Pattern Matching: Analyzing {len(all_experiences)} total experiences for {signal} signal")
     
     contextual_experiences = filter_experiences_by_context(
-        experiences=all_experiences,  # Use ALL experiences for filtering
+        experiences=all_experiences,  # Use ALL experiences
         signal_type=signal,
         current_day=current_day_of_week,
         current_vix=current_vix,
         min_similarity=similarity_threshold
     )
     
-    # PERFORMANCE: After filtering by context, limit to 3000 most recent RELEVANT experiences
-    # This balances data quality (more experiences) with speed (not querying 10,000+)
-    if len(contextual_experiences) > 3000:
-        contextual_experiences = contextual_experiences[-3000:]
-        logger.info(f"   Filtered to {len(contextual_experiences)} most recent relevant experiences (from context filter)")
-    else:
-        logger.info(f"   Found {len(contextual_experiences)} contextually relevant experiences")
+    logger.info(f"   → Found {len(contextual_experiences)} contextually relevant experiences (after context filter)")
     
     logger.info(f"   → Filtered to {len(contextual_experiences)} contextually relevant experiences")
     
@@ -1998,8 +1991,8 @@ async def get_adaptive_exit_params(request: dict):
             position = request.get('position', {})
             entry_confidence = request.get('entry_confidence', 0.75)
             
-            # Query ALL exit experiences from PostgreSQL, then filter by relevance
-            # SMART APPROACH: Get all, filter by regime/context, then limit to recent 3000
+            # Query ALL exit experiences from PostgreSQL
+            # NO arbitrary limits - similarity scoring will find what's relevant
             all_exits = session.query(ExitExperience).order_by(ExitExperience.timestamp.desc()).all()
             
             logger.info(f"🎯 Exit RL: Analyzing {len(all_exits)} total exit experiences for {regime} regime")
@@ -2019,12 +2012,6 @@ async def get_adaptive_exit_params(request: dict):
                     "similar_exits_analyzed": 0,
                     "recommendation": "Using defaults (no exit experiences yet)"
                 }
-            
-            # PERFORMANCE: If we have >3000 exits, filter to most recent 3000 BEFORE similarity calculation
-            # This balances quality (more data) with speed (not computing similarity for 10,000+ exits)
-            if len(all_exits) > 3000:
-                all_exits = all_exits[:3000]  # Already sorted by timestamp desc
-                logger.info(f"   Limited to {len(all_exits)} most recent exits for performance")
             
             # Find similar exit situations (same regime, similar market conditions)
             similar_exits = []
