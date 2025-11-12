@@ -713,9 +713,14 @@ def load_config(environment: Optional[str] = None, backtest_mode: bool = False) 
     """
     Load configuration based on environment.
     
-    Priority:
+    Priority (for live bot):
+    1. config.json (GUI user settings) - HIGHEST
+    2. .env (broker credentials only) - For API tokens, URLs, etc.
+    3. config.py (default values) - LOWEST
+    
+    Priority (for backtest):
     1. Environment variables (highest)
-    2. Environment-specific config
+    2. config.json
     3. Default config (lowest)
     
     Args:
@@ -733,7 +738,7 @@ def load_config(environment: Optional[str] = None, backtest_mode: bool = False) 
     if environment is None:
         environment = os.getenv("BOT_ENVIRONMENT", "development")
     
-    # Load base config for environment
+    # Load base config for environment (includes config.json)
     if environment == "production":
         config = get_production_config()
     elif environment == "staging":
@@ -744,71 +749,39 @@ def load_config(environment: Optional[str] = None, backtest_mode: bool = False) 
     # Set backtest mode
     config.backtest_mode = backtest_mode
     
-    # Override with environment variables
-    env_config = load_from_env()
+    # Override ONLY CREDENTIALS from environment variables
+    # Live bot uses GUI settings (config.json), NOT .env for trading parameters
     
-    # Merge configurations (env vars take precedence)
-    # We need to check which env vars were actually set, not just compare to defaults
-    # Load environment variables again to check which ones are set
-    env_vars_set = set()
-    
-    # Check which environment variables are actually set
-    if os.getenv("BOT_INSTRUMENTS") or os.getenv("BOT_INSTRUMENT"):
-        env_vars_set.add("instruments")
-        env_vars_set.add("instrument")
-    if os.getenv("BOT_TIMEZONE"):
-        env_vars_set.add("timezone")
-    if os.getenv("BOT_RISK_PER_TRADE"):
-        env_vars_set.add("risk_per_trade")
-    if os.getenv("BOT_MAX_CONTRACTS"):
-        env_vars_set.add("max_contracts")
-    if os.getenv("BOT_MAX_TRADES_PER_DAY"):
-        env_vars_set.add("max_trades_per_day")
-    if os.getenv("BOT_MIN_RISK_REWARD") or os.getenv("BOT_RISK_REWARD_RATIO"):
-        env_vars_set.add("risk_reward_ratio")
-    if os.getenv("BOT_DAILY_LOSS_LIMIT"):
-        env_vars_set.add("daily_loss_limit")
-    if os.getenv("BOT_DAILY_LOSS_PERCENT"):
-        env_vars_set.add("daily_loss_percent")
-    if os.getenv("BOT_AUTO_CALCULATE_LIMITS") or os.getenv("BOT_USE_TOPSTEP_RULES"):
-        env_vars_set.add("auto_calculate_limits")
-    if os.getenv("BOT_RECOVERY_MODE"):
-        env_vars_set.add("recovery_mode")
-    if os.getenv("ACCOUNT_SIZE"):
-        env_vars_set.add("account_size")
-    if os.getenv("BOT_CONFIDENCE_THRESHOLD"):
-        env_vars_set.add("rl_confidence_threshold")
-    # Dynamic Risk Management combines both features
-    if os.getenv("BOT_DYNAMIC_RISK"):
-        env_vars_set.add("dynamic_confidence")
-        env_vars_set.add("dynamic_contracts")
-    # Legacy support for separate settings
-    if os.getenv("BOT_DYNAMIC_CONFIDENCE"):
-        env_vars_set.add("dynamic_confidence")
-    if os.getenv("BOT_DYNAMIC_CONTRACTS"):
-        env_vars_set.add("dynamic_contracts")
-    if os.getenv("BOT_TICK_SIZE"):
-        env_vars_set.add("tick_size")
-    if os.getenv("BOT_TICK_VALUE"):
-        env_vars_set.add("tick_value")
-    if os.getenv("BOT_DRY_RUN"):
-        env_vars_set.add("dry_run")
-    if os.getenv("BOT_SHADOW_MODE"):
-        env_vars_set.add("shadow_mode")
-    if os.getenv("BOT_ENVIRONMENT"):
-        env_vars_set.add("environment")
-    if os.getenv("BOT_BROKER") or os.getenv("BROKER"):
-        env_vars_set.add("broker")
+    # CREDENTIALS ONLY (from .env)
     if os.getenv("BOT_API_TOKEN") or os.getenv("TOPSTEPX_API_TOKEN") or os.getenv("TOPSTEP_API_TOKEN") or os.getenv("BROKER_API_TOKEN"):
-        env_vars_set.add("api_token")
-    if os.getenv("BOT_USERNAME") or os.getenv("TOPSTEPX_USERNAME") or os.getenv("TOPSTEP_USERNAME") or os.getenv("BROKER_USERNAME"):
-        env_vars_set.add("username")
+        if os.getenv("BOT_API_TOKEN"):
+            config.api_token = os.getenv("BOT_API_TOKEN")
+        elif os.getenv("BROKER_API_TOKEN"):
+            config.api_token = os.getenv("BROKER_API_TOKEN")
+        elif os.getenv("TOPSTEPX_API_TOKEN"):
+            config.api_token = os.getenv("TOPSTEPX_API_TOKEN")
+        elif os.getenv("TOPSTEP_API_TOKEN"):
+            config.api_token = os.getenv("TOPSTEP_API_TOKEN")
     
-    # Apply env vars that were actually set
-    for key in config.__dataclass_fields__.keys():
-        if key in env_vars_set:
-            env_value = getattr(env_config, key)
-            setattr(config, key, env_value)
+    if os.getenv("BOT_USERNAME") or os.getenv("TOPSTEPX_USERNAME") or os.getenv("TOPSTEP_USERNAME") or os.getenv("BROKER_USERNAME"):
+        if os.getenv("BOT_USERNAME"):
+            config.username = os.getenv("BOT_USERNAME")
+        elif os.getenv("BROKER_USERNAME"):
+            config.username = os.getenv("BROKER_USERNAME")
+        elif os.getenv("TOPSTEPX_USERNAME"):
+            config.username = os.getenv("TOPSTEPX_USERNAME")
+        elif os.getenv("TOPSTEP_USERNAME"):
+            config.username = os.getenv("TOPSTEP_USERNAME")
+    
+    # ENVIRONMENT ONLY (from .env)
+    if os.getenv("BOT_ENVIRONMENT"):
+        config.environment = os.getenv("BOT_ENVIRONMENT")
+    
+    if os.getenv("BOT_DRY_RUN"):
+        config.dry_run = os.getenv("BOT_DRY_RUN").lower() in ("true", "1", "yes")
+    
+    if os.getenv("BOT_SHADOW_MODE"):
+        config.shadow_mode = os.getenv("BOT_SHADOW_MODE").lower() in ("true", "1", "yes")
     
     # Validate configuration
     config.validate()
@@ -835,10 +808,9 @@ def log_config(config: BotConfiguration, logger) -> None:
     
     logger.info(f"Instrument: {config.instrument}")
     logger.info(f"Timezone: {config.timezone}")
-    logger.info(f"Risk per Trade: {config.risk_per_trade * 100:.1f}%")
     logger.info(f"Max Contracts: {config.max_contracts}")
     logger.info(f"Max Trades per Day: {config.max_trades_per_day}")
-    logger.info(f"Risk/Reward Ratio: {config.risk_reward_ratio}:1")
+    logger.info(f"RL Confidence Threshold: {config.rl_confidence_threshold * 100:.0f}%")
     logger.info(f"Daily Loss Limit: ${config.daily_loss_limit:.2f}")
     
     # Time windows
