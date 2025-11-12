@@ -2312,6 +2312,95 @@ async def get_ml_stats():
     }
 
 # ============================================================================
+# EXPERIENCE EXPORT ENDPOINTS (for local dev backtesting)
+# ============================================================================
+
+@app.get("/api/experiences/export/signal")
+async def export_signal_experiences():
+    """
+    Export all signal experiences for local dev backtesting.
+    This allows developers to run fast local backtests without API calls.
+    """
+    db = next(get_db())
+    try:
+        # Query all signal experiences from database
+        db_experiences = db.query(RLExperience).filter(
+            RLExperience.experience_type == 'SIGNAL'
+        ).all()
+        
+        # Convert to dict format
+        experiences = []
+        for exp in db_experiences:
+            experiences.append({
+                'rsi': exp.rsi,
+                'vwap_distance': exp.vwap_distance,
+                'vix': exp.vix,
+                'hour': exp.hour,
+                'day_of_week': exp.day_of_week,
+                'volume_ratio': exp.volume_ratio,
+                'atr': exp.atr,
+                'recent_pnl': exp.recent_pnl,
+                'streak': exp.streak,
+                'signal': exp.signal,
+                'took_trade': exp.took_trade,
+                'pnl': exp.pnl,
+                'created_at': exp.created_at.isoformat() if exp.created_at else None
+            })
+        
+        logger.info(f"📤 Exported {len(experiences)} signal experiences for local dev")
+        
+        return {
+            "experiences": experiences,
+            "count": len(experiences),
+            "exported_at": datetime.utcnow().isoformat()
+        }
+        
+    except Exception as e:
+        logger.error(f"Error exporting signal experiences: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/experiences/export/exit")
+async def export_exit_experiences():
+    """
+    Export all exit experiences for local dev backtesting.
+    """
+    db = next(get_db())
+    try:
+        # Query all exit experiences from database  
+        db_experiences = db.query(RLExperience).filter(
+            RLExperience.experience_type == 'EXIT'
+        ).all()
+        
+        # Convert to dict format
+        experiences = []
+        for exp in db_experiences:
+            experiences.append({
+                'vix': exp.vix,
+                'hour': exp.hour,
+                'atr': exp.atr,
+                'regime': exp.regime,
+                'pnl': exp.pnl,
+                'duration_min': exp.duration_min,
+                'exit_reason': exp.exit_reason,
+                'partial_exits': exp.partial_exits,
+                'created_at': exp.created_at.isoformat() if exp.created_at else None
+            })
+        
+        logger.info(f"📤 Exported {len(experiences)} exit experiences for local dev")
+        
+        return {
+            "experiences": experiences,
+            "count": len(experiences),
+            "exported_at": datetime.utcnow().isoformat()
+        }
+        
+    except Exception as e:
+        logger.error(f"Error exporting exit experiences: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============================================================================
 # LICENSE MANAGEMENT ENDPOINTS
 # ============================================================================
 
