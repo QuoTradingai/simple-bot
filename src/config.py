@@ -783,6 +783,19 @@ def load_config(environment: Optional[str] = None, backtest_mode: bool = False) 
     if os.getenv("BOT_SHADOW_MODE"):
         config.shadow_mode = os.getenv("BOT_SHADOW_MODE").lower() in ("true", "1", "yes")
     
+    # BROKER RULES & MARKET SPECS (from .env - helps users understand their limits)
+    topstep_rules = os.getenv("BOT_USE_TOPSTEP_RULES")
+    if topstep_rules:
+        config.auto_calculate_limits = topstep_rules.lower() in ("true", "1", "yes")
+    
+    tick_size_env = os.getenv("BOT_TICK_SIZE")
+    if tick_size_env:
+        config.tick_size = float(tick_size_env)
+    
+    tick_value_env = os.getenv("BOT_TICK_VALUE")
+    if tick_value_env:
+        config.tick_value = float(tick_value_env)
+    
     # Validate configuration
     config.validate()
     
