@@ -12,6 +12,7 @@ from datetime import datetime
 from typing import Optional
 import json
 from pathlib import Path
+import pytz
 
 logger = logging.getLogger(__name__)
 
@@ -190,8 +191,8 @@ class AlertNotifier:
         if not self.enabled:
             return
         
-        # Format timestamp
-        timestamp = datetime.now().strftime("%I:%M:%S %p")
+        # Format timestamp (UTC)
+        timestamp = datetime.now(pytz.UTC).strftime("%I:%M:%S %p")
         
         # Create messages
         emoji = "🟢" if side == "LONG" else "🔴"
@@ -233,7 +234,7 @@ This is an automated alert from your QuoTrading bot.
         if not self.enabled:
             return
         
-        timestamp = datetime.now().strftime("%I:%M:%S %p")
+        timestamp = datetime.now(pytz.UTC).strftime("%I:%M:%S %p")
         
         # Email
         email_subject = f"⚠️ Bot Alert: {error_type}"
@@ -276,7 +277,7 @@ Please check your bot and logs for more information.
         if not self.enabled:
             return
         
-        date = datetime.now().strftime("%B %d, %Y")
+        date = datetime.now(pytz.UTC).strftime("%B %d, %Y")
         
         # Determine emoji based on P&L
         emoji = "✅" if profit_loss >= 0 else "❌"
@@ -367,7 +368,7 @@ Configuration:
 • Phone: {self.phone if self.phone else 'Not configured'}
 • Carrier: {self.carrier if self.phone else 'N/A'}
 
-Timestamp: {datetime.now().strftime('%Y-%m-%d %I:%M:%S %p')}
+Timestamp: {datetime.now(pytz.UTC).strftime('%Y-%m-%d %I:%M:%S %p')}
 """
         
         email_success = self._send_email(subject, body, self.email)

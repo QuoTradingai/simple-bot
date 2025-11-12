@@ -7,6 +7,7 @@ from sqlalchemy import create_engine, Column, Integer, String, Float, DateTime, 
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, relationship
 from datetime import datetime, timedelta
+import pytz
 import os
 from typing import Optional
 import secrets
@@ -25,8 +26,8 @@ class User(Base):
     license_type = Column(String(50), default='BETA')  # BETA, TRIAL, MONTHLY, ANNUAL
     license_status = Column(String(20), default='ACTIVE')  # ACTIVE, EXPIRED, SUSPENDED
     license_expiration = Column(DateTime, nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
-    last_active = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=lambda: datetime.now(pytz.UTC))
+    last_active = Column(DateTime, default=lambda: datetime.now(pytz.UTC))
     is_admin = Column(Boolean, default=False)
     notes = Column(Text, nullable=True)
     
@@ -42,7 +43,7 @@ class User(Base):
         """Check if license is currently valid"""
         if self.license_status != 'ACTIVE':
             return False
-        if self.license_expiration and self.license_expiration < datetime.utcnow():
+        if self.license_expiration and self.license_expiration < datetime.now(pytz.UTC):
             return False
         return True
     
@@ -76,7 +77,7 @@ class APILog(Base):
     response_time_ms = Column(Float, nullable=True)
     ip_address = Column(String(50), nullable=True)
     user_agent = Column(String(500), nullable=True)
-    timestamp = Column(DateTime, default=datetime.utcnow, index=True)
+    timestamp = Column(DateTime, default=lambda: datetime.now(pytz.UTC), index=True)
     
     # Relationship
     user = relationship("User", back_populates="api_logs")
@@ -98,7 +99,7 @@ class TradeHistory(Base):
     exit_price = Column(Float, nullable=True)
     quantity = Column(Integer, nullable=False)
     pnl = Column(Float, nullable=True)
-    entry_time = Column(DateTime, default=datetime.utcnow, index=True)
+    entry_time = Column(DateTime, default=lambda: datetime.now(pytz.UTC), index=True)
     exit_time = Column(DateTime, nullable=True)
     exit_reason = Column(String(50), nullable=True)
     confidence_score = Column(Float, nullable=True)
@@ -148,7 +149,7 @@ class RLExperience(Base):
     vwap_distance = Column(Float, nullable=True)  # Distance from VWAP (percentage)
     vix = Column(Float, nullable=True)  # VIX level at entry
     day_of_week = Column(Integer, nullable=True)  # 0=Monday, 6=Sunday
-    hour_of_day = Column(Integer, nullable=True)  # 0-23, Eastern Time
+    hour_of_day = Column(Integer, nullable=True)  # 0-23, UTC
     
     # 8 additional features added for full context:
     atr = Column(Float, nullable=True)  # ATR volatility
@@ -160,7 +161,7 @@ class RLExperience(Base):
     price = Column(Float, nullable=True)  # Current price
     side = Column(String(10), nullable=True)  # long/short
     
-    timestamp = Column(DateTime, default=datetime.utcnow, index=True)
+    timestamp = Column(DateTime, default=lambda: datetime.now(pytz.UTC), index=True)
     
     # Relationship
     user = relationship("User", backref="rl_experiences")
@@ -217,7 +218,7 @@ class ExitExperience(Base):
     partial_exits_json = Column(Text, nullable=True)  # [{level, r_multiple, contracts, percentage}, ...]
     
     # Metadata
-    timestamp = Column(DateTime, default=datetime.utcnow, index=True)
+    timestamp = Column(DateTime, default=lambda: datetime.now(pytz.UTC), index=True)
     quality_score = Column(Float, nullable=True)  # 0-1, how valuable this experience is
     
     def __repr__(self):
@@ -330,7 +331,7 @@ def create_user(
     # Set expiration
     expiration = None
     if license_duration_days:
-        expiration = datetime.utcnow() + timedelta(days=license_duration_days)
+        expiration = datetime.now(pytz.UTC) + timedelta(days=license_duration_days)
     
     user = User(
         account_id=account_id,
@@ -388,7 +389,7 @@ def update_user_activity(db_session, user_id: int):
     """Update user's last active timestamp"""
     user = db_session.query(User).filter(User.id == user_id).first()
     if user:
-        user.last_active = datetime.utcnow()
+        user.last_active = datetime.now(pytz.UTC)
         db_session.commit()
 
 

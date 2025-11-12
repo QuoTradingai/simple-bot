@@ -1,5 +1,6 @@
 import json
 from datetime import datetime
+import pytz
 
 print("=" * 80)
 print("MIGRATING EXPERIENCE FILES TO INCLUDE NEW FIELDS")
@@ -60,7 +61,7 @@ with open('data/local_experiences/signal_experiences_v2.json', 'w') as f:
         'experiences': signal_data['experiences'],
         'count': len(signal_data['experiences']),
         'version': '2.1',  # Bump version
-        'last_updated': datetime.now().isoformat()
+        'last_updated': datetime.now(pytz.UTC).isoformat()
     }, f, indent=2)
 
 print(f"✅ Migrated {migrated_count} signal experiences")
@@ -143,7 +144,7 @@ with open('data/local_experiences/exit_experiences_v2.json', 'w') as f:
         'experiences': exit_data['experiences'],
         'count': len(exit_data['experiences']),
         'version': '2.1',  # Bump version
-        'last_updated': datetime.now().isoformat()
+        'last_updated': datetime.now(pytz.UTC).isoformat()
     }, f, indent=2)
 
 print(f"✅ Migrated {migrated_count} exit experiences")

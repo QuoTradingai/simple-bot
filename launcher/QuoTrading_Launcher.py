@@ -18,6 +18,7 @@ from tkinter import ttk, messagebox
 import os
 import json
 from pathlib import Path
+import pytz
 from datetime import datetime
 import sys
 import subprocess
@@ -3658,7 +3659,7 @@ class QuoTradingLauncher:
         env_path = bot_dir / '.env'
         
         env_content = f"""# QuoTrading AI - Auto-generated Configuration
-# Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+# Generated: {datetime.now(pytz.UTC).strftime('%Y-%m-%d %H:%M:%S')} UTC
 # DO NOT EDIT MANUALLY - Use the launcher to change settings
 
 # QuoTrading License (Required - contact support@quotrading.com to purchase)
@@ -3685,7 +3686,7 @@ BOT_CONFIDENCE_THRESHOLD={self.confidence_var.get()}
 # Bot only takes signals above this confidence threshold (user's minimum)
 BOT_CONFIDENCE_TRADING={'true' if self.confidence_trading_var.get() else 'false'}
 # When approaching daily limit (80%+): SCALES DOWN (higher confidence thresholds + fewer contracts)
-# When limit HIT (100%): STOPS trading until daily reset at 6 PM ET
+# When limit HIT (100%): STOPS trading until daily reset at 11 PM UTC
 # When moving away from limit: Returns to user's initial settings
 
 # Recovery Mode (All Account Types)
@@ -3882,7 +3883,7 @@ BOT_LOG_LEVEL=INFO
         lock_data = {
             "account_id": account_id,
             "pid": bot_pid,
-            "created_at": datetime.now().isoformat(),
+            "created_at": datetime.now(pytz.UTC).isoformat(),
             "broker_username": self.config.get("topstep_username", "unknown")
         }
         

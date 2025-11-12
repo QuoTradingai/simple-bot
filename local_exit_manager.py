@@ -6,6 +6,7 @@ import json
 import os
 from datetime import datetime
 from typing import Dict, Optional, List
+import pytz
 
 class LocalExitManager:
     """Manages adaptive exits using local exit experiences (no API calls)"""
@@ -435,7 +436,7 @@ class LocalExitManager:
                 'atr': float(market_state.get('atr', 2.0))
             },
             'partial_exits': safe_partial_exits,  # Track partial exit history
-            'timestamp': datetime.now().isoformat(),
+            'timestamp': datetime.now(pytz.UTC).isoformat(),
             'side': str(trade_outcome.get('side', 'LONG')),
             'pnl': float(trade_outcome.get('pnl', 0)),
             'duration': int(trade_outcome.get('duration', 0)),
@@ -498,7 +499,7 @@ class LocalExitManager:
                 'experiences': all_experiences,
                 'count': len(all_experiences),
                 'version': '2.0',
-                'last_updated': datetime.now().isoformat()
+                'last_updated': datetime.now(pytz.UTC).isoformat()
             }, f, indent=2)
         
         print(f"✅ Saved {len(self.new_exit_experiences)} new exit experiences to local file")

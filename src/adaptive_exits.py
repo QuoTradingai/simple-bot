@@ -173,13 +173,14 @@ class AdaptiveExitManager:
         if market_state is None:
             market_state = {}
         
+        now_utc = datetime.now(pytz.UTC)
         experience = {
-            'timestamp': datetime.now().isoformat(),
+            'timestamp': now_utc.isoformat(),
             'regime': regime,
             'exit_params': exit_params,
             'outcome': trade_outcome,
             'situation': {
-                'time_of_day': datetime.now().strftime('%H:%M'),
+                'time_of_day': now_utc.strftime('%H:%M'),
                 'volatility_atr': exit_params.get('current_atr', 0),
                 'trend_strength': trade_outcome.get('trend_strength', 0)
             },
@@ -1054,17 +1055,17 @@ class AdaptiveExitManager:
         Returns: 'low', 'normal', or 'high'
         
         Time-based urgency:
-        - 3:45-4:00 PM ET: HIGH (market closing soon - exit everything)
-        - 12:00-1:00 PM ET: HIGH if losing (lunch chop)
+        - 7:45-8:00 PM UTC: HIGH (market closing soon - exit everything)
+        - 4:00-5:00 PM UTC: HIGH if losing (lunch chop)
         - Normal hours: NORMAL unless conditions warrant
         """
         hour = current_time.hour
         minute = current_time.minute
         
-        # CRITICAL: Near market close (3:45-4:00 PM ET)
-        if hour == 15 and minute >= 45:  # 3:45-4:00 PM
+        # CRITICAL: Near market close (7:45-8:00 PM UTC)
+        if hour == 19 and minute >= 45:  # 7:45-8:00 PM UTC
             return 'high'  # Get out NOW
-        elif hour >= 16:  # After 4 PM
+        elif hour >= 20:  # After 8 PM UTC
             return 'high'
         
         # HIGH URGENCY: Lunch hour with losing trade
@@ -1538,9 +1539,10 @@ class AdaptiveExitManager:
         """
         # Extract current market conditions
         try:
-            # Get hour
+            # Get hour (UTC)
             from datetime import datetime
-            hour = datetime.now().hour
+            import pytz
+            hour = datetime.now(pytz.UTC).hour
             
             # Get RSI if available
             rsi = symbol_state.get('rsi', 50)
@@ -2157,13 +2159,14 @@ def get_adaptive_exit_params(bars: list, position: Dict, current_price: float,
     entry_time = position.get("entry_time")
     if entry_time and hasattr(entry_time, 'timestamp'):
         from datetime import datetime
+        import pytz
         # FIX: Use bar timestamp instead of wall-clock time for backtest accuracy
         if len(bars) > 0 and "timestamp" in bars[-1]:
             current_time = bars[-1]["timestamp"]
             if isinstance(current_time, str):
                 current_time = datetime.fromisoformat(current_time.replace('Z', '+00:00'))
         else:
-            current_time = datetime.now()  # Fallback for live trading
+            current_time = datetime.now(pytz.UTC)  # Fallback for live trading (UTC)
         
         duration_minutes = (current_time.timestamp() - entry_time.timestamp()) / 60
         current_hour = current_time.hour
@@ -2178,9 +2181,9 @@ def get_adaptive_exit_params(bars: list, position: Dict, current_price: float,
         'is_choppy': "CHOPPY" in market_regime,
         'is_high_vol': "HIGH_VOL" in market_regime,
         'is_trending': "TRENDING" in market_regime,
-        'is_morning': 9 <= current_hour < 11,  # 9-11 AM volatile
-        'is_lunch': 11 <= current_hour < 14,   # 11 AM - 2 PM slow
-        'is_close': current_hour >= 15,        # After 3 PM rushes/reversals
+        'is_morning': 9 <= current_hour < 11,  # 9-11 AM UTC volatile
+        'is_lunch': 11 <= current_hour < 14,   # 11 AM - 2 PM UTC slow
+        'is_close': current_hour >= 19,        # After 7 PM UTC rushes/reversals
         'is_old_trade': duration_minutes > 30,  # Been in too long
         'is_quick_trade': duration_minutes < 5, # Very recent entry
     }

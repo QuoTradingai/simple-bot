@@ -35,7 +35,7 @@ class BotConfiguration:
     # Instrument Configuration
     instrument: str = "ES"  # Single instrument (legacy support)
     instruments: list = field(default_factory=lambda: ["ES"])  # Multi-symbol support
-    timezone: str = "America/New_York"
+    timezone: str = "UTC"  # All times in UTC (ES futures schedule: Sunday 23:00 → Friday 21:00, maintenance 21:00-22:00 UTC daily)
     
     # Broker Configuration
     broker: str = ""  # USER CONFIGURABLE - TopStep, Tradovate, Rithmic, NinjaTrader, etc.
@@ -83,21 +83,22 @@ class BotConfiguration:
     volume_spike_multiplier: float = 1.5
     volume_lookback: int = 20
     
-    # Time Windows (all in Eastern Time)
-    market_open_time: time = field(default_factory=lambda: time(9, 30))
-    entry_start_time: time = field(default_factory=lambda: time(18, 0))  # 6 PM ET - ES futures session opens
-    entry_end_time: time = field(default_factory=lambda: time(16, 55))  # 4:55 PM ET next day - before maintenance
-    flatten_time: time = field(default_factory=lambda: time(16, 45))  # 4:45 PM ET - 15 min before maintenance
-    forced_flatten_time: time = field(default_factory=lambda: time(17, 0))  # 5:00 PM ET - maintenance starts
-    shutdown_time: time = field(default_factory=lambda: time(18, 0))  # 6:00 PM ET - after maintenance, session restarts
-    vwap_reset_time: time = field(default_factory=lambda: time(18, 0))  # 6 PM ET - futures daily session reset
+    # Time Windows (all in UTC - ES futures schedule)
+    # ES Schedule: Sunday 23:00 → Friday 21:00 UTC, maintenance 21:00-22:00 UTC daily
+    market_open_time: time = field(default_factory=lambda: time(9, 30))  # Legacy - not used for futures
+    entry_start_time: time = field(default_factory=lambda: time(23, 0))  # 23:00 UTC (Sunday open)
+    entry_end_time: time = field(default_factory=lambda: time(20, 55))  # 20:55 UTC (before maintenance)
+    flatten_time: time = field(default_factory=lambda: time(20, 45))  # 20:45 UTC (15 min before maintenance)
+    forced_flatten_time: time = field(default_factory=lambda: time(21, 0))  # 21:00 UTC (maintenance starts)
+    shutdown_time: time = field(default_factory=lambda: time(22, 0))  # 22:00 UTC (after maintenance, session resumes)
+    vwap_reset_time: time = field(default_factory=lambda: time(23, 0))  # 23:00 UTC (Sunday session reset)
     
     # Entry Cutoff - Stop new entries (can still hold existing positions)
-    daily_entry_cutoff: time = field(default_factory=lambda: time(16, 0))  # Stop entries 4:00 PM ET daily
+    daily_entry_cutoff: time = field(default_factory=lambda: time(20, 0))  # Stop entries 20:00 UTC (1 hr before maintenance)
     
     # Friday Special Rules - Close before weekend
-    friday_entry_cutoff: time = field(default_factory=lambda: time(16, 30))  # Stop entries 4:30 PM Friday
-    friday_close_target: time = field(default_factory=lambda: time(16, 45))  # Flatten by 4:45 PM Friday
+    friday_entry_cutoff: time = field(default_factory=lambda: time(20, 30))  # Stop entries 20:30 UTC Friday
+    friday_close_target: time = field(default_factory=lambda: time(20, 45))  # Flatten by 20:45 UTC Friday
     
     # Safety Parameters - USER CONFIGURABLE
     daily_loss_limit: float = 1000.0  # USER CONFIGURABLE - max $ loss per day (or auto-calculated)
@@ -841,9 +842,9 @@ def log_config(config: BotConfiguration, logger) -> None:
     logger.info(f"Daily Loss Limit: ${config.daily_loss_limit:.2f}")
     
     # Time windows
-    logger.info(f"Entry Window: {config.entry_start_time} - {config.entry_end_time} ET")
-    logger.info(f"Flatten Time: {config.flatten_time} ET")
-    logger.info(f"Forced Flatten: {config.forced_flatten_time} ET")
+    logger.info(f"Entry Window: {config.entry_start_time} - {config.entry_end_time} UTC")
+    logger.info(f"Flatten Time: {config.flatten_time} UTC")
+    logger.info(f"Forced Flatten: {config.forced_flatten_time} UTC")
     
     # API token info (only relevant for live trading)
     if config.backtest_mode:
@@ -1140,7 +1141,7 @@ Retry sequence with 5 attempts:
 Total time: 10 seconds before giving up and alerting for manual intervention.
 
 Why 5 attempts?
-- Market closes at 4:45 PM ET (forced flatten time)
+- Market closes at 8:45 PM UTC (forced flatten time)
 - Need aggressive retries but can't wait forever
 - 5 attempts with 10s total is maximum safe retry window
 - More attempts = risk missing market close entirely

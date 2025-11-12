@@ -12,6 +12,7 @@ import sys
 from datetime import datetime, timedelta
 from pathlib import Path
 from dotenv import load_dotenv
+import pytz
 
 # Add parent directory to path to import project modules
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -36,9 +37,9 @@ async def update_daily_data():
     print(f"Current data ends at: {last_date}")
     
     # Calculate date range to fetch
-    # Fetch from last bar + 1 minute to current time
+    # Fetch from last bar + 1 minute to current time (UTC)
     start_time = last_date + timedelta(minutes=1)
-    end_time = datetime.now()
+    end_time = datetime.now(pytz.UTC)
     
     # Only fetch if we're missing data
     hours_missing = (end_time - start_time).total_seconds() / 3600
@@ -148,7 +149,7 @@ if __name__ == "__main__":
     print("=" * 60)
     print("ES 1-Minute Data Daily Update")
     print("=" * 60)
-    print(f"Started at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+    print(f"Started at: {datetime.now(pytz.UTC).strftime('%Y-%m-%d %H:%M:%S')} UTC\n")
     
     success = asyncio.run(update_daily_data())
     

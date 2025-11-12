@@ -133,7 +133,7 @@ async def rate_limit_middleware(request: Request, call_next):
                 user = db.query(User).filter(User.license_key == license_key).first()
                 if user:
                     # Update last_active timestamp
-                    user.last_active = datetime.utcnow()
+                    user.last_active = datetime.now(pytz.UTC)
                     db.commit()
                     
                     # Log API call
@@ -194,7 +194,7 @@ async def root():
 @app.get("/health")
 async def health():
     """Health check for monitoring"""
-    return {"status": "healthy", "timestamp": datetime.utcnow().isoformat()}
+    return {"status": "healthy", "timestamp": datetime.now(pytz.UTC).isoformat()}
 
 @app.get("/api/rate-limit/status")
 async def rate_limit_status(request: Request):
@@ -364,7 +364,7 @@ async def extend_license(
     if user.license_expiration:
         user.license_expiration = user.license_expiration + timedelta(days=additional_days)
     else:
-        user.license_expiration = datetime.utcnow() + timedelta(days=additional_days)
+        user.license_expiration = datetime.now(pytz.UTC) + timedelta(days=additional_days)
     
     db.commit()
     db.refresh(user)
@@ -439,7 +439,7 @@ async def get_stats(
     ).group_by(User.license_type).all()
     
     # API call stats (last 24 hours)
-    yesterday = datetime.utcnow() - timedelta(days=1)
+    yesterday = datetime.now(pytz.UTC) - timedelta(days=1)
     api_calls_24h = db.query(func.count(APILog.id)).filter(
         APILog.timestamp >= yesterday
     ).scalar()
@@ -503,7 +503,7 @@ async def get_online_users(
     verify_admin_license(license_key, db)
     
     # Consider user "online" if last_active within 5 minutes
-    five_minutes_ago = datetime.utcnow() - timedelta(minutes=5)
+    five_minutes_ago = datetime.now(pytz.UTC) - timedelta(minutes=5)
     
     online_users = db.query(User).filter(
         User.last_active >= five_minutes_ago,
@@ -518,7 +518,7 @@ async def get_online_users(
                 "email": user.email,
                 "license_type": user.license_type,
                 "last_active": user.last_active.isoformat() if user.last_active else None,
-                "seconds_ago": int((datetime.utcnow() - user.last_active).total_seconds()) if user.last_active else None
+                "seconds_ago": int((datetime.now(pytz.UTC) - user.last_active).total_seconds()) if user.last_active else None
             }
             for user in online_users
         ]
@@ -572,7 +572,7 @@ async def get_dashboard_stats(
     suspended_users = db.query(func.count(User.id)).filter(User.license_status == 'SUSPENDED').scalar()
     
     # Online users (active in last 5 min)
-    five_min_ago = datetime.utcnow() - timedelta(minutes=5)
+    five_min_ago = datetime.now(pytz.UTC) - timedelta(minutes=5)
     online_now = db.query(func.count(User.id)).filter(
         User.last_active >= five_min_ago,
         User.license_status == 'ACTIVE'
@@ -584,8 +584,8 @@ async def get_dashboard_stats(
         license_breakdown[license_type] = count
     
     # API calls
-    one_hour_ago = datetime.utcnow() - timedelta(hours=1)
-    one_day_ago = datetime.utcnow() - timedelta(days=1)
+    one_hour_ago = datetime.now(pytz.UTC) - timedelta(hours=1)
+    one_day_ago = datetime.now(pytz.UTC) - timedelta(days=1)
     
     api_calls_1h = db.query(func.count(APILog.id)).filter(APILog.timestamp >= one_hour_ago).scalar()
     api_calls_24h = db.query(func.count(APILog.id)).filter(APILog.timestamp >= one_day_ago).scalar()
@@ -594,14 +594,14 @@ async def get_dashboard_stats(
     total_trades = db.query(func.count(TradeHistory.id)).scalar()
     total_pnl = db.query(func.sum(TradeHistory.pnl)).scalar()
     trades_today = db.query(func.count(TradeHistory.id)).filter(
-        func.date(TradeHistory.entry_time) == datetime.utcnow().date()
+        func.date(TradeHistory.entry_time) == datetime.now(pytz.UTC).date()
     ).scalar()
     
     # Expiring licenses (next 7 days)
-    seven_days = datetime.utcnow() + timedelta(days=7)
+    seven_days = datetime.now(pytz.UTC) + timedelta(days=7)
     expiring_soon = db.query(func.count(User.id)).filter(
         User.license_expiration <= seven_days,
-        User.license_expiration >= datetime.utcnow(),
+        User.license_expiration >= datetime.now(pytz.UTC),
         User.license_status == 'ACTIVE'
     ).scalar()
     
@@ -624,7 +624,7 @@ async def get_dashboard_stats(
     ).scalar()
     
     return {
-        "timestamp": datetime.utcnow().isoformat(),
+        "timestamp": datetime.now(pytz.UTC).isoformat(),
         "users": {
             "total": total_users or 0,
             "active": active_users or 0,
@@ -853,7 +853,7 @@ async def get_ml_confidence(request: Dict):
             vwap_distance=abs(price - vwap) / vwap if vwap > 0 else 0,
             rsi=rsi,
             signal=signal,
-            current_time=datetime.now(pytz.timezone('US/Eastern')),
+            current_time=datetime.now(pytz.UTC),
             current_vix=vix,
             similarity_threshold=0.6  # 60% similarity required
         )
@@ -873,7 +873,7 @@ async def get_ml_confidence(request: Dict):
             "action": signal if result['should_take'] else "NONE",
             "model_version": "v5.1-position-sizing",
             "total_experience_count": len(all_trades),
-            "timestamp": datetime.utcnow().isoformat()
+            "timestamp": datetime.now(pytz.UTC).isoformat()
         }
         
     except Exception as e:
@@ -962,7 +962,7 @@ async def should_take_signal(request: Dict):
             vwap_distance=vwap_distance,
             rsi=rsi,
             signal=signal,
-            current_time=datetime.now(pytz.timezone('US/Eastern')),
+            current_time=datetime.now(pytz.UTC),
             current_vix=vix,
             similarity_threshold=0.6,
             volume_ratio=volume_ratio,
@@ -991,7 +991,7 @@ async def should_take_signal(request: Dict):
             "reason": result['reason'],
             "risk_level": risk_level,
             "model_version": "v5.0-advanced-pattern-matching",
-            "timestamp": datetime.utcnow().isoformat()
+            "timestamp": datetime.now(pytz.UTC).isoformat()
         }
         
         # Cache the result for 60 seconds (multi-user optimization)
@@ -1209,7 +1209,7 @@ def calculate_advanced_confidence(
     win_rate = len(winner_experiences) / total_samples if total_samples > 0 else 0.5
     
     # DUAL PATTERN MATCHING: Calculate average similarity to winners
-    now = datetime.utcnow()
+    now = datetime.now(pytz.UTC)
     winner_similarity_sum = 0
     winner_weighted_total = 0
     
@@ -1399,7 +1399,7 @@ def calculate_signal_confidence(
             - should_take: Boolean recommendation (True if confidence > 0.65)
     """
     if current_time is None:
-        current_time = datetime.now(pytz.timezone('US/Eastern'))
+        current_time = datetime.now(pytz.UTC)
     
     current_time_only = current_time.time()
     current_day_of_week = current_time.weekday()  # 0=Monday, 6=Sunday
@@ -1596,8 +1596,8 @@ async def save_trade_experience(trade: Dict, db: Session = Depends(get_db)):
         # Add timestamp and ID
         experience = {
             **trade,
-            "saved_at": datetime.utcnow().isoformat(),
-            "experience_id": f"{user_id}_{symbol}_{datetime.utcnow().timestamp()}"
+            "saved_at": datetime.now(pytz.UTC).isoformat(),
+            "experience_id": f"{user_id}_{symbol}_{datetime.now(pytz.UTC).timestamp()}"
         }
         
         # Store in SHARED array (everyone contributes to same strategy learning)
@@ -1622,8 +1622,8 @@ async def save_trade_experience(trade: Dict, db: Session = Depends(get_db)):
                     exit_price=trade.get('exit_price', 0.0),
                     quantity=trade.get('quantity', 1),
                     pnl=trade['pnl'],
-                    entry_time=datetime.fromisoformat(trade['entry_time']) if trade.get('entry_time') else datetime.utcnow(),
-                    exit_time=datetime.fromisoformat(trade['exit_time']) if trade.get('exit_time') else datetime.utcnow(),
+                    entry_time=datetime.fromisoformat(trade['entry_time']) if trade.get('entry_time') else datetime.now(pytz.UTC),
+                    exit_time=datetime.fromisoformat(trade['exit_time']) if trade.get('exit_time') else datetime.now(pytz.UTC),
                     exit_reason=trade.get('exit_reason', 'unknown'),
                     confidence_score=trade.get('confidence', 0.0)
                 )
@@ -1646,7 +1646,7 @@ async def save_trade_experience(trade: Dict, db: Session = Depends(get_db)):
                 price = trade.get('price', entry_price)
                 
                 # Calculate time context
-                entry_time = datetime.fromisoformat(trade['entry_time']) if trade.get('entry_time') else datetime.utcnow()
+                entry_time = datetime.fromisoformat(trade['entry_time']) if trade.get('entry_time') else datetime.now(pytz.UTC)
                 day_of_week = entry_time.weekday()  # 0=Monday, 6=Sunday
                 hour_of_day = entry_time.hour  # 0-23
                 
@@ -1743,7 +1743,7 @@ async def save_rejected_signal(signal: Dict):
         # Add timestamp
         experience = {
             **signal,
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": datetime.now(pytz.UTC).isoformat(),
             "took_trade": False  # Always false for rejections
         }
         
@@ -1881,7 +1881,7 @@ async def save_exit_experience(experience: dict):
                 price=None,
                 side=outcome.get('side', 'long'),
                 
-                timestamp=datetime.fromisoformat(experience.get('timestamp', datetime.utcnow().isoformat()))
+                timestamp=datetime.fromisoformat(experience.get('timestamp', datetime.now(pytz.UTC).isoformat()))
             )
             session.add(exit_rl_exp)
             
@@ -1894,7 +1894,7 @@ async def save_exit_experience(experience: dict):
                 market_state_json=json.dumps(market_state),
                 partial_exits_json=json.dumps(partial_exits),
                 quality_score=min(abs(outcome.get('pnl', 0.0)) / 100.0, 1.0),
-                timestamp=datetime.fromisoformat(experience.get('timestamp', datetime.utcnow().isoformat()))
+                timestamp=datetime.fromisoformat(experience.get('timestamp', datetime.now(pytz.UTC).isoformat()))
             )
             session.add(full_exit_exp)
             
@@ -2308,7 +2308,7 @@ async def get_ml_stats():
         "avg_pnl": total_pnl / len(signal_experiences),
         "total_pnl": total_pnl,
         "message": "Shared learning - all users contribute and benefit",
-        "last_updated": datetime.utcnow().isoformat()
+        "last_updated": datetime.now(pytz.UTC).isoformat()
     }
 
 # ============================================================================
@@ -2352,7 +2352,7 @@ async def export_signal_experiences():
         return {
             "experiences": experiences,
             "count": len(experiences),
-            "exported_at": datetime.utcnow().isoformat()
+            "exported_at": datetime.now(pytz.UTC).isoformat()
         }
         
     except Exception as e:
@@ -2392,7 +2392,7 @@ async def export_exit_experiences():
         return {
             "experiences": experiences,
             "count": len(experiences),
-            "exported_at": datetime.utcnow().isoformat()
+            "exported_at": datetime.now(pytz.UTC).isoformat()
         }
         
     except Exception as e:
@@ -2426,7 +2426,7 @@ async def validate_license(data: dict, db: Session = Depends(get_db)):
         if not user.is_license_valid:
             if user.license_status == 'SUSPENDED':
                 raise HTTPException(status_code=403, detail="License suspended")
-            elif user.license_expiration and user.license_expiration < datetime.utcnow():
+            elif user.license_expiration and user.license_expiration < datetime.now(pytz.UTC):
                 raise HTTPException(status_code=403, detail="License expired")
             else:
                 raise HTTPException(status_code=403, detail="License inactive")
@@ -2452,7 +2452,7 @@ async def validate_license(data: dict, db: Session = Depends(get_db)):
     # Check if expired
     if license_info.get("expires_at"):
         expires_at = datetime.fromisoformat(license_info["expires_at"])
-        if datetime.utcnow() > expires_at:
+        if datetime.now(pytz.UTC) > expires_at:
             raise HTTPException(status_code=403, detail="License expired")
     
     return {
@@ -2473,13 +2473,13 @@ async def activate_license(data: dict):
         raise HTTPException(status_code=400, detail="Email required")
     
     license_key = generate_license_key()
-    expires_at = datetime.utcnow() + timedelta(days=days)
+    expires_at = datetime.now(pytz.UTC) + timedelta(days=days)
     
     active_licenses[license_key] = {
         "email": email,
         "expires_at": expires_at.isoformat(),
         "status": "active",
-        "created_at": datetime.utcnow().isoformat()
+        "created_at": datetime.now(pytz.UTC).isoformat()
     }
     
     logger.info(f"🔑 License created: {license_key} for {email} (expires: {expires_at})")
@@ -2559,7 +2559,7 @@ async def toggle_kill_switch(data: dict):
     
     kill_switch_state["active"] = active
     kill_switch_state["reason"] = reason
-    kill_switch_state["activated_at"] = datetime.utcnow().isoformat() if active else None
+    kill_switch_state["activated_at"] = datetime.now(pytz.UTC).isoformat() if active else None
     kill_switch_state["activated_by"] = "admin"
     
     status = "ACTIVATED" if active else "DEACTIVATED"
@@ -2619,7 +2619,7 @@ async def stripe_webhook(request: Request):
                 "status": "active",
                 "stripe_customer_id": customer_id,
                 "stripe_subscription_id": subscription_id,
-                "created_at": datetime.utcnow().isoformat()
+                "created_at": datetime.now(pytz.UTC).isoformat()
             }
             
             logger.info(f"🎉 License created from payment: {license_key} for {customer_email}")
@@ -2727,8 +2727,8 @@ def scrape_fomc_dates() -> List[Dict]:
             try:
                 parsed_date = date_parser.parse(date_str)
                 
-                # Only include future dates
-                if parsed_date.date() > datetime.now().date():
+                # Only include future dates (use UTC)
+                if parsed_date.date() > datetime.now(pytz.UTC).date():
                     # Add FOMC Statement (2 PM ET)
                     fomc_events.append({
                         "date": parsed_date.strftime("%Y-%m-%d"),
@@ -2764,7 +2764,7 @@ def generate_predictable_events() -> List[Dict]:
     These follow consistent schedules
     """
     events = []
-    current_date = datetime.now().date()
+    current_date = datetime.now(pytz.UTC).date()
     
     # Generate 12 months of events
     for month_offset in range(12):
@@ -2838,7 +2838,7 @@ def update_calendar():
         
         # Update global calendar
         economic_calendar["events"] = unique_events
-        economic_calendar["last_updated"] = datetime.utcnow().isoformat()
+        economic_calendar["last_updated"] = datetime.now(pytz.UTC).isoformat()
         economic_calendar["next_update"] = get_next_update_time().isoformat()
         
         logger.info(f"✅ Calendar updated: {len(unique_events)} events ({len(fomc_events)} FOMC + {len(predictable_events)} NFP/CPI/PPI)")
@@ -2848,10 +2848,10 @@ def update_calendar():
 
 def get_next_update_time() -> datetime:
     """
-    Calculate next update time: 1st of every month at 5 PM ET
+    Calculate next update time: 1st of every month at 5 PM ET (converted to UTC)
     """
     et_tz = pytz.timezone("America/New_York")
-    now_et = datetime.now(et_tz)
+    now_et = datetime.now(pytz.UTC).astimezone(et_tz)
     
     # Target: 1st of next month at 5 PM ET
     if now_et.day == 1 and now_et.hour < 17:
@@ -2865,7 +2865,8 @@ def get_next_update_time() -> datetime:
             next_month = now_et.replace(month=now_et.month + 1, day=1, hour=17, minute=0, second=0, microsecond=0)
         target_time = next_month
     
-    return target_time
+    # Convert to UTC before returning
+    return target_time.astimezone(pytz.UTC)
 
 async def calendar_update_loop():
     """
@@ -2874,10 +2875,10 @@ async def calendar_update_loop():
     while True:
         try:
             next_update = get_next_update_time()
-            now = datetime.now(pytz.timezone("America/New_York"))
+            now = datetime.now(pytz.UTC)
             sleep_seconds = (next_update - now).total_seconds()
             
-            logger.info(f"📅 Next calendar update: {next_update.strftime('%Y-%m-%d %I:%M %p ET')} ({sleep_seconds/3600:.1f} hours)")
+            logger.info(f"📅 Next calendar update: {next_update.strftime('%Y-%m-%d %I:%M %p UTC')} ({sleep_seconds/3600:.1f} hours)")
             
             await asyncio.sleep(sleep_seconds)
             
@@ -2908,7 +2909,7 @@ async def get_calendar_events(days: int = 7):
     Query params:
         days: Number of days ahead to fetch (default 7)
     """
-    today = datetime.now().date()
+    today = datetime.now(pytz.UTC).date()
     end_date = today + timedelta(days=days)
     
     upcoming_events = [
@@ -2929,7 +2930,7 @@ async def get_todays_events():
     Get today's high-impact economic events
     Bots check this before placing trades
     """
-    today = datetime.now().date().strftime("%Y-%m-%d")
+    today = datetime.now(pytz.UTC).date().strftime("%Y-%m-%d")
     
     todays_events = [
         event for event in economic_calendar["events"]

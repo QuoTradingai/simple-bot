@@ -18,6 +18,7 @@ import pandas as pd
 import numpy as np
 from datetime import datetime, time
 import json
+import pytz
 import os
 import random
 import requests
@@ -60,10 +61,11 @@ CONFIG = {
     "partial_exit_3_r_multiple": 5.0,
     "partial_exit_3_percentage": 0.20,  # 20% at 5R,  
     
-    # Time-based exits (MATCHES LIVE BOT - 4:45-5:00 PM flatten window)
-    "daily_entry_cutoff": time(16, 0),    # 4:00 PM - no new entries (matches live bot)
-    "flatten_start_time": time(16, 45),  # 4:45 PM - flatten mode (matches live bot)
-    "forced_flatten_time": time(17, 0),   # 5:00 PM - force close (matches live bot)
+    # Time-based exits - UTC schedule (ES maintenance 21:00-22:00 UTC daily)
+    # Sunday opens 23:00 UTC, Friday closes 21:00 UTC
+    "daily_entry_cutoff": time(20, 0),    # 20:00 UTC - no new entries (1 hr before maintenance)
+    "flatten_start_time": time(20, 45),  # 20:45 UTC - flatten mode starts  
+    "forced_flatten_time": time(21, 0),   # 21:00 UTC - force close before maintenance window
     
     # ITERATION 3 - ATR settings (MATCHES LIVE BOT)
     "atr_period": 14,
@@ -423,11 +425,11 @@ class Trade:
     def _get_session(self, bar: pd.Series) -> str:
         """Determine trading session based on hour."""
         hour = bar['timestamp'].hour
-        if 18 <= hour or hour < 3:  # 6pm - 3am ET
+        if 22 <= hour or hour < 7:  # 10pm - 7am UTC (Asia session)
             return 'Asia'
-        elif 3 <= hour < 8:  # 3am - 8am ET
+        elif 7 <= hour < 12:  # 7am - 12pm UTC (London session)
             return 'London'
-        else:  # 8am - 6pm ET
+        else:  # 12pm - 10pm UTC (NY session)
             return 'NY'
     
     def _get_volatility_regime(self, vwap_bands: Dict) -> str:
@@ -926,16 +928,17 @@ def save_signal_experience(rl_state: Dict, took_trade: bool, outcome: Dict, back
     from datetime import datetime
     import requests
     
+    now_utc = datetime.now(pytz.UTC)
     # Send ALL 13 pattern matching features to cloud
     experience = {
-        'timestamp': datetime.now().isoformat(),
+        'timestamp': now_utc.isoformat(),
         'user_id': 'backtest',  # Backtest trades marked separately
         'symbol': rl_state.get('symbol', 'ES'),
         'side': rl_state.get('side', 'long').upper(),
         'entry_price': rl_state.get('entry_price', 0),
         'exit_price': outcome.get('exit_price', 0),
-        'entry_time': datetime.now().isoformat(),
-        'exit_time': datetime.now().isoformat(),
+        'entry_time': now_utc.isoformat(),
+        'exit_time': now_utc.isoformat(),
         'pnl': outcome.get('pnl', 0),
         'entry_vwap': rl_state.get('vwap', 0),
         'entry_rsi': rl_state.get('rsi', 50),
@@ -1123,19 +1126,9 @@ def run_full_backtest(csv_file: str, days: int = 15):
     df = pd.read_csv(csv_file)
     df['timestamp'] = pd.to_datetime(df['timestamp'])
     
-    # CRITICAL: Convert timestamps to Eastern Time to match live bot
-    # Historical data is assumed to be in UTC (from broker feed)
-    # Live bot operates in America/New_York timezone
-    import pytz
-    utc_tz = pytz.UTC
-    et_tz = pytz.timezone('America/New_York')
-    
-    # If timestamps are naive (no timezone), assume UTC
-    if df['timestamp'].dt.tz is None:
-        df['timestamp'] = df['timestamp'].dt.tz_localize(utc_tz)
-    
-    # Convert to Eastern Time to match live bot
-    df['timestamp'] = df['timestamp'].dt.tz_convert(et_tz)
+    # Data is in UTC timezone (TopstepX API returns UTC, stored as naive datetime)
+    # ES Schedule: Sun 23:00 UTC open, Mon-Fri 22:00-21:00 UTC, maintenance 21:00-22:00 UTC
+    # NO timezone conversion needed - data and config both in UTC
     
     # Filter to last N days
     last_date = df['timestamp'].max()
@@ -1143,7 +1136,7 @@ def run_full_backtest(csv_file: str, days: int = 15):
     df = df[df['timestamp'] >= start_date].reset_index(drop=True)
     
     print(f"Loaded {len(df):,} bars from {df['timestamp'].min()} to {df['timestamp'].max()}")
-    print(f"Timezone: Eastern Time (America/New_York) - matches live bot")
+    print(f"Timezone: UTC - matches ES futures schedule and live bot")
     print()
     
     # Initialize EXIT RL MANAGER - Local or Cloud based on mode
@@ -1471,23 +1464,23 @@ def run_full_backtest(csv_file: str, days: int = 15):
         # Check for new signals (only if no active trade)
         if active_trade is None:
             # TRADING HOURS CHECK (matches live bot)
-            # Live bot trading window: Sunday 6 PM - Friday 5 PM ET
-            # Daily entry cutoff: 4:00 PM (16:00) - no new entries after this
-            # Daily flatten: 4:45-5:00 PM (16:45-17:00)
-            # Daily maintenance: 5:00-6:00 PM (17:00-18:00)
+            # Live bot trading window: Sunday 11 PM - Friday 9 PM UTC
+            # Daily entry cutoff: 8:00 PM (20:00 UTC) - no new entries after this
+            # Daily flatten: 8:45-9:00 PM (20:45-21:00 UTC)
+            # Daily maintenance: 9:00-10:00 PM (21:00-22:00 UTC)
             bar_time = bar['timestamp'].time()
             
-            # Skip signals after 4:00 PM daily entry cutoff
+            # Skip signals after 8:00 PM daily entry cutoff
             if bar_time >= CONFIG['daily_entry_cutoff']:
-                continue  # After 4 PM - no new entries (can hold existing)
+                continue  # After 8 PM UTC - no new entries (can hold existing)
             
-            # Skip signals during flatten mode (4:45-5:00 PM)
+            # Skip signals during flatten mode (20:45-21:00 UTC)
             if bar_time >= CONFIG['flatten_start_time'] and bar_time < CONFIG['forced_flatten_time']:
                 continue  # Flatten mode - no new entries
             
-            # Skip signals during maintenance window (5:00-6:00 PM / 17:00-18:00)
-            if bar_time >= time(17, 0) and bar_time < time(18, 0):
-                continue  # Maintenance - market closed
+            # Skip signals during maintenance window (21:00-22:00 UTC daily)
+            if bar_time >= time(21, 0) and bar_time < time(22, 0):
+                continue  # Maintenance - no trading
             
             prev_bar = df.iloc[idx - 1]
             

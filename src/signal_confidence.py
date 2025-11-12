@@ -84,7 +84,7 @@ class SignalConfidenceRL:
         self.current_loss_streak = 0
         
         # Session tracking for learning (NO hard stops - let RL learn)
-        self.session_start_time = datetime.now()
+        self.session_start_time = datetime.now(pytz.UTC)
         self.session_pnl = 0.0
         self.session_trades = []
         
@@ -752,7 +752,7 @@ class SignalConfidenceRL:
             execution_data: Optional execution quality metrics
         """
         experience = {
-            'timestamp': datetime.now().isoformat(),
+            'timestamp': datetime.now(pytz.UTC).isoformat(),
             'state': state,
             'action': {
                 'took_trade': took_trade,
@@ -803,11 +803,12 @@ class SignalConfidenceRL:
             confidence: Confidence score when rejected
             reason: Why signal was rejected
         """
-        signal_id = f"{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+        now_utc = datetime.now(pytz.UTC)
+        signal_id = f"{now_utc.strftime('%Y%m%d_%H%M%S')}"
         
         self.skipped_signals.append({
             'id': signal_id,
-            'timestamp': datetime.now(),
+            'timestamp': now_utc,
             'state': state.copy(),
             'confidence': confidence,
             'reason': reason

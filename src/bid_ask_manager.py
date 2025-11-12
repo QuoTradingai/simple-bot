@@ -9,6 +9,7 @@ from collections import deque
 from datetime import datetime, time
 from dataclasses import dataclass, field
 import statistics
+import pytz
 
 logger = logging.getLogger(__name__)
 
@@ -967,7 +968,7 @@ class PostTradeAnalyzer:
         variance = fill_price - signal_price
         
         record = {
-            "timestamp": datetime.now(),
+            "timestamp": datetime.now(pytz.UTC),
             "signal_price": signal_price,
             "fill_price": fill_price,
             "side": side,
@@ -1294,7 +1295,7 @@ class BidAskManager:
             # Update spread with timestamp for time-of-day tracking
             from datetime import datetime
             import pytz
-            tz = pytz.timezone(self.config.get("timezone", "America/New_York"))
+            tz = pytz.timezone(self.config.get("timezone", "UTC"))
             dt = datetime.fromtimestamp(timestamp / 1000, tz=tz)
             self.spread_analyzers[symbol].update(quote.spread, dt)
         else:
@@ -1471,7 +1472,7 @@ class BidAskManager:
             fill_price=fill_price,
             quantity=quantity,
             order_type=order_type,
-            timestamp=datetime.now()
+            timestamp=datetime.now(pytz.UTC)
         )
         
         self.spread_cost_tracker.record_execution(execution)
@@ -1613,8 +1614,8 @@ class BidAskManager:
         if quote is None:
             return base_contracts, {}
         
-        # Get expected slippage
-        slippage_ticks = self.get_expected_slippage(symbol, datetime.now()) or 1.0
+        # Get expected slippage (use UTC)
+        slippage_ticks = self.get_expected_slippage(symbol, datetime.now(pytz.UTC)) or 1.0
         commission = self.config.get("commission_per_contract", 2.50)
         
         return self.position_sizer.calculate_position_size(

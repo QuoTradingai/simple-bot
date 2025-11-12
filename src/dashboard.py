@@ -13,6 +13,7 @@ import time
 from datetime import datetime, timedelta
 from typing import Dict, List, Any, Optional
 import platform
+import pytz
 
 
 class Dashboard:
@@ -134,7 +135,7 @@ class Dashboard:
         Args:
             error_message: The error message to display
         """
-        timestamp = datetime.now().strftime("%H:%M:%S")
+        timestamp = datetime.now(pytz.UTC).strftime("%H:%M:%S")
         error_entry = f"{timestamp} - {error_message}"
         
         # Keep only last 3 critical errors
@@ -406,7 +407,7 @@ class Dashboard:
     def calculate_maintenance_time(self, server_time: str = None) -> str:
         """
         Calculate time until next maintenance window.
-        Maintenance is 5:00 PM - 6:00 PM ET daily.
+        Maintenance is 9:00 PM - 10:00 PM UTC daily.
         
         Args:
             server_time: ISO format server time string from Azure (e.g., "2025-11-10T06:49:24.798158Z")
@@ -417,38 +418,38 @@ class Dashboard:
         import pytz
         from datetime import datetime, timedelta
         
-        # Get current time in ET - use server time if available
-        et_tz = pytz.timezone('US/Eastern')
+        # Get current time in UTC - use server time if available
+        utc_tz = pytz.timezone('UTC')
         
         if server_time:
             try:
-                # Parse ISO format server time and convert to ET
+                # Parse ISO format server time (already UTC)
                 utc_time = datetime.fromisoformat(server_time.replace('Z', '+00:00'))
-                now_et = utc_time.astimezone(et_tz)
+                now_utc = utc_time.astimezone(utc_tz)
             except:
                 # Fallback to local time if parsing fails
-                now_et = datetime.now(et_tz)
+                now_utc = datetime.now(utc_tz)
         else:
-            now_et = datetime.now(et_tz)
+            now_utc = datetime.now(utc_tz)
         
-        current_hour = now_et.hour
+        current_hour = now_utc.hour
         
-        # Maintenance is 5:00 PM - 6:00 PM ET daily
-        maintenance_hour = 17  # 5 PM
+        # Maintenance is 21:00 - 22:00 UTC daily
+        maintenance_hour = 21  # 21:00 UTC
         
-        # If before 5 PM today, next maintenance is today at 5 PM
+        # If before 21:00 today, next maintenance is today at 21:00
         if current_hour < maintenance_hour:
-            next_maintenance = now_et.replace(hour=maintenance_hour, minute=0, second=0, microsecond=0)
-        # If between 5 PM and 6 PM, we're in maintenance (show as "NOW")
+            next_maintenance = now_utc.replace(hour=maintenance_hour, minute=0, second=0, microsecond=0)
+        # If between 21:00 and 22:00, we're in maintenance (show as "NOW")
         elif current_hour == maintenance_hour:
             return "NOW"
-        # If after 6 PM, next maintenance is tomorrow at 5 PM
+        # If after 22:00, next maintenance is tomorrow at 21:00
         else:
-            tomorrow = now_et + timedelta(days=1)
+            tomorrow = now_utc + timedelta(days=1)
             next_maintenance = tomorrow.replace(hour=maintenance_hour, minute=0, second=0, microsecond=0)
         
         # Calculate time difference
-        time_diff = next_maintenance - now_et
+        time_diff = next_maintenance - now_utc
         hours = int(time_diff.total_seconds() // 3600)
         minutes = int((time_diff.total_seconds() % 3600) // 60)
         

@@ -6,6 +6,7 @@ import json
 import os
 from typing import Dict, List
 from datetime import datetime
+import pytz
 
 class LocalExperienceManager:
     """Manages local experiences for fast backtesting without API calls"""
@@ -301,7 +302,7 @@ class LocalExperienceManager:
             'price': float(rl_state.get('price', 0)),
             'vwap': float(rl_state.get('vwap', 0)),
             'signal': str(rl_state.get('side', 'LONG')).upper(),
-            'timestamp': datetime.now().isoformat(),
+            'timestamp': datetime.now(pytz.UTC).isoformat(),
             'pnl': float(outcome.get('pnl', 0)),
             'outcome': 'WIN' if float(outcome.get('pnl', 0)) > 0 else 'LOSS',
             'took_trade': bool(took_trade),
@@ -349,7 +350,7 @@ class LocalExperienceManager:
                 'experiences': all_experiences,
                 'count': len(all_experiences),
                 'version': '2.0',
-                'last_updated': datetime.now().isoformat()
+                'last_updated': datetime.now(pytz.UTC).isoformat()
             }, f, indent=2)
         
         print(f"✅ Saved {len(self.new_signal_experiences)} new signal experiences to local file")

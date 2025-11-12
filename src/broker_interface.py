@@ -327,9 +327,10 @@ class TopStepBroker(BrokerInterface):
         """
         try:
             from datetime import datetime
+            import pytz
             
-            # Get current month to determine front month contract
-            now = datetime.now()
+            # Get current month to determine front month contract (use UTC)
+            now = datetime.now(pytz.UTC)
             current_month = now.month
             current_year = now.year % 100  # Last 2 digits
             

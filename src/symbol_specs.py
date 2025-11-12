@@ -24,7 +24,7 @@ class SymbolSpec:
     tick_value: float         # Dollar value per tick (e.g., $12.50 for ES)
     point_value: float        # Dollar value per point (e.g., $50 for ES = 1 point = 4 ticks)
     
-    # Trading hours (all times in ET)
+    # Trading hours (all times in UTC)
     session_start: time       # When trading session starts
     session_end: time         # When to stop taking new entries
     maintenance_start: time   # Maintenance window start
@@ -60,10 +60,10 @@ SYMBOL_SPECS: Dict[str, SymbolSpec] = {
         tick_size=0.25,
         tick_value=12.50,
         point_value=50.0,
-        session_start=time(18, 0),    # 6:00 PM ET (Sunday - Friday)
-        session_end=time(16, 55),      # 4:55 PM ET (stop new entries)
-        maintenance_start=time(17, 0), # 5:00 PM ET
-        maintenance_end=time(18, 0),   # 6:00 PM ET
+        session_start=time(23, 0),    # 23:00 UTC (Sunday open)
+        session_end=time(20, 55),      # 20:55 UTC (stop new entries)
+        maintenance_start=time(21, 0), # 21:00 UTC
+        maintenance_end=time(22, 0),   # 22:00 UTC
         typical_slippage_ticks=1.5,
         typical_spread_ticks=1.0,
         volatility_factor=1.0,         # Baseline
@@ -253,10 +253,10 @@ SYMBOL_SPECS: Dict[str, SymbolSpec] = {
         tick_size=0.00005,
         tick_value=6.25,
         point_value=125000.0,
-        session_start=time(17, 0),     # 5:00 PM ET (Sunday - Friday)
-        session_end=time(15, 55),      # 3:55 PM ET
-        maintenance_start=time(16, 0),
-        maintenance_end=time(17, 0),
+        session_start=time(21, 0),     # 9:00 PM UTC (Sunday - Friday)
+        session_end=time(19, 55),      # 7:55 PM UTC
+        maintenance_start=time(20, 0),
+        maintenance_end=time(21, 0),
         typical_slippage_ticks=2.0,
         typical_spread_ticks=1.0,
         volatility_factor=0.9,
@@ -395,7 +395,7 @@ if __name__ == "__main__":
         print(f"\n{symbol} - {spec.name}")
         print(f"  Tick Value: ${spec.tick_value:.2f}")
         print(f"  Point Value: ${spec.point_value:.2f}")
-        print(f"  Session: {spec.session_start} - {spec.session_end} ET")
+        print(f"  Session: {spec.session_start} - {spec.session_end} UTC")
         print(f"  Slippage: {spec.typical_slippage_ticks} ticks")
         print(f"  Volatility Factor: {spec.volatility_factor}x")
         print(f"  TopStep: {spec.topstep_symbol}")
