@@ -1640,12 +1640,24 @@ class QuoTradingLauncher:
             fg=self.colors['text']
         ).pack(anchor=tk.W, pady=(0, 1))
         
-        # Get account type to set ENFORCED limits
+        # Get account type and balance to set ENFORCED TopStep limits
         account_type = self.config.get("broker_type", "Prop Firm")
+        account_balance = self.config.get("fetched_account_balance", self.config.get("account_size", 50000))
         
-        # Enforce actual broker limits - exceeding these will cause trade rejection
+        # TopStep Contract Limits (enforced by broker)
+        # These are actual TopStep rules - exceeding these will cause trade rejection
         if account_type == "Prop Firm":
-            max_contracts_allowed = 5  # Prop firm strict limit
+            # TopStep rules based on account size
+            if account_balance >= 250000:
+                max_contracts_allowed = 20
+            elif account_balance >= 150000:
+                max_contracts_allowed = 15
+            elif account_balance >= 100000:
+                max_contracts_allowed = 10
+            elif account_balance >= 50000:
+                max_contracts_allowed = 5
+            else:
+                max_contracts_allowed = 3  # Evaluation accounts
         else:
             max_contracts_allowed = 25  # Live broker flexible limit
         
@@ -1664,10 +1676,15 @@ class QuoTradingLauncher:
         )
         contracts_spin.pack(fill=tk.X, ipady=2)
         
-        # Info label showing enforced contract limit
+        # Info label showing enforced TopStep contract limit
+        if account_type == "Prop Firm":
+            limit_text = f"TopStep Max: {max_contracts_allowed} contracts (${account_balance/1000:.0f}K account)"
+        else:
+            limit_text = f"Max {max_contracts_allowed} for {account_type} (enforced)"
+        
         contracts_info = tk.Label(
             contracts_frame,
-            text=f"Max {max_contracts_allowed} for {account_type} (enforced)",
+            text=limit_text,
             font=("Segoe UI", 7, "bold"),
             bg=self.colors['card'],
             fg=self.colors['text_light']

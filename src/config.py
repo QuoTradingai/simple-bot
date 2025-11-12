@@ -256,6 +256,68 @@ class BotConfiguration:
     
     # Removed: validate_topstep_compliance() - broker-specific logic not needed
     
+    def get_topstep_max_contracts(self, account_balance: float) -> int:
+        """
+        Get TopStep's maximum allowed contracts based on account size.
+        
+        TopStep Rules:
+        - $50K account: Max 5 contracts
+        - $100K account: Max 10 contracts  
+        - $150K account: Max 15 contracts
+        - $250K+ account: Max 20 contracts
+        
+        Args:
+            account_balance: Current account balance
+            
+        Returns:
+            Maximum contracts allowed by TopStep rules
+        """
+        if account_balance >= 250000:
+            return 20
+        elif account_balance >= 150000:
+            return 15
+        elif account_balance >= 100000:
+            return 10
+        elif account_balance >= 50000:
+            return 5
+        else:
+            # Under $50K (e.g., evaluation accounts)
+            return 3
+    
+    def validate_topstep_contract_limit(self, account_balance: float, logger=None) -> bool:
+        """
+        Validate that max_contracts doesn't exceed TopStep's limits.
+        Called when user changes max_contracts in GUI.
+        
+        Args:
+            account_balance: Current account balance
+            logger: Optional logger for warnings
+            
+        Returns:
+            True if valid, False if exceeds TopStep limits
+        """
+        topstep_max = self.get_topstep_max_contracts(account_balance)
+        
+        if self.max_contracts > topstep_max:
+            if logger:
+                logger.warning("=" * 80)
+                logger.warning(f"[TOPSTEP LIMIT EXCEEDED]")
+                logger.warning(f"Account Balance: ${account_balance:,.2f}")
+                logger.warning(f"Your Setting: {self.max_contracts} contracts")
+                logger.warning(f"TopStep Max: {topstep_max} contracts")
+                logger.warning("")
+                logger.warning("TopStep Rules:")
+                logger.warning("  $50K account → Max 5 contracts")
+                logger.warning("  $100K account → Max 10 contracts")
+                logger.warning("  $150K account → Max 15 contracts")
+                logger.warning("  $250K+ account → Max 20 contracts")
+                logger.warning("")
+                logger.warning(f"[ACTION REQUIRED] Reduce max_contracts to {topstep_max} or below")
+                logger.warning("=" * 80)
+            return False
+        
+        return True
+    
     # ATR-Based Dynamic Risk Management - ITERATION 3 (PROVEN WINNER!)
     use_atr_stops: bool = False  # ATR stops disabled - using proven 11-tick fixed stops
     atr_period: int = 14  # ATR calculation period
@@ -783,18 +845,9 @@ def load_config(environment: Optional[str] = None, backtest_mode: bool = False) 
     if os.getenv("BOT_SHADOW_MODE"):
         config.shadow_mode = os.getenv("BOT_SHADOW_MODE").lower() in ("true", "1", "yes")
     
-    # BROKER RULES & MARKET SPECS (from .env - helps users understand their limits)
-    topstep_rules = os.getenv("BOT_USE_TOPSTEP_RULES")
-    if topstep_rules:
-        config.auto_calculate_limits = topstep_rules.lower() in ("true", "1", "yes")
-    
-    tick_size_env = os.getenv("BOT_TICK_SIZE")
-    if tick_size_env:
-        config.tick_size = float(tick_size_env)
-    
-    tick_value_env = os.getenv("BOT_TICK_VALUE")
-    if tick_value_env:
-        config.tick_value = float(tick_value_env)
+    # BROKER RULES (from .env - for backward compatibility only)
+    # NOTE: Users should set daily_loss_limit in GUI, not here
+    # This is kept for legacy support but not recommended
     
     # Validate configuration
     config.validate()
