@@ -1640,24 +1640,23 @@ class QuoTradingLauncher:
             fg=self.colors['text']
         ).pack(anchor=tk.W, pady=(0, 1))
         
-        # Get account type and balance to set ENFORCED TopStep limits
+        # Get account balance to set ENFORCED TopStep limits
+        # TopStep limits are based on ACCOUNT SIZE, not account type (eval vs funded)
         account_type = self.config.get("broker_type", "Prop Firm")
         account_balance = self.config.get("fetched_account_balance", self.config.get("account_size", 50000))
         
-        # TopStep Contract Limits (enforced by broker)
-        # These are actual TopStep rules - exceeding these will cause trade rejection
+        # TopStep Contract Limits (same for evaluation and funded accounts)
+        # Based purely on account size - enforced by broker
         if account_type == "Prop Firm":
             # TopStep rules based on account size
-            if account_balance >= 250000:
-                max_contracts_allowed = 20
-            elif account_balance >= 150000:
+            if account_balance >= 150000:
                 max_contracts_allowed = 15
             elif account_balance >= 100000:
                 max_contracts_allowed = 10
             elif account_balance >= 50000:
                 max_contracts_allowed = 5
             else:
-                max_contracts_allowed = 3  # Evaluation accounts
+                max_contracts_allowed = 3  # Under $50K accounts
         else:
             max_contracts_allowed = 25  # Live broker flexible limit
         
