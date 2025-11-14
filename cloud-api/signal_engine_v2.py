@@ -1886,6 +1886,84 @@ async def save_exit_experience(experience: dict):
         return {"saved": False, "error": str(e)}
 
 
+@app.post("/api/ml/save_experience")
+async def save_ml_experience(experience: dict):
+    """
+    Save COMPLETE ML experience to PostgreSQL ml_experiences table (JSONB).
+    Supports signal experiences, exit experiences, AND ghost trades.
+    ALL fields stored as-is in JSONB format - no schema limitations!
+    
+    Request: {
+        user_id: str,
+        symbol: str,
+        experience_type: str,  # 'signal', 'exit', 'ghost_trade'
+        rl_state: dict,  # Full state (30+ fields for signals, 60+ for exits)
+        outcome: dict,   # Full outcome data
+        quality_score: float,  # 0-1
+        timestamp: str  # ISO format
+    }
+    """
+    try:
+        from database import DatabaseManager, MLExperience
+        from datetime import datetime
+        
+        db_manager = DatabaseManager()
+        session = db_manager.get_session()
+        
+        try:
+            # Extract fields
+            user_id = experience.get('user_id', 'unknown')
+            symbol = experience.get('symbol', 'ES')
+            exp_type = experience.get('experience_type', 'signal')
+            rl_state = experience.get('rl_state', {})
+            outcome = experience.get('outcome', {})
+            quality_score = experience.get('quality_score', 1.0)
+            timestamp_str = experience.get('timestamp', datetime.now(pytz.UTC).isoformat())
+            
+            # Parse timestamp
+            try:
+                timestamp = datetime.fromisoformat(timestamp_str.replace('Z', '+00:00'))
+            except:
+                timestamp = datetime.now(pytz.UTC)
+            
+            # Create ML experience record (JSONB storage - no field limits!)
+            ml_exp = MLExperience(
+                user_id=user_id,
+                symbol=symbol,
+                experience_type=exp_type,
+                rl_state=rl_state,  # Stored as JSONB - can have 100+ fields!
+                outcome=outcome,    # Stored as JSONB
+                quality_score=quality_score,
+                timestamp=timestamp
+            )
+            session.add(ml_exp)
+            session.commit()
+            
+            # Get total count
+            total_count = session.query(MLExperience).filter(
+                MLExperience.experience_type == exp_type
+            ).count()
+            
+            logger.info(f"✅ Saved {exp_type} experience to ml_experiences (total: {total_count:,})")
+            
+            return {
+                "saved": True,
+                "experience_type": exp_type,
+                "total_experiences": total_count,
+                "message": f"Experience saved to cloud database"
+            }
+            
+        except Exception as e:
+            session.rollback()
+            raise e
+        finally:
+            session.close()
+            
+    except Exception as e:
+        logger.error(f"❌ Error saving ML experience: {e}")
+        return {"saved": False, "error": str(e)}
+
+
 @app.post("/api/ml/get_adaptive_exit_params")
 async def get_adaptive_exit_params(request: dict):
     """

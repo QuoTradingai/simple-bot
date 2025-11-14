@@ -5,10 +5,10 @@ FROM python:3.11-slim
 WORKDIR /app
 
 # Copy requirements
-COPY requirements-signal.txt .
+COPY requirements.txt .
 
 # Install dependencies
-RUN pip install --no-cache-dir -r requirements-signal.txt
+RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy application files
 COPY signal_engine_v2.py .
@@ -16,8 +16,9 @@ COPY database.py .
 COPY redis_manager.py .
 COPY neural_confidence.py .
 
-# Copy neural network model (your trained brain)
+# Copy neural network models (your trained brains)
 COPY neural_model.pth .
+COPY exit_model.pth .
 
 # Copy admin dashboard
 COPY admin-dashboard/ ./admin-dashboard/
