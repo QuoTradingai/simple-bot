@@ -9,21 +9,21 @@ Event-driven bot that trades bounces off VWAP standard deviation bands
 This bot is designed to run continuously and support global users:
 
 ✅ UTC-ONLY DESIGN: All times in UTC (matches ES futures schedule and historical data)
-✅ AUTO-FLATTEN: Automatically closes positions at 20:45 UTC (15 min before maintenance)
+✅ AUTO-FLATTEN: Automatically closes positions at 21:45 UTC (15 min before maintenance)
 ✅ AUTO-RESUME: Automatically resumes trading when market reopens (23:00 UTC Sunday)
 ✅ NO MANUAL SHUTDOWN: Bot runs 24/7, just pauses trading when market closed
 ✅ TIMEZONE SAFE: Works for users in any timezone (displays in user's local time)
 
 Trading Hours (ES Futures - UTC):
-- OPEN: Sunday 23:00 → Friday 21:00 UTC
-- MAINTENANCE: 21:00-22:00 UTC daily (Monday-Thursday)
-- FLATTEN: 20:45 UTC (15 min before maintenance)
-- WEEKEND: Friday 21:00 → Sunday 23:00 UTC
+- OPEN: Sunday 23:00 → Friday 22:00 UTC
+- MAINTENANCE: 22:00-23:00 UTC daily (17:00-18:00 EST)
+- FLATTEN: 21:45 UTC (15 min before maintenance)
+- WEEKEND: Friday 22:00 → Sunday 23:00 UTC
 
 Bot States:
-- entry_window: Market open, trading allowed (Sunday 23:00 - 20:45 UTC daily)
-- flatten_mode: 20:45-21:00 UTC, aggressively close positions (15 min before maintenance)
-- closed: During maintenance (21:00-22:00 Mon-Thu) or weekend, auto-flatten positions
+- entry_window: Market open, trading allowed (Sunday 23:00 - 21:45 UTC daily)
+- flatten_mode: 21:45-22:00 UTC, aggressively close positions (15 min before maintenance)
+- closed: During maintenance (22:00-23:00 Mon-Thu) or weekend, auto-flatten positions
 
 For Multi-User Subscriptions:
 - Add user_id to state dictionary for data isolation
@@ -929,15 +929,15 @@ def check_azure_time_service() -> str:
                     state = "closed"  # Unknown halt reason - be safe
             else:
                 # Trading allowed - check if we're approaching maintenance (flatten mode)
-                # Check if current UTC time is 20:45-21:00 (flatten mode)
+                # Check if current UTC time is 21:45-22:00 (flatten mode)
                 try:
                     # Parse current_et which is ISO format string from Azure
                     utc_now = datetime.now(pytz.UTC)
                     utc_hour = utc_now.hour
                     utc_minute = utc_now.minute
                     
-                    # Flatten mode: 20:45-21:00 UTC (before maintenance)
-                    if (utc_hour == 20 and utc_minute >= 45) or (utc_hour == 21 and utc_minute == 0):
+                    # Flatten mode: 21:45-22:00 UTC (before maintenance at 22:00)
+                    if (utc_hour == 21 and utc_minute >= 45) or (utc_hour == 22 and utc_minute == 0):
                         state = "flatten_mode"
                     else:
                         state = "entry_window"
@@ -3655,8 +3655,8 @@ def capture_rl_state(symbol: str, side: str, current_price: float) -> Dict[str, 
     # Minute of hour
     minute = current_time.minute
     
-    # Time to market close (in minutes) - ES closes 21:00 UTC daily
-    close_hour = 21  # 21:00 UTC
+    # Time to market close (in minutes) - ES closes 22:00 UTC (17:00 EST)
+    close_hour = 22  # 22:00 UTC = 17:00 EST
     if current_time.hour < close_hour:
         time_to_close = (close_hour - current_time.hour) * 60 - current_time.minute
     else:
@@ -3664,10 +3664,8 @@ def capture_rl_state(symbol: str, side: str, current_price: float) -> Dict[str, 
         time_to_close = 0
     
     # Price mod 50 (distance to nearest round number) - psychological levels
-    # ES trades in 0.25 increments, round numbers at 00, 50
-    price_mod_50 = current_price % 50
-    if price_mod_50 > 25:
-        price_mod_50 = 50 - price_mod_50  # Distance to next 50
+    # NORMALIZED to 0-1 range for consistency with training
+    price_mod_50 = (current_price % 50) / 50.0
     
     # Signal direction encoding (LONG=0, SHORT=1)
     signal_encoded = 0 if side.lower() == 'long' else 1

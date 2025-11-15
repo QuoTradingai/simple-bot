@@ -12,7 +12,7 @@ class SignalConfidenceNet(nn.Module):
     Neural network that learns to predict trade success probability.
     
     Architecture:
-    - Input: 29 features (RSI, VIX, hour, ATR, volume, market_regime, volatility, price levels, temporal)
+    - Input: 31 features (RSI, VIX, hour, ATR, volume, market_regime, volatility, price levels, temporal)
     - Hidden Layer 1: 64 neurons with ReLU activation
     - Hidden Layer 2: 32 neurons with ReLU activation  
     - Output: 1 neuron with SIGMOID activation (0-1 confidence/probability)
@@ -20,7 +20,7 @@ class SignalConfidenceNet(nn.Module):
     Dropout: 0.3 to prevent overfitting
     """
     
-    def __init__(self, input_size=29):
+    def __init__(self, input_size=31):
         super(SignalConfidenceNet, self).__init__()
         
         self.network = nn.Sequential(
