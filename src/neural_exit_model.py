@@ -16,122 +16,45 @@ class ExitParamsNet(nn.Module):
     """
     Neural network to predict optimal exit parameters
     
-    Inputs (64 features - COMPLETE feature coverage):
-        Market Context (10): 
-        - market_regime one-hot encoded (3: NORMAL, EXTREME, CHOPPY)
-        - rsi (1)
-        - volume_ratio (1) 
-        - atr (1)
-        - vix (1)
-        - volatility_regime_change (1: boolean)
-        - volume_at_exit (1)
-        - vwap_distance (1)
+    Inputs (208 features - COMPLETE feature coverage from ALL JSON fields):
+        exit_params_used (132): All exit parameters that were used in the trade
+        market_state (9): atr, day_of_week, hour, recent_pnl, rsi, streak, vix, volume_ratio, vwap_distance
+        root numeric (26): bars_until_breakeven, bars_until_trailing, bid_ask_spread_ticks, etc.
+        encoded categorical (4): regime, side, exit_reason, session
+        list aggregates (9): partial_exits, exit_param_updates, stop_adjustments (count, has_any, reserved)
+        outcome numeric (28): atr_change_percent, avg_atr_during_trade, bars_held, contracts, etc.
         
-        Trade Context (4):
-        - entry_confidence (1)
-        - side (1: 0=LONG, 1=SHORT)
-        - session (1: 0=Asia, 1=London, 2=NY)
-        - commission_cost (1)
-        
-        Time Features (5):
-        - hour (1)
-        - day_of_week (1)
-        - duration (1)
-        - time_in_breakeven_bars (1)
-        - bars_until_breakeven (1)
-        
-        Performance Metrics (5):
-        - mae (1: max adverse excursion)
-        - mfe (1: max favorable excursion)
-        - max_r_achieved (1)
-        - min_r_achieved (1)
-        - r_multiple (1)
-        
-        Exit Strategy State (6):
-        - breakeven_activated (1: boolean)
-        - trailing_activated (1: boolean)
-        - stop_hit (1: boolean)
-        - exit_param_update_count (1)
-        - stop_adjustment_count (1)
-        - bars_until_trailing (1)
-        NOTE: rejected_partial_count removed (not tracked consistently)
-        
-        Results (5):
-        - pnl (1)
-        - outcome (1: WIN/LOSS encoded)
-        - win (1: boolean)
-        - exit_reason (1: encoded)
-        - max_profit_reached (1)
-        
-        ADVANCED (8):
-        - atr_change_percent (ATR evolution during trade)
-        - avg_atr_during_trade (average volatility)
-        - peak_r_multiple (maximum profit achieved)
-        - profit_drawdown_from_peak (profit given back)
-        - high_volatility_bars (volatile period count)
-        - wins_in_last_5_trades (recent performance)
-        - losses_in_last_5_trades (recent performance)
-        - minutes_until_close (time pressure)
-        
-        TEMPORAL (5):
-        - entry_hour (1: hour of trade entry)
-        - entry_minute (1: minute of trade entry)
-        - exit_hour (1: hour of trade exit)
-        - exit_minute (1: minute of trade exit)
-        - bars_held (1: number of bars trade was held)
-        
-        POSITION TRACKING (3):
-        - entry_bar (1: bar index when entered)
-        - exit_bar (1: bar index when exited)
-        - contracts (1: number of contracts)
-        
-        TRADE CONTEXT (3):
-        - trade_number_in_session (1: sequence number)
-        - cumulative_pnl_before_trade (1: session P&L context)
-        - entry_price (1: price at entry)
-        
-        PERFORMANCE (4):
-        - peak_unrealized_pnl (1: highest unrealized profit)
-        - opportunity_cost (1: profit left on table)
-        - max_drawdown_percent (1: worst drawdown %)
-        - drawdown_bars (1: bars in drawdown)
-        
-        STRATEGY MILESTONES (4):
-        - breakeven_activation_bar (1: when BE triggered)
-        - trailing_activation_bar (1: when trailing triggered)
-        - duration_bars (1: total bars held)
-        - held_through_sessions (1: crossed session boundary)
+    This captures EVERYTHING from the JSON experience so the model can learn from:
+    - What exit parameters were previously used (exit_params_used)
+    - Market conditions (market_state)
+    - Trade performance (outcome)
+    - Trade context (root fields)
+    - List-based features (partial exits, updates, adjustments)
     
-    Outputs (131 exit parameters - COMPREHENSIVE):
-        Core Risk (21): stops, breakeven, trailing, partials
-        Time-Based (5): timeouts, time decay
-        Adverse (9): momentum, profit protection, dead trades
-        Runner (5): runner optimization
-        Stop Bleeding (5): loss control (removed fixed $ stop)
-        Market Conditions (4): spread, volatility, liquidity
-        Execution (6): fills, rejections, margin
-        Recovery (4): daily limits, drawdown
-        Session (4): pre-close, low volume, overnight, Friday
-        Adaptive (3): ML overrides, regime changes
-        Additional Parameters (65): extended exit conditions and thresholds
+    Outputs (132 exit parameters - to predict):
+        All exit parameters from exit_params_config.py
     """
     
-    def __init__(self, input_size=64, hidden_size=128):
+    def __init__(self, input_size=208, hidden_size=256):
         super(ExitParamsNet, self).__init__()
         
-        # Architecture: 64 inputs → 128 → 128 → 130 outputs
-        # 64 inputs: market/trade context (10 market + 54 other features)
-        # 130 outputs: comprehensive exit parameters (95 base + 35 advanced learning)
+        # Architecture: 208 inputs → 256 → 256 → 256 → 132 outputs
+        # 208 inputs: ALL features from JSON (exit_params_used + market + outcome + root)
+        # 132 outputs: comprehensive exit parameters to predict
         self.network = nn.Sequential(
             nn.Linear(input_size, hidden_size),
             nn.ReLU(),
             nn.Dropout(0.3),
             
-            nn.Linear(hidden_size, 128),
+            nn.Linear(hidden_size, 256),
             nn.ReLU(),
             nn.Dropout(0.3),
             
-            nn.Linear(128, 130),  # 95 base + 35 advanced (immediate actions, dead trades, sideways, etc)
+            nn.Linear(256, 256),
+            nn.ReLU(),
+            nn.Dropout(0.2),
+            
+            nn.Linear(256, 132),  # 132 exit parameters to predict
             nn.Sigmoid()  # Output 0-1, will denormalize later
         )
     
