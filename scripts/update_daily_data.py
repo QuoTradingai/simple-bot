@@ -23,7 +23,7 @@ load_dotenv()
 async def update_daily_data():
     """Fetch yesterday's complete data and append to historical file"""
     
-    data_file = Path('data/historical_data/ES_1min.csv')
+    data_file = Path('data/historical_data/ES_1min_cleaned.csv')
     
     # Read existing data
     if not data_file.exists():
@@ -34,6 +34,10 @@ async def update_daily_data():
     df_existing['timestamp'] = pd.to_datetime(df_existing['timestamp'])
     
     last_date = df_existing['timestamp'].max()
+    # Make last_date timezone-aware if it's naive
+    if last_date.tzinfo is None:
+        last_date = last_date.tz_localize('UTC')
+    
     print(f"Current data ends at: {last_date}")
     
     # Calculate date range to fetch
@@ -106,10 +110,9 @@ async def update_daily_data():
         # Combine with existing data
         df_combined = pd.concat([df_existing, df_new], ignore_index=True)
         
-        # Handle timezone differences - strip timezone without converting
-        df_combined['timestamp'] = pd.to_datetime(df_combined['timestamp'])
-        df_combined['timestamp'] = df_combined['timestamp'].astype(str).str.replace(r'[+-]\d{2}:\d{2}$', '', regex=True)
-        df_combined['timestamp'] = pd.to_datetime(df_combined['timestamp'])
+        # Convert all timestamps to UTC and remove timezone info (make naive)
+        df_combined['timestamp'] = pd.to_datetime(df_combined['timestamp'], utc=True)
+        df_combined['timestamp'] = df_combined['timestamp'].dt.tz_localize(None)
         
         # Remove duplicates and sort
         original_count = len(df_combined)

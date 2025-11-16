@@ -109,8 +109,8 @@ EXIT_PARAMS = {
     
     # Partial Exits (9)
     'partial_1_r': {
-        'min': 1.5, 'max': 3.0, 'default': 2.0,
-        'description': 'First partial exit target (R-multiple)',
+        'min': 0.8, 'max': 2.0, 'default': 1.2,
+        'description': 'First partial exit target (R-multiple) - PROFESSIONAL: take profits early',
         'category': 'partials'
     },
     'partial_1_pct': {
@@ -119,13 +119,13 @@ EXIT_PARAMS = {
         'category': 'partials'
     },
     'partial_1_min_profit_ticks': {
-        'min': 4, 'max': 15, 'default': 8,
-        'description': 'Minimum profit in ticks for first partial',
+        'min': 4, 'max': 15, 'default': 6,
+        'description': 'Minimum profit in ticks for first partial - LOWERED',
         'category': 'partials'
     },
     'partial_2_r': {
-        'min': 2.5, 'max': 4.5, 'default': 3.0,
-        'description': 'Second partial exit target (R-multiple)',
+        'min': 1.5, 'max': 3.5, 'default': 2.0,
+        'description': 'Second partial exit target (R-multiple) - PROFESSIONAL',
         'category': 'partials'
     },
     'partial_2_pct': {
@@ -134,13 +134,13 @@ EXIT_PARAMS = {
         'category': 'partials'
     },
     'partial_2_min_profit_ticks': {
-        'min': 8, 'max': 25, 'default': 15,
-        'description': 'Minimum profit in ticks for second partial',
+        'min': 8, 'max': 25, 'default': 12,
+        'description': 'Minimum profit in ticks for second partial - LOWERED',
         'category': 'partials'
     },
     'partial_3_r': {
-        'min': 4.0, 'max': 8.0, 'default': 5.0,
-        'description': 'Third partial exit target (R-multiple)',
+        'min': 2.5, 'max': 6.0, 'default': 3.5,
+        'description': 'Third partial exit target (R-multiple) - RUNNER',
         'category': 'partials'
     },
     'partial_3_pct': {
@@ -265,8 +265,8 @@ EXIT_PARAMS = {
         'category': 'adverse'
     },
     'profit_drawdown_pct': {
-        'min': 0.20, 'max': 0.50, 'default': 0.30,
-        'description': 'Max profit drawdown before exit',
+        'min': 0.10, 'max': 0.35, 'default': 0.15,
+        'description': 'Max profit drawdown % before exit - LEARNS: tighter in choppy, looser in trending',
         'category': 'adverse'
     },
     'dead_trade_threshold_bars': {
@@ -671,8 +671,8 @@ EXIT_PARAMS = {
     # PROFIT PROTECTION (3 params)
     # -------------------------------------------------------------------------
     'profit_protection_min_r': {
-        'min': 0.5, 'max': 3.0, 'default': 2.5,
-        'description': 'Minimum R-multiple profit before drawdown protection activates (adaptive)',
+        'min': 0.5, 'max': 3.0, 'default': 1.0,
+        'description': 'Min R before profit protection kicks in - LEARNS: protect early in choppy, let run in trending',
         'category': 'profit_protection'
     },
     'profit_lock_activation_r': {
