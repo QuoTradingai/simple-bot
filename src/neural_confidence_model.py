@@ -178,11 +178,10 @@ class ConfidencePredictor:
             minute / 60.0,  # Minute of hour (0-1)
             time_to_close / 240.0,  # Time to close normalized (0-1, 4hrs max)
             price_mod_50,  # Distance to round 50-level (0-1)
-            # ADDITIONAL FEATURES (5 features - brings total to 32)
-            rl_state.get('price_momentum', 0.0),  # Price momentum indicator
-            rl_state.get('volume_momentum', 1.0),  # Volume momentum  
-            rl_state.get('spread_normalized', 0.0),  # Bid-ask spread normalized
-            rl_state.get('liquidity_score', 1.0),  # Market liquidity score
+            # ADDITIONAL FEATURES (2 features - padding to match training)
+            0.0,  # Reserved feature 1
+            0.0,  # Reserved feature 2  
+            # POSITION SIZING (1 feature - brings total to 32)
             rl_state.get('contracts', 1),  # Position size (1-3 contracts)
         ], dtype=np.float32)
         

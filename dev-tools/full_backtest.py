@@ -2683,7 +2683,6 @@ def run_full_backtest(csv_file: str, days: int = 15):
                 rl_state = {
                     'symbol': 'ES',  # Backtest symbol
                     'entry_price': bar['close'],
-                    'entry_bar': idx,  # NEW: Bar index at signal
                     'vwap': vwap_bands['vwap'],
                     'rsi': rsi,
                     'atr': atr,
