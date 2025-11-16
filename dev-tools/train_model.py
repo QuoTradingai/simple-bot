@@ -240,14 +240,36 @@ def load_experiences():
     experiences = data['experiences']
     
     # Include ALL experiences (both taken trades AND ghost trades)
-    # Ghost trades teach the AI what it SHOULD have done
+    # GHOST TRADES are critical for learning:
+    # - Teach the model what happens when it says NO to a signal
+    # - If ghost wins → model learns it was TOO CONSERVATIVE
+    # - If ghost loses → model learns it was CORRECTLY SELECTIVE
+    # - With R-multiple rewards, model learns MAGNITUDE of missed/avoided outcomes
+    # - Typically 70-80% of all training data comes from ghost trades
     print(f"Total experiences: {len(experiences):,}")
-    taken_trades = [e for e in experiences if e.get('took_trade', True)]  # Include ghosts
+    taken_trades = [e for e in experiences if e.get('took_trade', True)]
     ghost_trades = [e for e in experiences if not e.get('took_trade', True)]
     print(f"Taken trades: {len(taken_trades):,}")
     print(f"Ghost trades (learning from rejections): {len(ghost_trades):,}")
     
+    # Calculate ghost trade performance to show learning impact
+    if len(ghost_trades) > 0:
+        ghost_winners = sum(1 for g in ghost_trades if g.get('pnl', 0) > 0)
+        ghost_losers = len(ghost_trades) - ghost_winners
+        total_missed_profit = sum(g.get('pnl', 0) for g in ghost_trades if g.get('pnl', 0) > 0)
+        total_avoided_loss = abs(sum(g.get('pnl', 0) for g in ghost_trades if g.get('pnl', 0) < 0))
+        net_benefit = total_avoided_loss - total_missed_profit
+        
+        print(f"  Ghost trade performance:")
+        print(f"    Missed opportunities: {ghost_winners:,} winning signals rejected")
+        print(f"    Correct rejections: {ghost_losers:,} losing signals avoided")
+        print(f"    Total avoided loss: ${total_avoided_loss:,.2f}")
+        print(f"    Total missed profit: ${total_missed_profit:,.2f}")
+        print(f"    Net benefit from selectivity: ${net_benefit:,.2f}")
+        print()
+    
     # Use ALL experiences for training (ghosts + taken)
+    # This teaches the model both what TO do and what NOT to do
     training_experiences = experiences  # Train on everything!
 
     
