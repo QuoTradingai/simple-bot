@@ -2969,7 +2969,9 @@ if __name__ == "__main__":
     # Parse command-line arguments
     days = 15  # Default
     local_mode = True  # Default: save experiences to local JSON (bot needs to learn!)
-    csv_file = "data/historical_data/ES_1min_cleaned.csv"  # Cleaned data (no maintenance/weekend bars)
+    # Default CSV path - works from dev-tools/ directory or repo root
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    csv_file = os.path.join(script_dir, "..", "data", "historical_data", "ES_1min_cleaned.csv")
     save_experiences = True  # Default: save experiences
     confidence_threshold = None  # Will use CONFIG default if not specified
     max_contracts = None  # Will use CONFIG default if not specified
