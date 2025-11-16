@@ -1109,10 +1109,11 @@ class ShadowTrade:
             'bars_until_breakeven': self.bars_until_breakeven if self.bars_until_breakeven else 0,
             'bars_until_trailing': self.bars_until_trailing if self.bars_until_trailing else 0,
             
-            # Partial exits
+            # Partial exits (GHOST TRADES TRACK THESE TOO)
             'partial_exit_1_completed': self.partial_1_done,
             'partial_exit_2_completed': self.partial_2_done,
             'partial_exit_3_completed': self.partial_3_done,
+            'partial_exits_history': self.partial_exits,  # Full history of when partials were taken
             
             # Entry context
             'entry_confidence': self.confidence,
@@ -1283,7 +1284,12 @@ class ShadowTrade:
                 'lowest_price': self.lowest_price,
                 'breakeven_active': self.breakeven_active,
                 'trailing_active': self.trailing_active,
-                'remaining_quantity': self.remaining_quantity
+                'remaining_quantity': self.remaining_quantity,
+                # CRITICAL: Pass partial exit states so checker knows what's already done
+                'partial_1_done': self.partial_1_done,
+                'partial_2_done': self.partial_2_done,
+                'partial_3_done': self.partial_3_done,
+                'partial_exits': self.partial_exits
             }
             
             ghost_checker = ComprehensiveExitChecker(trade_context)
@@ -1296,6 +1302,10 @@ class ShadowTrade:
             ghost_checker.trade['trailing_active'] = self.trailing_active
             ghost_checker.trade['stop_price'] = self.stop_price
             ghost_checker.trade['remaining_quantity'] = self.remaining_quantity
+            ghost_checker.trade['partial_1_done'] = self.partial_1_done
+            ghost_checker.trade['partial_2_done'] = self.partial_2_done
+            ghost_checker.trade['partial_3_done'] = self.partial_3_done
+            ghost_checker.trade['partial_exits'] = self.partial_exits
             
             # Check ALL exit conditions using comprehensive logic
             comprehensive_exit = ghost_checker.check_all_exits(
@@ -1348,6 +1358,38 @@ class ShadowTrade:
                 if self.trailing_active and not was_trailing:
                     self.trailing_activation_bar = self.bars_in_trade
                     self.bars_until_trailing = self.bars_in_trade
+            
+            # CRITICAL: Update partial exit states from comprehensive checker
+            # This ensures ghost trades track partial exits just like real trades
+            if 'partial_1_done' in ghost_checker.trade:
+                if ghost_checker.trade['partial_1_done'] and not self.partial_1_done:
+                    self.partial_1_done = True
+                    # Record the partial exit in history
+                    self.partial_exits.append({
+                        'type': 'partial_1',
+                        'bar': self.bars_in_trade,
+                        'r_multiple': current_r
+                    })
+            if 'partial_2_done' in ghost_checker.trade:
+                if ghost_checker.trade['partial_2_done'] and not self.partial_2_done:
+                    self.partial_2_done = True
+                    self.partial_exits.append({
+                        'type': 'partial_2',
+                        'bar': self.bars_in_trade,
+                        'r_multiple': current_r
+                    })
+            if 'partial_3_done' in ghost_checker.trade:
+                if ghost_checker.trade['partial_3_done'] and not self.partial_3_done:
+                    self.partial_3_done = True
+                    self.partial_exits.append({
+                        'type': 'partial_3',
+                        'bar': self.bars_in_trade,
+                        'r_multiple': current_r
+                    })
+            
+            # Update remaining quantity if partials were taken
+            if 'remaining_quantity' in ghost_checker.trade:
+                self.remaining_quantity = ghost_checker.trade['remaining_quantity']
             
         except Exception as e:
             # Fallback to basic logic if comprehensive checker fails
