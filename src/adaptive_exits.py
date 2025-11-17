@@ -71,59 +71,66 @@ class AdaptiveExitManager:
         # NOW LEARNS: stops, breakeven, trailing, partial exits, sideways timeout
         self.learned_params = {
             'HIGH_VOL_CHOPPY': {
-                'breakeven_mult': 0.75, 'trailing_mult': 0.7, 'stop_mult': 4.0,
+                'breakeven_mult': 0.75, 'trailing_mult': 0.7, 'stop_mult': 3.2,  # TIGHTER: 4.0 -> 3.2
                 'partial_1_r': 2.0, 'partial_1_pct': 0.50,  # 50% @ 2R
                 'partial_2_r': 3.0, 'partial_2_pct': 0.30,  # 30% @ 3R
                 'partial_3_r': 5.0, 'partial_3_pct': 0.20,  # 20% @ 5R (runner)
                 'sideways_timeout_minutes': 15,  # Exit runner if sideways 15 min
+                'underwater_timeout_minutes': 7,  # CUT LOSERS: Exit if losing after 7 min
                 'runner_hold_criteria': {'min_r_multiple': 6.0, 'min_duration_minutes': 30, 'max_drawdown_pct': 0.25}
             },
             'HIGH_VOL_TRENDING': {
-                'breakeven_mult': 0.85, 'trailing_mult': 1.1, 'stop_mult': 4.2,
+                'breakeven_mult': 0.85, 'trailing_mult': 1.1, 'stop_mult': 3.4,  # TIGHTER: 4.2 -> 3.4
                 'partial_1_r': 2.5, 'partial_1_pct': 0.40,  # Let trends run more
                 'partial_2_r': 4.0, 'partial_2_pct': 0.30,
                 'partial_3_r': 6.0, 'partial_3_pct': 0.30,
                 'sideways_timeout_minutes': 20,
+                'underwater_timeout_minutes': 9,  # CUT LOSERS: Slightly longer for trends
                 'runner_hold_criteria': {'min_r_multiple': 8.0, 'min_duration_minutes': 40, 'max_drawdown_pct': 0.20}
             },
             'LOW_VOL_RANGING': {
-                'breakeven_mult': 1.0, 'trailing_mult': 1.0, 'stop_mult': 3.2,
+                'breakeven_mult': 1.0, 'trailing_mult': 1.0, 'stop_mult': 2.8,  # TIGHTER: 3.2 -> 2.8
                 'partial_1_r': 1.5, 'partial_1_pct': 0.60,  # Take profits quick in ranges
                 'partial_2_r': 2.5, 'partial_2_pct': 0.30,
                 'partial_3_r': 4.0, 'partial_3_pct': 0.10,
                 'sideways_timeout_minutes': 10,
+                'underwater_timeout_minutes': 6,  # CUT LOSERS: Quick exit in ranging markets
                 'runner_hold_criteria': {'min_r_multiple': 4.0, 'min_duration_minutes': 20, 'max_drawdown_pct': 0.30}
             },
             'LOW_VOL_TRENDING': {
-                'breakeven_mult': 1.0, 'trailing_mult': 1.15, 'stop_mult': 3.4,
+                'breakeven_mult': 1.0, 'trailing_mult': 1.15, 'stop_mult': 3.0,  # TIGHTER: 3.4 -> 3.0
                 'partial_1_r': 2.0, 'partial_1_pct': 0.40,
                 'partial_2_r': 3.5, 'partial_2_pct': 0.30,
                 'partial_3_r': 5.5, 'partial_3_pct': 0.30,
                 'sideways_timeout_minutes': 18,
+                'underwater_timeout_minutes': 8,  # CUT LOSERS: Moderate timeout
                 'runner_hold_criteria': {'min_r_multiple': 5.5, 'min_duration_minutes': 28, 'max_drawdown_pct': 0.26}
             },
             'NORMAL': {
-                'breakeven_mult': 1.0, 'trailing_mult': 1.0, 'stop_mult': 3.6,
+                'breakeven_mult': 1.0, 'trailing_mult': 1.0, 'stop_mult': 3.0,  # TIGHTER: 3.6 -> 3.0 (KEY CHANGE)
                 'partial_1_r': 2.0, 'partial_1_pct': 0.50,
                 'partial_2_r': 3.0, 'partial_2_pct': 0.30,
                 'partial_3_r': 5.0, 'partial_3_pct': 0.20,
                 'sideways_timeout_minutes': 12,
+                'underwater_timeout_minutes': 7,  # CUT LOSERS: Exit if losing after 7 min (KEY ADDITION)
                 'runner_hold_criteria': {'min_r_multiple': 5.0, 'min_duration_minutes': 25, 'max_drawdown_pct': 0.27}
             },
             'NORMAL_TRENDING': {
-                'breakeven_mult': 1.0, 'trailing_mult': 1.1, 'stop_mult': 3.6,
+                'breakeven_mult': 1.0, 'trailing_mult': 1.1, 'stop_mult': 3.0,  # TIGHTER: 3.6 -> 3.0
                 'partial_1_r': 2.2, 'partial_1_pct': 0.45,
                 'partial_2_r': 3.5, 'partial_2_pct': 0.30,
                 'partial_3_r': 5.5, 'partial_3_pct': 0.25,
                 'sideways_timeout_minutes': 15,
+                'underwater_timeout_minutes': 8,  # CUT LOSERS
                 'runner_hold_criteria': {'min_r_multiple': 6.0, 'min_duration_minutes': 30, 'max_drawdown_pct': 0.25}
             },
             'NORMAL_CHOPPY': {
-                'breakeven_mult': 0.95, 'trailing_mult': 0.95, 'stop_mult': 3.4,
+                'breakeven_mult': 0.95, 'trailing_mult': 0.95, 'stop_mult': 2.8,  # TIGHTER: 3.4 -> 2.8
                 'partial_1_r': 1.8, 'partial_1_pct': 0.55,
                 'partial_2_r': 2.8, 'partial_2_pct': 0.30,
                 'partial_3_r': 4.5, 'partial_3_pct': 0.15,
                 'sideways_timeout_minutes': 10,
+                'underwater_timeout_minutes': 6,  # CUT LOSERS: Fastest in choppy markets
                 'runner_hold_criteria': {'min_r_multiple': 4.0, 'min_duration_minutes': 18, 'max_drawdown_pct': 0.29}
             }
         }
@@ -503,11 +510,11 @@ class AdaptiveExitManager:
                 tight_pnl = sum(o['outcome']['pnl'] for o in tight_stops) / len(tight_stops)
                 
                 if wide_pnl > tight_pnl + 50:  # Wide stops significantly better
-                    self.learned_params[regime]['stop_mult'] = min(4.5, self.learned_params[regime].get('stop_mult', 3.6) * 1.05)
-                    logger.info(f"[EXIT RL] {regime}: WIDE stops work better (${wide_pnl:.0f} vs ${tight_pnl:.0f})")
+                    self.learned_params[regime]['stop_mult'] = min(4.5, self.learned_params[regime].get('stop_mult', 3.0) * 1.15)  # AGGRESSIVE: 1.05 -> 1.15
+                    logger.info(f"[EXIT RL] {regime}: WIDE stops work better (${wide_pnl:.0f} vs ${tight_pnl:.0f}), widening by 15%")
                 elif tight_pnl > wide_pnl + 50:  # Tight stops significantly better
-                    self.learned_params[regime]['stop_mult'] = max(2.8, self.learned_params[regime].get('stop_mult', 3.6) * 0.95)
-                    logger.info(f"[EXIT RL] {regime}: TIGHT stops work better (${tight_pnl:.0f} vs ${wide_pnl:.0f})")
+                    self.learned_params[regime]['stop_mult'] = max(2.5, self.learned_params[regime].get('stop_mult', 3.0) * 0.85)  # AGGRESSIVE: 0.95 -> 0.85
+                    logger.info(f"[EXIT RL] {regime}: TIGHT stops work better (${tight_pnl:.0f} vs ${wide_pnl:.0f}), tightening by 15%")
             
             # LEARN BREAKEVEN TIMING
             # Calculate average P&L for different parameter ranges
@@ -519,19 +526,20 @@ class AdaptiveExitManager:
             standard_pnl = sum(o['outcome']['pnl'] for o in standard_exits) / max(1, len(standard_exits))
             loose_pnl = sum(o['outcome']['pnl'] for o in loose_exits) / max(1, len(loose_exits))
             
-            # Adjust multipliers based on what worked best
+            # Adjust multipliers based on what worked best - MORE AGGRESSIVE
             if tight_pnl > standard_pnl and tight_pnl > loose_pnl:
                 # Tight exits work best for this regime
-                self.learned_params[regime]['breakeven_mult'] *= 0.95  # Tighten more
-                logger.info(f"[EXIT RL] LEARNED: {regime} prefers TIGHT exits (avg P&L: ${tight_pnl:.2f})")
+                self.learned_params[regime]['breakeven_mult'] *= 0.85  # AGGRESSIVE: 0.95 -> 0.85
+                logger.info(f"[EXIT RL] LEARNED: {regime} prefers TIGHT exits (avg P&L: ${tight_pnl:.2f}), tightening by 15%")
             elif loose_pnl > standard_pnl and loose_pnl > tight_pnl:
                 # Loose exits work best
-                self.learned_params[regime]['breakeven_mult'] *= 1.05  # Loosen more
-                logger.info(f"[EXIT RL] LEARNED: {regime} prefers LOOSE exits (avg P&L: ${loose_pnl:.2f})")
+                self.learned_params[regime]['breakeven_mult'] *= 1.15  # AGGRESSIVE: 1.05 -> 1.15
+                logger.info(f"[EXIT RL] LEARNED: {regime} prefers LOOSE exits (avg P&L: ${loose_pnl:.2f}), loosening by 15%")
             
-            # Clamp to reasonable ranges
+            # Clamp to reasonable ranges - tighter floor for stops
             self.learned_params[regime]['breakeven_mult'] = max(0.6, min(1.3, self.learned_params[regime]['breakeven_mult']))
             self.learned_params[regime]['trailing_mult'] = max(0.6, min(1.3, self.learned_params[regime]['trailing_mult']))
+            self.learned_params[regime]['stop_mult'] = max(2.5, min(4.0, self.learned_params[regime].get('stop_mult', 3.0)))  # FLOOR: 2.5 (tighter)
             
             # NEW: Learn optimal partial exit parameters
             self._learn_partial_exit_params(regime, outcomes)
