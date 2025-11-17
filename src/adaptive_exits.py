@@ -2839,6 +2839,30 @@ def get_adaptive_exit_params(bars: list, position: Dict, current_price: float,
     
     logger.info(f"{'='*70}\n")
     
+    # Extract learned parameters for stop_mult, underwater timeout, and partials
+    stop_multiplier = 3.6  # Default
+    underwater_timeout_minutes = 15  # Default
+    partial_1_r = 2.0  # Default
+    partial_2_r = 3.0
+    partial_3_r = 5.0
+    partial_1_pct = 0.50
+    partial_2_pct = 0.30
+    partial_3_pct = 0.20
+    
+    if adaptive_manager and hasattr(adaptive_manager, 'learned_params'):
+        learned = adaptive_manager.learned_params.get(market_regime, {})
+        stop_multiplier = learned.get('stop_mult', 3.6)
+        underwater_timeout_minutes = learned.get('underwater_timeout_minutes', 15)
+        partial_1_r = learned.get('partial_1_r', 2.0)
+        partial_2_r = learned.get('partial_2_r', 3.0)
+        partial_3_r = learned.get('partial_3_r', 5.0)
+        partial_1_pct = learned.get('partial_1_pct', 0.50)
+        partial_2_pct = learned.get('partial_2_pct', 0.30)
+        partial_3_pct = learned.get('partial_3_pct', 0.20)
+        
+        logger.info(f"[RL PARAMS] Stop: {stop_multiplier:.2f}x ATR, Underwater: {underwater_timeout_minutes}min, "
+                   f"Partials: {partial_1_r:.1f}R/{partial_2_r:.1f}R/{partial_3_r:.1f}R")
+    
     return {
         "breakeven_threshold_ticks": adaptive_breakeven_threshold,
         "breakeven_offset_ticks": adaptive_breakeven_offset,
@@ -2852,5 +2876,14 @@ def get_adaptive_exit_params(bars: list, position: Dict, current_price: float,
         "situation_factors": situation_factors,
         "decision_reasons": aggression_reasons if aggression_reasons else ["balanced"],
         "duration_minutes": duration_minutes,
-        "learned_multiplier": breakeven_threshold_multiplier  # Include learned multiplier for tracking
+        "learned_multiplier": breakeven_threshold_multiplier,  # Include learned multiplier for tracking
+        # NEW: Include learned stop and timeout parameters
+        "stop_mult": stop_multiplier,
+        "underwater_max_bars": int(underwater_timeout_minutes),  # Convert minutes to bars (1-min bars)
+        "partial_1_r": partial_1_r,
+        "partial_1_pct": partial_1_pct,
+        "partial_2_r": partial_2_r,
+        "partial_2_pct": partial_2_pct,
+        "partial_3_r": partial_3_r,
+        "partial_3_pct": partial_3_pct
     }
