@@ -569,7 +569,6 @@ class BacktestEngine:
         
         # RL brain tracking
         self.initial_signal_count = 0
-        self.initial_exit_count = 0
         self.bot_instance = None  # Will be set when bot is created
         
     def run(self, strategy_func: Any) -> Dict[str, Any]:
@@ -736,8 +735,6 @@ class BacktestEngine:
         # Capture initial experience counts
         if hasattr(bot, 'signal_rl') and hasattr(bot.signal_rl, 'experiences'):
             self.initial_signal_count = len(bot.signal_rl.experiences)
-        if hasattr(bot, 'exit_manager') and hasattr(bot.exit_manager, 'exit_experiences'):
-            self.initial_exit_count = len(bot.exit_manager.exit_experiences)
             
     def _log_rl_brain_growth(self) -> None:
         """Log RL brain growth during backtest"""
@@ -747,16 +744,12 @@ class BacktestEngine:
             
         # Get final counts
         final_signal_count = 0
-        final_exit_count = 0
         
         if hasattr(self.bot_instance, 'signal_rl') and hasattr(self.bot_instance.signal_rl, 'experiences'):
             final_signal_count = len(self.bot_instance.signal_rl.experiences)
-        if hasattr(self.bot_instance, 'exit_manager') and hasattr(self.bot_instance.exit_manager, 'exit_experiences'):
-            final_exit_count = len(self.bot_instance.exit_manager.exit_experiences)
             
         # Calculate growth
         signal_growth = final_signal_count - self.initial_signal_count
-        exit_growth = final_exit_count - self.initial_exit_count
         
         # Log the results
         self.logger.info("")
@@ -764,8 +757,6 @@ class BacktestEngine:
         self.logger.info("RL BRAIN GROWTH")
         self.logger.info("="*60)
         self.logger.info(f"Signal Experiences: {self.initial_signal_count} → {final_signal_count} (+{signal_growth})")
-        self.logger.info(f"Exit Experiences: {self.initial_exit_count} → {final_exit_count} (+{exit_growth})")
-        self.logger.info(f"Total RL Experiences: {self.initial_signal_count + self.initial_exit_count} → {final_signal_count + final_exit_count} (+{signal_growth + exit_growth})")
         self.logger.info("="*60)
     
     def _log_results(self, results: Dict[str, Any]) -> None:

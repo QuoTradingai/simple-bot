@@ -183,9 +183,6 @@ rl_brain: Optional[SignalConfidenceRL] = None
 # Global bid/ask manager
 bid_ask_manager: Optional[BidAskManager] = None
 
-# Global adaptive exit manager (for streak tracking persistence)
-adaptive_manager: Optional[Any] = None
-
 # State management dictionary
 state: Dict[str, Any] = {}
 
@@ -709,11 +706,10 @@ def check_azure_time_service() -> str:
     - Current ET time (timezone-accurate)
     - Market hours status
     - Maintenance windows (Mon-Thu 5-6 PM, Fri 5 PM - Sun 6 PM)
-    - Economic events (FOMC/NFP/CPI blocking)
     - Trading permission (go/no-go flag)
     
     Returns:
-        Trading state: 'entry_window', 'flatten_mode', 'closed', or 'event_block'
+        Trading state: 'entry_window', 'flatten_mode', or 'closed'
     """
     try:
         import requests
@@ -740,34 +736,11 @@ def check_azure_time_service() -> str:
             if not trading_allowed:
                 if "maintenance" in halt_reason.lower():
                     state = "closed"  # Maintenance window
-                elif "event" in halt_reason.lower() or "fomc" in halt_reason.lower() or "nfp" in halt_reason.lower():
-                    # Check if FOMC blocking is enabled in config
-                    fomc_enabled = CONFIG.get("fomc_block_enabled", True)
-                    if fomc_enabled:
-                        state = "event_block"  # Economic event blocking
-                        # Log FOMC block (only once when it activates)
-                        if not bot_status.get("event_block_active", False):
-                            logger.warning("=" * 80)
-                            logger.warning(f"📅 ECONOMIC EVENT BLOCK ACTIVATED: {halt_reason}")
-                            logger.warning("  Trading halted 30 min before to 1 hour after event")
-                            logger.warning("  Will auto-resume when event window closes")
-                            logger.warning("=" * 80)
-                            bot_status["event_block_active"] = True
-                    else:
-                        logger.info(f"[TIME SERVICE] Economic event active but FOMC blocking disabled: {halt_reason}")
-                        state = "entry_window"  # User disabled event blocking
                 elif "weekend" in halt_reason.lower() or "closed" in halt_reason.lower():
                     state = "closed"  # Weekend or market closed
                 else:
                     state = "closed"  # Unknown halt reason - be safe
             else:
-                # Clear event block flag when trading resumes
-                if bot_status.get("event_block_active", False):
-                    logger.info("=" * 80)
-                    logger.info("✅ ECONOMIC EVENT ENDED - Trading resumed")
-                    logger.info("=" * 80)
-                    bot_status["event_block_active"] = False
-                
                 # Trading allowed - check if we're approaching maintenance (flatten mode)
                 # Azure doesn't send flatten mode, so we check local time
                 # If current ET time is 4:45-5:00 PM, enter flatten mode
@@ -2235,12 +2208,6 @@ def validate_signal_requirements(symbol: str, bar_time: datetime) -> Tuple[bool,
     if trading_state == "closed":
         logger.debug(f"Market closed, skipping signal check")
         return False, f"Market closed"
-    
-    if trading_state == "event_block":
-        # FOMC/NFP/CPI event blocking (if enabled in config)
-        halt_reason = bot_status.get("halt_reason", "Economic event")
-        logger.debug(f"Event block active: {halt_reason}")
-        return False, f"Economic event block: {halt_reason}"
     
     if trading_state == "flatten_mode":
         logger.debug(f"Flatten mode active (4:45-5:00 PM), no new entries")
@@ -3999,16 +3966,14 @@ def check_breakeven_protection(symbol: str, current_price: float) -> None:
     """
     Check if breakeven protection should be activated and move stop to breakeven.
     
-    Uses ADAPTIVE parameters that adjust based on:
-    - Current market volatility (ATR)
-    - Market regime (trending vs choppy)
-    - Trade performance
+    Uses static parameters from config:
+    - breakeven_profit_threshold_ticks: Profit needed to activate (config default: 9 ticks, code fallback: 8)
+    - breakeven_stop_offset_ticks: Stop offset from entry (default: 1 tick)
     
     Args:
         symbol: Instrument symbol
         current_price: Current market price
     """
-    global adaptive_manager
     
     position = state[symbol]["position"]
     
@@ -4020,37 +3985,9 @@ def check_breakeven_protection(symbol: str, current_price: float) -> None:
     entry_price = position["entry_price"]
     tick_size = CONFIG["tick_size"]
     
-    # ========================================================================
-    # ADAPTIVE EXIT MANAGEMENT - Calculate dynamic thresholds
-    # ========================================================================
-    
-    if adaptive_manager is not None:
-        try:
-            from adaptive_exits import get_adaptive_exit_params
-            
-            adaptive_params = get_adaptive_exit_params(
-                bars=state[symbol]["bars_1min"],
-                position=position,
-                current_price=current_price,
-                config=CONFIG,
-                adaptive_manager=adaptive_manager  # Pass global instance for persistence
-            )
-            
-            breakeven_threshold_ticks = adaptive_params["breakeven_threshold_ticks"]
-            breakeven_offset_ticks = adaptive_params["breakeven_offset_ticks"]
-            
-            # STORE exit params for learning when trade closes
-            position["exit_params_used"] = adaptive_params
-            
-        except Exception as e:
-            logger.error(f"[FAIL] Adaptive exits ERROR: {e}", exc_info=True)
-            logger.warning("[WARN] Falling back to static params")
-            breakeven_threshold_ticks = CONFIG.get("breakeven_profit_threshold_ticks", 8)
-            breakeven_offset_ticks = CONFIG.get("breakeven_stop_offset_ticks", 1)
-    else:
-        # Static parameters
-        breakeven_threshold_ticks = CONFIG.get("breakeven_profit_threshold_ticks", 8)
-        breakeven_offset_ticks = CONFIG.get("breakeven_stop_offset_ticks", 1)
+    # Static parameters - use config values
+    breakeven_threshold_ticks = CONFIG.get("breakeven_profit_threshold_ticks", 8)
+    breakeven_offset_ticks = CONFIG.get("breakeven_stop_offset_ticks", 1)
     
     # Step 2 - Calculate current profit in ticks
     if side == "long":
@@ -4112,10 +4049,9 @@ def check_trailing_stop(symbol: str, current_price: float) -> None:
     """
     Check and update trailing stop based on price movement.
     
-    Uses ADAPTIVE parameters that adjust based on:
-    - Current market volatility (ATR)
-    - Market regime (trending vs choppy)  
-    - Position holding duration
+    Uses static parameters from config:
+    - trailing_stop_distance_ticks: Distance from price extreme (default: 8 ticks)
+    - trailing_stop_min_profit_ticks: Minimum profit to activate (default: 12 ticks)
     
     Runs AFTER breakeven check. Only processes positions where breakeven is already active.
     Continuously updates stop to follow profitable price movement while protecting gains.
@@ -4124,7 +4060,6 @@ def check_trailing_stop(symbol: str, current_price: float) -> None:
         symbol: Instrument symbol
         current_price: Current market price
     """
-    global adaptive_manager
     
     position = state[symbol]["position"]
     
@@ -4136,36 +4071,9 @@ def check_trailing_stop(symbol: str, current_price: float) -> None:
     entry_price = position["entry_price"]
     tick_size = CONFIG["tick_size"]
     
-    # ========================================================================
-    # ADAPTIVE EXIT MANAGEMENT - Calculate dynamic trailing parameters
-    # ========================================================================
-    if adaptive_manager is not None:
-        try:
-            from adaptive_exits import get_adaptive_exit_params
-            
-            adaptive_params = get_adaptive_exit_params(
-                bars=state[symbol]["bars_1min"],
-                position=position,
-                current_price=current_price,
-                config=CONFIG,
-                adaptive_manager=adaptive_manager  # Pass global instance for persistence
-            )
-            
-            trailing_distance_ticks = adaptive_params["trailing_distance_ticks"]
-            min_profit_ticks = adaptive_params["trailing_min_profit_ticks"]
-            
-            # STORE exit params for learning when trade closes
-            position["exit_params_used"] = adaptive_params
-            
-        except Exception as e:
-            logger.error(f"[FAIL] Adaptive trailing ERROR: {e}", exc_info=True)
-            logger.warning("[WARN] Falling back to static trailing params")
-            trailing_distance_ticks = CONFIG.get("trailing_stop_distance_ticks", 8)
-            min_profit_ticks = CONFIG.get("trailing_stop_min_profit_ticks", 12)
-    else:
-        # Static parameters
-        trailing_distance_ticks = CONFIG.get("trailing_stop_distance_ticks", 8)
-        min_profit_ticks = CONFIG.get("trailing_stop_min_profit_ticks", 12)
+    # Static parameters - use config values
+    trailing_distance_ticks = CONFIG.get("trailing_stop_distance_ticks", 8)
+    min_profit_ticks = CONFIG.get("trailing_stop_min_profit_ticks", 12)
     
     # Calculate current profit
     if side == "long":
@@ -4636,47 +4544,6 @@ def check_exit_conditions(symbol: str) -> None:
         logger.info("Position flattened - bot will continue running and auto-resume when market opens")
         return
     
-    # ECONOMIC EVENT: Force close ONLY if user enabled it
-    if trading_state == "event_block" and position["active"]:
-        fomc_force_close = CONFIG.get("fomc_force_close", False)
-        
-        if fomc_force_close:
-            # User wants to force close during economic events
-            event_reason = bot_status.get('halt_reason', 'Economic event active')
-            
-            logger.critical(SEPARATOR_LINE)
-            logger.critical(f"ECONOMIC EVENT - AUTO-FLATTENING POSITION")
-            logger.critical(f"Event: {event_reason}")
-            logger.critical(f"Time: {bar_time.strftime('%H:%M:%S %Z')}")
-            logger.critical(f"Position: {side.upper()} {position['quantity']} @ ${entry_price:.2f}")
-            logger.critical("(User enabled 'Force Close During FOMC')")
-            logger.critical(SEPARATOR_LINE)
-            
-            # Force close immediately
-            flatten_price = get_flatten_price(symbol, side, current_bar["close"])
-            
-            log_time_based_action(
-                "event_flatten",
-                f"{event_reason} - auto-flattening position per user preference",
-                {
-                    "side": side,
-                    "quantity": position["quantity"],
-                    "entry_price": f"${entry_price:.2f}",
-                    "exit_price": f"${flatten_price:.2f}",
-                    "time": bar_time.strftime('%H:%M:%S %Z'),
-                    "reason": event_reason
-                }
-            )
-            
-            # Execute close order
-            handle_exit_orders(symbol, position, flatten_price, "event_flatten")
-            logger.info("Position flattened for economic event - will auto-resume after event window")
-            return
-        else:
-            # User wants to keep position during events, just block new entries
-            logger.info(f"📅 Economic event active: {bot_status.get('halt_reason', 'Event')}")
-            logger.info("  Keeping existing position (Force Close disabled)")
-            logger.info("  New entries blocked until event window closes")
     
     # AUTO-RESUME: Reset flatten mode when market reopens
     if trading_state == "entry_window" and bot_status["flatten_mode"]:
@@ -5248,7 +5115,6 @@ def execute_exit(symbol: str, exit_price: float, reason: str) -> None:
         exit_price: Exit price
         reason: Reason for exit (stop_loss, target_reached, signal_reversal, etc.)
     """
-    global adaptive_manager  # Declare at top of function
     
     position = state[symbol]["position"]
     
@@ -5280,14 +5146,6 @@ def execute_exit(symbol: str, exit_price: float, reason: str) -> None:
         )
     except Exception as e:
         logger.debug(f"Failed to send exit alert: {e}")
-    
-    # ADAPTIVE EXIT MANAGEMENT - Record trade result for streak tracking
-    if adaptive_manager is not None:
-        try:
-            adaptive_manager.record_trade_result(pnl)
-            logger.info(f" STREAK TRACKING: Recorded P&L ${pnl:+.2f} (Recent: {len(adaptive_manager.recent_trades)} trades)")
-        except Exception as e:
-            logger.debug(f"Streak tracking update skipped: {e}")
     
     # REINFORCEMENT LEARNING - Record outcome to cloud API (shared learning pool)
     try:
@@ -5329,39 +5187,6 @@ def execute_exit(symbol: str, exit_price: float, reason: str) -> None:
         
     except Exception as e:
         logger.debug(f"RL outcome recording failed: {e}")
-    
-    # ADAPTIVE EXIT LEARNING - Record exit parameters and outcome
-    try:
-        if adaptive_manager is not None and hasattr(adaptive_manager, 'record_exit_outcome'):
-            # Get exit parameters that were used
-            if "exit_params_used" in position:
-                exit_params = position["exit_params_used"]
-                regime = exit_params.get("market_regime", "UNKNOWN")
-                
-                # Calculate trade duration
-                entry_time = position.get("entry_time")
-                duration_minutes = 0
-                if entry_time:
-                    duration = exit_time - entry_time
-                    duration_minutes = duration.total_seconds() / 60
-                
-                # Record for learning
-                adaptive_manager.record_exit_outcome(
-                    regime=regime,
-                    exit_params=exit_params,
-                    trade_outcome={
-                        'pnl': pnl,
-                        'duration': duration_minutes,
-                        'exit_reason': reason,
-                        'side': position["side"],
-                        'contracts': position["quantity"],
-                        'win': pnl > 0
-                    }
-                )
-                
-                logger.info(f"[EXIT RL] Learned {regime} exit -> ${pnl:+.2f} in {duration_minutes:.1f}min")
-    except Exception as e:
-        logger.debug(f"Exit learning failed: {e}")
     
     # Log time-based exits with detailed audit trail
     time_based_reasons = [
@@ -6512,7 +6337,6 @@ def get_trading_state(dt: datetime = None) -> str:
     
     **AZURE-FIRST DESIGN**: Checks Azure time service first for:
     - Maintenance windows (Mon-Thu 5-6 PM, Fri 5 PM - Sun 6 PM)
-    - Economic events (FOMC/NFP/CPI blocking)
     - Single source of truth for all time-based decisions
     
     Falls back to local time logic if Azure unreachable.
@@ -6526,7 +6350,6 @@ def get_trading_state(dt: datetime = None) -> str:
         - 'entry_window': Market open, ready to trade
         - 'flatten_mode': 4:45-5:00 PM ET, close positions before maintenance
         - 'closed': Market closed (flatten all positions immediately)
-        - 'event_block': Economic event active (FOMC/NFP/CPI)
     """
     # AZURE-FIRST: Try cloud time service (unless in backtest mode)
     if backtest_current_time is None:  # Live mode only
@@ -6929,7 +6752,7 @@ def main(symbol_override: str = None) -> None:
             logger.warning(f"Failed to subscribe to quotes: {e}")
             logger.warning("Continuing without bid/ask quote data")
     
-    # RL and Adaptive Exits are CLOUD-ONLY - no local RL components
+    # RL is CLOUD-ONLY - no local RL components
     # Users get confidence from cloud, contribute to cloud hive mind
     # Only the dev (Kevin) gets the experience data saved to cloud
     logger.info("Cloud RL Mode: All learning goes to shared hive mind")

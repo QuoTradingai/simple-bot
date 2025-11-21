@@ -169,9 +169,8 @@ async def root():
         "endpoints": {
             "ml": "/api/ml/get_confidence, /api/ml/save_trade, /api/ml/stats",
             "license": "/api/license/validate, /api/license/activate",
-            "calendar": "/api/calendar/today, /api/calendar/events",
             "time": "/api/time, /api/time/simple",
-            "admin": "/api/admin/kill_switch, /api/admin/refresh_calendar"
+            "admin": "/api/admin/kill_switch"
         }
     }
 
@@ -437,17 +436,10 @@ async def get_stats(
     total_signal_experiences = db.query(func.count(RLExperience.id)).filter(
         RLExperience.experience_type == 'SIGNAL'
     ).scalar()
-    total_exit_experiences = db.query(func.count(RLExperience.id)).filter(
-        RLExperience.experience_type == 'EXIT'
-    ).scalar()
     
     # Recent RL growth (last 24 hours)
     signal_experiences_24h = db.query(func.count(RLExperience.id)).filter(
         RLExperience.experience_type == 'SIGNAL',
-        RLExperience.timestamp >= yesterday
-    ).scalar()
-    exit_experiences_24h = db.query(func.count(RLExperience.id)).filter(
-        RLExperience.experience_type == 'EXIT',
         RLExperience.timestamp >= yesterday
     ).scalar()
     
@@ -471,10 +463,8 @@ async def get_stats(
         },
         "rl_experiences": {
             "total_signal_experiences": total_signal_experiences or 0,
-            "total_exit_experiences": total_exit_experiences or 0,
             "signal_experiences_24h": signal_experiences_24h or 0,
-            "exit_experiences_24h": exit_experiences_24h or 0,
-            "total_experiences": (total_signal_experiences or 0) + (total_exit_experiences or 0),
+            "total_experiences": total_signal_experiences or 0,
             "win_rate": round(win_rate, 1)
         }
     }
@@ -594,17 +584,10 @@ async def get_dashboard_stats(
     total_signal_experiences = db.query(func.count(RLExperience.id)).filter(
         RLExperience.experience_type == 'SIGNAL'
     ).scalar()
-    total_exit_experiences = db.query(func.count(RLExperience.id)).filter(
-        RLExperience.experience_type == 'EXIT'
-    ).scalar()
     
     # Recent RL growth (last 24 hours)
     signal_exp_24h = db.query(func.count(RLExperience.id)).filter(
         RLExperience.experience_type == 'SIGNAL',
-        RLExperience.timestamp >= one_day_ago
-    ).scalar()
-    exit_exp_24h = db.query(func.count(RLExperience.id)).filter(
-        RLExperience.experience_type == 'EXIT',
         RLExperience.timestamp >= one_day_ago
     ).scalar()
     
@@ -629,10 +612,8 @@ async def get_dashboard_stats(
         },
         "rl_experiences": {
             "total_signal_experiences": total_signal_experiences or 0,
-            "total_exit_experiences": total_exit_experiences or 0,
             "signal_experiences_24h": signal_exp_24h or 0,
-            "exit_experiences_24h": exit_exp_24h or 0,
-            "total_experiences": (total_signal_experiences or 0) + (total_exit_experiences or 0)
+            "total_experiences": total_signal_experiences or 0
         }
     }
 
@@ -645,14 +626,13 @@ async def get_dashboard_stats(
 # ============================================================================
 
 # Single shared RL experience pool (everyone runs same strategy)
-# Starts with Kevin's 178K signal + 121K exit experiences
+# Starts with Kevin's signal experiences
 # Grows as all users contribute (collective learning - hive mind!)
 signal_experiences = []  # Shared across all users
-exit_experiences = []    # Shared across all users
 
 def load_initial_experiences():
     """Load Kevin's proven experiences to seed the hive mind"""
-    global signal_experiences, exit_experiences
+    global signal_experiences
     import json
     import os
     
@@ -665,13 +645,7 @@ def load_initial_experiences():
             logger.info(f"✅ Loaded {len(signal_experiences):,} signal experiences from Kevin's backtests")
         
         # Load exit experiences (2,961 exits)
-        if os.path.exists("exit_experience.json"):
-            with open("exit_experience.json", "r") as f:
-                data = json.load(f)
-                exit_experiences = data.get("exit_experiences", [])
-            logger.info(f"✅ Loaded {len(exit_experiences):,} exit experiences from Kevin's backtests")
-        
-        logger.info(f"🧠 HIVE MIND INITIALIZED: {len(signal_experiences):,} signals + {len(exit_experiences):,} exits")
+        logger.info(f"🧠 HIVE MIND INITIALIZED: {len(signal_experiences):,} signals")
         logger.info(f"   All users will learn from and contribute to this shared wisdom pool!")
         
     except Exception as e:
@@ -730,9 +704,7 @@ def save_experiences():
     try:
         with open("signal_experience.json", "w") as f:
             json.dump(signal_experiences, f)
-        with open("exit_experience.json", "w") as f:
-            json.dump(exit_experiences, f)
-        logger.info(f"💾 Saved hive mind: {len(signal_experiences):,} signals + {len(exit_experiences):,} exits")
+        logger.info(f"💾 Saved hive mind: {len(signal_experiences):,} signals")
     except Exception as e:
         logger.error(f"Failed to save experiences: {e}")
 
@@ -1316,27 +1288,8 @@ async def save_trade_experience(trade: Dict, db: Session = Depends(get_db)):
                 )
                 db.add(signal_exp)
                 
-                # Exit experience (exit decision) WITH CONTEXT
-                exit_exp = RLExperience(
-                    user_id=user.id,
-                    account_id=user_id,
-                    experience_type='EXIT',
-                    symbol=symbol,
-                    signal_type=trade['side'],
-                    outcome=outcome,
-                    pnl=pnl,
-                    confidence_score=trade.get('confidence', 0.0),
-                    quality_score=min(abs(pnl) / 100, 1.0),
-                    rsi=rsi,
-                    vwap_distance=vwap_distance,
-                    vix=vix,
-                    day_of_week=day_of_week,
-                    hour_of_day=hour_of_day
-                )
-                db.add(exit_exp)
-                
                 db.commit()
-                logger.debug(f"✅ Trade & RL experiences (with context) saved to database for {user_id}")
+                logger.debug(f"✅ Trade & signal RL experience saved to database for {user_id}")
         except Exception as db_error:
             logger.warning(f"Failed to save trade to database: {db_error}")
             # Don't fail the entire request if database save fails
@@ -1731,301 +1684,6 @@ async def create_checkout_session():
         raise HTTPException(status_code=500, detail=str(e))
 
 # ============================================================================
-# ECONOMIC CALENDAR - FOMC AUTO-SCRAPER
-# ============================================================================
-
-import asyncio
-import threading
-from bs4 import BeautifulSoup
-import requests as req_lib
-
-# Global calendar state
-economic_calendar = {
-    "events": [],
-    "last_updated": None,
-    "next_update": None,
-    "source": "Federal Reserve + Manual"
-}
-
-def scrape_fomc_dates() -> List[Dict]:
-    """
-    Scrape FOMC meeting dates from Federal Reserve website
-    Returns list of FOMC events
-    """
-    fomc_events = []
-    
-    try:
-        logger.info("📅 Fetching FOMC dates from federalreserve.gov...")
-        
-        # Fetch Federal Reserve calendar page
-        url = "https://www.federalreserve.gov/monetarypolicy/fomccalendars.htm"
-        response = req_lib.get(url, timeout=10)
-        response.raise_for_status()
-        
-        soup = BeautifulSoup(response.text, 'html.parser')
-        
-        # Find FOMC meeting dates in the page
-        # The structure typically has dates in specific div/table elements
-        # This is a simplified parser - may need adjustment if Fed changes format
-        
-        # Look for date patterns (MM/DD/YYYY or Month DD, YYYY)
-        import re
-        date_pattern = r'(\d{1,2}/\d{1,2}/\d{4}|\w+ \d{1,2}, \d{4})'
-        
-        # Find all text containing potential dates
-        page_text = soup.get_text()
-        potential_dates = re.findall(date_pattern, page_text)
-        
-        logger.info(f"Found {len(potential_dates)} potential FOMC dates on Fed website")
-        
-        # Parse and format dates
-        from dateutil import parser as date_parser
-        
-        for date_str in potential_dates[:20]:  # Limit to next 20 meetings (years ahead)
-            try:
-                parsed_date = date_parser.parse(date_str)
-                
-                # Only include future dates
-                if parsed_date.date() > datetime.now().date():
-                    # Add FOMC Statement (2 PM ET)
-                    fomc_events.append({
-                        "date": parsed_date.strftime("%Y-%m-%d"),
-                        "time": "2:00pm",
-                        "currency": "USD",
-                        "event": "FOMC Statement",
-                        "impact": "high"
-                    })
-                    
-                    # Add FOMC Press Conference (2:30 PM ET)
-                    fomc_events.append({
-                        "date": parsed_date.strftime("%Y-%m-%d"),
-                        "time": "2:30pm",
-                        "currency": "USD",
-                        "event": "FOMC Press Conference",
-                        "impact": "high"
-                    })
-            except Exception as e:
-                logger.debug(f"Could not parse date: {date_str}")
-                continue
-        
-        logger.info(f"✅ Scraped {len(fomc_events)} FOMC events from Federal Reserve")
-        
-    except Exception as e:
-        logger.error(f"❌ Failed to scrape FOMC dates: {e}")
-        logger.info("Will use manual FOMC dates as fallback")
-    
-    return fomc_events
-
-def generate_predictable_events() -> List[Dict]:
-    """
-    Generate predictable economic events (NFP, CPI, PPI)
-    These follow consistent schedules
-    """
-    events = []
-    current_date = datetime.now().date()
-    
-    # Generate 12 months of events
-    for month_offset in range(12):
-        year = current_date.year + (current_date.month + month_offset - 1) // 12
-        month = (current_date.month + month_offset - 1) % 12 + 1
-        
-        # NFP - First Friday of month at 8:30 AM ET
-        first_day = datetime(year, month, 1).date()
-        days_until_friday = (4 - first_day.weekday()) % 7
-        first_friday = first_day + timedelta(days=days_until_friday)
-        
-        if first_friday > current_date:
-            events.append({
-                "date": first_friday.strftime("%Y-%m-%d"),
-                "time": "8:30am",
-                "currency": "USD",
-                "event": "Non-Farm Employment Change",
-                "impact": "high"
-            })
-        
-        # CPI - Typically around 13th of month at 8:30 AM ET
-        cpi_date = datetime(year, month, 13).date()
-        if cpi_date > current_date:
-            events.append({
-                "date": cpi_date.strftime("%Y-%m-%d"),
-                "time": "8:30am",
-                "currency": "USD",
-                "event": "Core CPI m/m",
-                "impact": "high"
-            })
-        
-        # PPI - Typically around 14th of month at 8:30 AM ET
-        ppi_date = datetime(year, month, 14).date()
-        if ppi_date > current_date:
-            events.append({
-                "date": ppi_date.strftime("%Y-%m-%d"),
-                "time": "8:30am",
-                "currency": "USD",
-                "event": "Core PPI m/m",
-                "impact": "high"
-            })
-    
-    return events
-
-def update_calendar():
-    """
-    Update economic calendar with latest FOMC + predictable events
-    Runs daily at 5 PM ET (Sunday-Friday)
-    """
-    try:
-        logger.info("📅 Updating economic calendar...")
-        
-        # Scrape FOMC dates from Federal Reserve
-        fomc_events = scrape_fomc_dates()
-        
-        # Generate predictable events
-        predictable_events = generate_predictable_events()
-        
-        # Combine and sort by date
-        all_events = fomc_events + predictable_events
-        all_events.sort(key=lambda x: x["date"])
-        
-        # Remove duplicates (keep first occurrence)
-        seen_dates = set()
-        unique_events = []
-        for event in all_events:
-            event_key = (event["date"], event["event"])
-            if event_key not in seen_dates:
-                seen_dates.add(event_key)
-                unique_events.append(event)
-        
-        # Update global calendar
-        economic_calendar["events"] = unique_events
-        economic_calendar["last_updated"] = datetime.utcnow().isoformat()
-        economic_calendar["next_update"] = get_next_update_time().isoformat()
-        
-        logger.info(f"✅ Calendar updated: {len(unique_events)} events ({len(fomc_events)} FOMC + {len(predictable_events)} NFP/CPI/PPI)")
-        
-    except Exception as e:
-        logger.error(f"❌ Calendar update failed: {e}")
-
-def get_next_update_time() -> datetime:
-    """
-    Calculate next update time: 1st of every month at 5 PM ET
-    """
-    et_tz = pytz.timezone("America/New_York")
-    now_et = datetime.now(et_tz)
-    
-    # Target: 1st of next month at 5 PM ET
-    if now_et.day == 1 and now_et.hour < 17:
-        # It's the 1st and before 5 PM - update today at 5 PM
-        target_time = now_et.replace(hour=17, minute=0, second=0, microsecond=0)
-    else:
-        # Schedule for 1st of next month at 5 PM
-        if now_et.month == 12:
-            next_month = now_et.replace(year=now_et.year + 1, month=1, day=1, hour=17, minute=0, second=0, microsecond=0)
-        else:
-            next_month = now_et.replace(month=now_et.month + 1, day=1, hour=17, minute=0, second=0, microsecond=0)
-        target_time = next_month
-    
-    return target_time
-
-async def calendar_update_loop():
-    """
-    Background task that updates calendar daily at 5 PM ET (Sunday-Friday)
-    """
-    while True:
-        try:
-            next_update = get_next_update_time()
-            now = datetime.now(pytz.timezone("America/New_York"))
-            sleep_seconds = (next_update - now).total_seconds()
-            
-            logger.info(f"📅 Next calendar update: {next_update.strftime('%Y-%m-%d %I:%M %p ET')} ({sleep_seconds/3600:.1f} hours)")
-            
-            await asyncio.sleep(sleep_seconds)
-            
-            # Update calendar
-            update_calendar()
-            
-        except Exception as e:
-            logger.error(f"❌ Calendar update loop error: {e}")
-            # Wait 1 hour and retry
-            await asyncio.sleep(3600)
-
-def start_calendar_updater():
-    """Start background calendar updater in separate thread"""
-    def run_loop():
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        loop.run_until_complete(calendar_update_loop())
-    
-    thread = threading.Thread(target=run_loop, daemon=True)
-    thread.start()
-    logger.info("📅 Calendar updater started (1st of month at 5 PM ET)")
-
-@app.get("/api/calendar/events")
-async def get_calendar_events(days: int = 7):
-    """
-    Get upcoming economic events for next N days
-    
-    Query params:
-        days: Number of days ahead to fetch (default 7)
-    """
-    today = datetime.now().date()
-    end_date = today + timedelta(days=days)
-    
-    upcoming_events = [
-        event for event in economic_calendar["events"]
-        if today <= datetime.strptime(event["date"], "%Y-%m-%d").date() <= end_date
-    ]
-    
-    return {
-        "events": upcoming_events,
-        "count": len(upcoming_events),
-        "last_updated": economic_calendar["last_updated"],
-        "next_update": economic_calendar["next_update"]
-    }
-
-@app.get("/api/calendar/today")
-async def get_todays_events():
-    """
-    Get today's high-impact economic events
-    Bots check this before placing trades
-    """
-    today = datetime.now().date().strftime("%Y-%m-%d")
-    
-    todays_events = [
-        event for event in economic_calendar["events"]
-        if event["date"] == today and event["impact"] == "high"
-    ]
-    
-    has_fomc = any("FOMC" in event["event"] for event in todays_events)
-    has_nfp = any("Non-Farm" in event["event"] for event in todays_events)
-    has_cpi = any("CPI" in event["event"] for event in todays_events)
-    
-    return {
-        "date": today,
-        "events": todays_events,
-        "count": len(todays_events),
-        "has_fomc": has_fomc,
-        "has_nfp": has_nfp,
-        "has_cpi": has_cpi,
-        "trading_recommended": len(todays_events) == 0
-    }
-
-@app.post("/api/admin/refresh_calendar")
-async def refresh_calendar(data: dict):
-    """
-    ADMIN ONLY: Manually trigger calendar refresh
-    """
-    admin_key = data.get("admin_key")
-    if admin_key != "QUOTRADING_ADMIN_2025":
-        raise HTTPException(status_code=403, detail="Invalid admin key")
-    
-    update_calendar()
-    
-    return {
-        "status": "refreshed",
-        "events_count": len(economic_calendar["events"]),
-        "last_updated": economic_calendar["last_updated"]
-    }
-
-# ============================================================================
 # TIME SERVICE - SINGLE SOURCE OF TRUTH
 # ============================================================================
 
@@ -2119,43 +1777,6 @@ def get_trading_session(now_et: datetime) -> str:
     else:
         return "asian"
 
-def check_if_event_active(events: List[Dict], now_et: datetime) -> tuple:
-    """
-    Check if any high-impact economic event is currently active
-    
-    Returns: (is_active, event_name, event_window)
-    """
-    today_str = now_et.date().strftime("%Y-%m-%d")
-    current_time = now_et.time()
-    
-    # Filter today's events
-    todays_events = [e for e in events if e["date"] == today_str and e["impact"] == "high"]
-    
-    for event in todays_events:
-        event_time_str = event["time"]
-        
-        # Parse event time (e.g., "8:30am" or "2:00pm")
-        event_time_str = event_time_str.lower().replace("am", "").replace("pm", "").strip()
-        hour, minute = map(int, event_time_str.split(":"))
-        
-        # Adjust for PM
-        if "pm" in event["time"].lower() and hour != 12:
-            hour += 12
-        elif "am" in event["time"].lower() and hour == 12:
-            hour = 0
-        
-        event_time = datetime_time(hour, minute)
-        
-        # Event window: 30 minutes before to 1 hour after
-        event_start = (datetime.combine(now_et.date(), event_time) - timedelta(minutes=30)).time()
-        event_end = (datetime.combine(now_et.date(), event_time) + timedelta(hours=1)).time()
-        
-        # Check if we're in the event window
-        if event_start <= current_time <= event_end:
-            window = f"{event_start.strftime('%I:%M %p')} - {event_end.strftime('%I:%M %p')}"
-            return (True, event["event"], window)
-    
-    return (False, None, None)
 
 @app.get("/api/time")
 async def get_time_service():
@@ -2166,7 +1787,6 @@ async def get_time_service():
     - Current ET time
     - Market hours status
     - Trading session
-    - Economic event awareness
     - Trading permission
     
     Bots should call this every 30-60 seconds to stay synchronized
@@ -2179,28 +1799,9 @@ async def get_time_service():
     market_status = get_market_hours_status(now_et)
     session = get_trading_session(now_et)
     
-    # Check for active economic events
-    event_active, event_name, event_window = check_if_event_active(economic_calendar["events"], now_et)
-    
-    # Determine if trading is allowed
+    # Determine if trading is allowed (no event blocking)
     trading_allowed = True
     halt_reason = None
-    
-    if event_active:
-        trading_allowed = False
-        halt_reason = f"{event_name} in progress ({event_window})"
-    
-    # Get today's upcoming events
-    today_str = now_et.date().strftime("%Y-%m-%d")
-    todays_events = [
-        {
-            "event": e["event"],
-            "time": e["time"],
-            "impact": e["impact"]
-        }
-        for e in economic_calendar["events"]
-        if e["date"] == today_str and e["impact"] == "high"
-    ]
     
     return {
         # Time information
@@ -2213,20 +1814,9 @@ async def get_time_service():
         "trading_session": session,
         "weekday": now_et.strftime("%A"),
         
-        # Economic events
-        "event_active": event_active,
-        "active_event": event_name if event_active else None,
-        "event_window": event_window if event_active else None,
-        "events_today": todays_events,
-        "events_count": len(todays_events),
-        
-        # Trading permission
+        # Trading permission (no event blocking)
         "trading_allowed": trading_allowed,
-        "halt_reason": halt_reason,
-        
-        # Calendar info
-        "calendar_last_updated": economic_calendar.get("last_updated"),
-        "calendar_next_update": economic_calendar.get("next_update")
+        "halt_reason": halt_reason
     }
 
 @app.get("/api/time/simple")
@@ -2236,7 +1826,6 @@ async def get_simple_time():
     For bots that need quick checks without full details
     
     Checks:
-    - Economic events (FOMC/NFP/CPI)
     - Maintenance windows (Mon-Thu 5-6 PM, Fri 5 PM - Sun 6 PM)
     - Weekend closure
     """
@@ -2246,22 +1835,15 @@ async def get_simple_time():
     # Get market status
     market_status = get_market_hours_status(now_et)
     
-    # Check for active events
-    event_active, event_name, event_window = check_if_event_active(economic_calendar["events"], now_et)
-    
-    # Determine if trading is allowed
+    # Determine if trading is allowed (no event blocking)
     trading_allowed = True
     halt_reason = None
     
-    # Priority 1: Economic events
-    if event_active:
-        trading_allowed = False
-        halt_reason = f"{event_name} ({event_window})"
-    # Priority 2: Maintenance windows
-    elif market_status == "maintenance":
+    # Priority 1: Maintenance windows
+    if market_status == "maintenance":
         trading_allowed = False
         halt_reason = "Daily maintenance (5-6 PM ET)"
-    # Priority 3: Weekend closure
+    # Priority 2: Weekend closure
     elif market_status == "weekend_closed":
         trading_allowed = False
         weekday = now_et.weekday()
@@ -2292,7 +1874,7 @@ async def startup_event():
     logger.info("QuoTrading Signal Engine v2.1 - STARTING")
     logger.info("=" * 60)
     logger.info("Multi-instrument support: ES, NQ, YM, RTY")
-    logger.info("Features: ML/RL signals, licensing, economic calendar, user management")
+    logger.info("Features: ML/RL signals, licensing, user management")
     logger.info("=" * 60)
     
     # Initialize Database
@@ -2323,10 +1905,6 @@ async def startup_event():
         logger.info("� Using in-memory fallback for rate limiting")
         redis_manager = RedisManager(fallback_to_memory=True)
     
-    # Initialize economic calendar
-    logger.info("�📅 Initializing economic calendar...")
-    update_calendar()  # Initial fetch
-    start_calendar_updater()  # Start background updater
     
     # Load RL experiences (baseline from JSON + new from database)
     logger.info("🧠 Loading RL experiences for pattern matching...")

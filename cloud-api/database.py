@@ -128,13 +128,13 @@ class TradeHistory(Base):
 
 
 class RLExperience(Base):
-    """Track RL/ML experiences for signal and exit learning with full context"""
+    """Track RL/ML experiences for signal learning with full context"""
     __tablename__ = 'rl_experiences'
     
     id = Column(Integer, primary_key=True, autoincrement=True)
     user_id = Column(Integer, ForeignKey('users.id'), nullable=False, index=True)
     account_id = Column(String(100), nullable=False, index=True)
-    experience_type = Column(String(20), nullable=False)  # SIGNAL, EXIT
+    experience_type = Column(String(20), nullable=False)  # SIGNAL (future: other types)
     symbol = Column(String(20), nullable=False)
     signal_type = Column(String(10), nullable=False)  # LONG, SHORT
     outcome = Column(String(10), nullable=False)  # WIN, LOSS
