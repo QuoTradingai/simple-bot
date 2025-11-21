@@ -2726,6 +2726,9 @@ def capture_rl_state(symbol: str, side: str, current_price: float) -> Dict[str, 
             else:
                 break  # Stop at breakeven
     
+    # Get current regime for RL decision making
+    regime = state[symbol].get("current_regime", "NORMAL")
+    
     rl_state = {
         "rsi": rsi if rsi is not None else 50,
         "vwap_distance": vwap_distance,
@@ -2736,7 +2739,8 @@ def capture_rl_state(symbol: str, side: str, current_price: float) -> Dict[str, 
         "recent_pnl": recent_pnl,
         "streak": streak,
         "side": side,
-        "price": current_price
+        "price": current_price,
+        "regime": regime  # Include regime for better decision making
     }
     
     return rl_state
@@ -2821,7 +2825,8 @@ def check_for_signals(symbol: str) -> None:
             return
         
         # RL approved - adjust position size based on confidence
-        logger.info(f" RL APPROVED LONG signal: {reason} (confidence: {confidence:.1%})")
+        regime = rl_state.get('regime', 'NORMAL')
+        logger.info(f" RL APPROVED LONG signal: {reason} (confidence: {confidence:.1%}) | Regime: {regime}")
         logger.info(f"   RSI: {rl_state['rsi']:.1f}, VWAP dist: {rl_state['vwap_distance']:.2f}, "
                   f"Vol ratio: {rl_state['volume_ratio']:.2f}x, Streak: {rl_state['streak']:+d}")
         
@@ -2871,7 +2876,8 @@ def check_for_signals(symbol: str) -> None:
             return
         
         # RL approved - adjust position size based on confidence
-        logger.info(f" RL APPROVED SHORT signal: {reason} (confidence: {confidence:.1%})")
+        regime = rl_state.get('regime', 'NORMAL')
+        logger.info(f" RL APPROVED SHORT signal: {reason} (confidence: {confidence:.1%}) | Regime: {regime}")
         logger.info(f"   RSI: {rl_state['rsi']:.1f}, VWAP dist: {rl_state['vwap_distance']:.2f}, "
                   f"Vol ratio: {rl_state['volume_ratio']:.2f}x, Streak: {rl_state['streak']:+d}")
         
