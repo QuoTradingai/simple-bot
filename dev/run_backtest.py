@@ -245,6 +245,10 @@ def run_backtest(args: argparse.Namespace) -> Dict[str, Any]:
     bot_config_dict = bot_config.to_dict()
     engine = BacktestEngine(backtest_config, bot_config_dict)
     
+    # Suppress engine logger warnings for clean output
+    if hasattr(engine, 'logger'):
+        engine.logger.setLevel(logging.CRITICAL)
+    
     # Initialize RL brain and bot module
     rl_brain, bot_module = initialize_rl_brains_for_backtest()
     
@@ -276,6 +280,9 @@ def run_backtest(args: argparse.Namespace) -> Dict[str, Any]:
     prev_position_active = False
     bars_processed = 0
     total_bars = 0
+    
+    # Track RL confidence for each trade
+    trade_confidences = {}
     
     def vwap_strategy_backtest(bars_1min: List[Dict[str, Any]], bars_15min: List[Dict[str, Any]]) -> None:
         """
@@ -325,6 +332,17 @@ def run_backtest(args: argparse.Namespace) -> Dict[str, Any]:
             if symbol in state and 'position' in state[symbol]:
                 pos = state[symbol]['position']
                 current_active = pos.get('active', False)
+                
+                # Capture confidence when position opens
+                if current_active and not prev_position_active:
+                    # Position just opened - save the confidence
+                    entry_time_key = str(timestamp)
+                    confidence = state[symbol].get('entry_rl_confidence', 0.5)
+                    # Convert to percentage
+                    if confidence <= 1.0:
+                        confidence = confidence * 100
+                    trade_confidences[entry_time_key] = confidence
+                
                 prev_position_active = current_active
                 
                 # Update backtest engine with current position from bot state
@@ -355,6 +373,10 @@ def run_backtest(args: argparse.Namespace) -> Dict[str, Any]:
     # Get trades from engine metrics and add to reporter
     if hasattr(engine, 'metrics') and hasattr(engine.metrics, 'trades'):
         for trade in engine.metrics.trades:
+            # Get RL confidence from tracked confidences
+            entry_time_key = str(trade.entry_time)
+            confidence = trade_confidences.get(entry_time_key, 50)  # Default to 50% if not found
+            
             # Convert Trade dataclass to dict for reporter
             trade_dict = {
                 'side': trade.side,
@@ -362,10 +384,10 @@ def run_backtest(args: argparse.Namespace) -> Dict[str, Any]:
                 'entry_price': trade.entry_price,
                 'exit_price': trade.exit_price,
                 'pnl': trade.pnl,
-                'exit_reason': trade.exit_reason,
+                'exit_reason': trade.exit_reason,  # This comes from the engine
                 'exit_time': trade.exit_time,
                 'duration_minutes': trade.duration_minutes,
-                'confidence': 100  # Default confidence
+                'confidence': confidence
             }
             reporter.record_trade(trade_dict)
     
@@ -404,6 +426,16 @@ def main():
         log_level = logging.WARNING
     else:
         log_level = getattr(logging, args.log_level)
+    
+    # Suppress unnecessary warnings for clean backtest output
+    import warnings
+    warnings.filterwarnings('ignore')
+    
+    # Suppress specific loggers completely
+    logging.getLogger('root').setLevel(logging.CRITICAL)
+    logging.getLogger('backtesting').setLevel(logging.CRITICAL)
+    logging.getLogger('urllib3').setLevel(logging.CRITICAL)
+    logging.getLogger('asyncio').setLevel(logging.CRITICAL)
     
     logger.setLevel(log_level)
     
