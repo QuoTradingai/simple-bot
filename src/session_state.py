@@ -10,6 +10,7 @@ from pathlib import Path
 from datetime import datetime, date
 from typing import Dict, Any, Optional, Tuple
 import logging
+import pytz
 
 logger = logging.getLogger(__name__)
 
@@ -57,7 +58,7 @@ class SessionStateManager:
     def _default_state(self) -> Dict[str, Any]:
         """Return default session state."""
         return {
-            "last_updated": datetime.now().isoformat(),
+            "last_updated": datetime.now(pytz.UTC).isoformat(),
             "trading_date": date.today().isoformat(),
             "starting_equity": None,
             "current_equity": None,
@@ -80,7 +81,7 @@ class SessionStateManager:
     def save_state(self):
         """Save session state to disk."""
         try:
-            self.state["last_updated"] = datetime.now().isoformat()
+            self.state["last_updated"] = datetime.now(pytz.UTC).isoformat()
             with open(self.state_file, 'w', encoding='utf-8') as f:
                 json.dump(self.state, f, indent=2)
             logger.debug(f"Saved session state to {self.state_file}")

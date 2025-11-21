@@ -5,22 +5,25 @@ FROM python:3.11-slim
 WORKDIR /app
 
 # Copy requirements
-COPY cloud-api/requirements-signal.txt .
+COPY requirements.txt .
 
 # Install dependencies
-RUN pip install --no-cache-dir -r requirements-signal.txt
+RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy application files
-COPY cloud-api/signal_engine_v2.py .
-COPY cloud-api/database.py .
-COPY cloud-api/redis_manager.py .
+COPY signal_engine_v2.py .
+COPY database.py .
+COPY redis_manager.py .
+COPY neural_confidence.py .
+COPY neural_exit.py .
+COPY exit_params_config.py .
+
+# Copy neural network models (your trained brains)
+COPY neural_model.pth .
+COPY exit_model.pth .
 
 # Copy admin dashboard
 COPY admin-dashboard/ ./admin-dashboard/
-
-# Copy Kevin's proven RL experiences (6,880 signals + 2,961 exits)
-COPY data/signal_experience.json .
-COPY data/exit_experience.json .
 
 # Expose port
 EXPOSE 8000

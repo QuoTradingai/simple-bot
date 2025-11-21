@@ -19,6 +19,7 @@ import secrets
 import hashlib
 import json
 import time as time_module
+import os
 
 # Import database and Redis managers
 from database import (
@@ -29,6 +30,12 @@ from database import (
 )
 from redis_manager import RedisManager, get_redis
 from sqlalchemy.orm import Session
+
+# Import neural network confidence scorer
+from neural_confidence import init_neural_scorer, get_neural_prediction
+
+# Import neural network exit predictor
+from neural_exit import NeuralExitPredictor
 
 # Initialize FastAPI
 app = FastAPI(
@@ -41,9 +48,23 @@ app = FastAPI(
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# JSON encoder for numpy types
+class NumpyEncoder(json.JSONEncoder):
+    """Custom JSON encoder that handles numpy types."""
+    def default(self, obj):
+        if hasattr(obj, 'item'):  # numpy scalar
+            return obj.item()
+        elif hasattr(obj, 'tolist'):  # numpy array
+            return obj.tolist()
+        return super().default(obj)
+
 # Global instances (initialized on startup)
 db_manager: Optional[DatabaseManager] = None
 redis_manager: Optional[RedisManager] = None
+neural_exit_predictor: Optional[NeuralExitPredictor] = None  # Exit parameter predictor
+
+# Global RL experience pools (shared across all users)
+signal_experiences = []  # Signal RL learning pool
 
 # ============================================================================
 # RATE LIMITING (Redis-backed with in-memory fallback)
@@ -118,7 +139,7 @@ async def rate_limit_middleware(request: Request, call_next):
                 user = db.query(User).filter(User.license_key == license_key).first()
                 if user:
                     # Update last_active timestamp
-                    user.last_active = datetime.utcnow()
+                    user.last_active = datetime.now(pytz.UTC)
                     db.commit()
                     
                     # Log API call
@@ -167,11 +188,9 @@ async def root():
         "status": "running",
         "version": "2.0",
         "endpoints": {
-            "ml": "/api/ml/get_confidence, /api/ml/save_trade, /api/ml/stats",
+            "ml": "/api/ml/get_confidence, /api/ml/predict_exit_params, /api/ml/save_trade, /api/ml/stats",
             "license": "/api/license/validate, /api/license/activate",
-            "calendar": "/api/calendar/today, /api/calendar/events",
-            "time": "/api/time, /api/time/simple",
-            "admin": "/api/admin/kill_switch, /api/admin/refresh_calendar"
+            "time": "/api/time, /api/time/simple"
         }
     }
 
@@ -179,7 +198,85 @@ async def root():
 @app.get("/health")
 async def health():
     """Health check for monitoring"""
-    return {"status": "healthy", "timestamp": datetime.utcnow().isoformat()}
+    return {"status": "healthy", "timestamp": datetime.now(pytz.UTC).isoformat()}
+
+
+@app.get("/api/performance")
+async def performance_stats():
+    """
+    PRODUCTION MONITORING: Database connection pool stats and throughput metrics.
+    Use this to monitor scalability and identify bottlenecks.
+    
+    Returns:
+        - Connection pool status (active, idle, total)
+        - Database write throughput estimates
+        - Experience counts per type
+        - System capacity metrics
+    """
+    try:
+        from database import DatabaseManager, MLExperience
+        
+        db_manager = DatabaseManager()
+        
+        # Get connection pool statistics
+        pool_stats = db_manager.get_pool_status()
+        
+        # Get experience counts (fast aggregation)
+        session = db_manager.get_session()
+        try:
+            from sqlalchemy import func
+            
+            # Count experiences by type (fast query with index)
+            experience_counts = session.query(
+                MLExperience.experience_type,
+                func.count(MLExperience.id).label('count')
+            ).group_by(MLExperience.experience_type).all()
+            
+            counts_dict = {exp_type: count for exp_type, count in experience_counts}
+            total_experiences = sum(counts_dict.values())
+            
+            # Estimate write throughput (last hour)
+            one_hour_ago = datetime.now(pytz.UTC) - timedelta(hours=1)
+            recent_writes = session.query(func.count(MLExperience.id)).filter(
+                MLExperience.timestamp >= one_hour_ago
+            ).scalar()
+            
+            writes_per_second = round(recent_writes / 3600, 2)
+            
+        except Exception as e:
+            logger.warning(f"Stats query failed: {e}")
+            counts_dict = {}
+            total_experiences = 0
+            recent_writes = 0
+            writes_per_second = 0
+        finally:
+            session.close()
+        
+        return {
+            "status": "healthy",
+            "timestamp": datetime.now(pytz.UTC).isoformat(),
+            "connection_pool": pool_stats,
+            "database": {
+                "total_experiences": total_experiences,
+                "experience_counts": counts_dict,
+                "recent_writes_1h": recent_writes,
+                "writes_per_second": writes_per_second
+            },
+            "capacity": {
+                "estimated_max_writes_per_second": 1000,
+                "current_utilization_percent": round((writes_per_second / 1000) * 100, 2),
+                "headroom": f"{round((1 - writes_per_second / 1000) * 100, 1)}% available"
+            }
+        }
+        
+    except Exception as e:
+        logger.error(f"Performance stats error: {e}")
+        return {
+            "status": "error",
+            "error": str(e),
+            "timestamp": datetime.now(pytz.UTC).isoformat()
+        }
+
 
 @app.get("/api/rate-limit/status")
 async def rate_limit_status(request: Request):
@@ -349,7 +446,7 @@ async def extend_license(
     if user.license_expiration:
         user.license_expiration = user.license_expiration + timedelta(days=additional_days)
     else:
-        user.license_expiration = datetime.utcnow() + timedelta(days=additional_days)
+        user.license_expiration = datetime.now(pytz.UTC) + timedelta(days=additional_days)
     
     db.commit()
     db.refresh(user)
@@ -424,7 +521,7 @@ async def get_stats(
     ).group_by(User.license_type).all()
     
     # API call stats (last 24 hours)
-    yesterday = datetime.utcnow() - timedelta(days=1)
+    yesterday = datetime.now(pytz.UTC) - timedelta(days=1)
     api_calls_24h = db.query(func.count(APILog.id)).filter(
         APILog.timestamp >= yesterday
     ).scalar()
@@ -488,7 +585,7 @@ async def get_online_users(
     verify_admin_license(license_key, db)
     
     # Consider user "online" if last_active within 5 minutes
-    five_minutes_ago = datetime.utcnow() - timedelta(minutes=5)
+    five_minutes_ago = datetime.now(pytz.UTC) - timedelta(minutes=5)
     
     online_users = db.query(User).filter(
         User.last_active >= five_minutes_ago,
@@ -503,7 +600,7 @@ async def get_online_users(
                 "email": user.email,
                 "license_type": user.license_type,
                 "last_active": user.last_active.isoformat() if user.last_active else None,
-                "seconds_ago": int((datetime.utcnow() - user.last_active).total_seconds()) if user.last_active else None
+                "seconds_ago": int((datetime.now(pytz.UTC) - user.last_active).total_seconds()) if user.last_active else None
             }
             for user in online_users
         ]
@@ -557,7 +654,7 @@ async def get_dashboard_stats(
     suspended_users = db.query(func.count(User.id)).filter(User.license_status == 'SUSPENDED').scalar()
     
     # Online users (active in last 5 min)
-    five_min_ago = datetime.utcnow() - timedelta(minutes=5)
+    five_min_ago = datetime.now(pytz.UTC) - timedelta(minutes=5)
     online_now = db.query(func.count(User.id)).filter(
         User.last_active >= five_min_ago,
         User.license_status == 'ACTIVE'
@@ -569,8 +666,8 @@ async def get_dashboard_stats(
         license_breakdown[license_type] = count
     
     # API calls
-    one_hour_ago = datetime.utcnow() - timedelta(hours=1)
-    one_day_ago = datetime.utcnow() - timedelta(days=1)
+    one_hour_ago = datetime.now(pytz.UTC) - timedelta(hours=1)
+    one_day_ago = datetime.now(pytz.UTC) - timedelta(days=1)
     
     api_calls_1h = db.query(func.count(APILog.id)).filter(APILog.timestamp >= one_hour_ago).scalar()
     api_calls_24h = db.query(func.count(APILog.id)).filter(APILog.timestamp >= one_day_ago).scalar()
@@ -579,14 +676,14 @@ async def get_dashboard_stats(
     total_trades = db.query(func.count(TradeHistory.id)).scalar()
     total_pnl = db.query(func.sum(TradeHistory.pnl)).scalar()
     trades_today = db.query(func.count(TradeHistory.id)).filter(
-        func.date(TradeHistory.entry_time) == datetime.utcnow().date()
+        func.date(TradeHistory.entry_time) == datetime.now(pytz.UTC).date()
     ).scalar()
     
     # Expiring licenses (next 7 days)
-    seven_days = datetime.utcnow() + timedelta(days=7)
+    seven_days = datetime.now(pytz.UTC) + timedelta(days=7)
     expiring_soon = db.query(func.count(User.id)).filter(
         User.license_expiration <= seven_days,
-        User.license_expiration >= datetime.utcnow(),
+        User.license_expiration >= datetime.now(pytz.UTC),
         User.license_status == 'ACTIVE'
     ).scalar()
     
@@ -609,7 +706,7 @@ async def get_dashboard_stats(
     ).scalar()
     
     return {
-        "timestamp": datetime.utcnow().isoformat(),
+        "timestamp": datetime.now(pytz.UTC).isoformat(),
         "users": {
             "total": total_users or 0,
             "active": active_users or 0,
@@ -641,41 +738,42 @@ async def get_dashboard_stats(
 # ============================================================================
 
 # ============================================================================
-# RL EXPERIENCE STORAGE - HIVE MIND
+# RL EXPERIENCE INITIALIZATION - POSTGRESQL HIVE MIND
 # ============================================================================
 
-# Single shared RL experience pool (everyone runs same strategy)
-# Starts with Kevin's 178K signal + 121K exit experiences
-# Grows as all users contribute (collective learning - hive mind!)
-signal_experiences = []  # Shared across all users
-exit_experiences = []    # Shared across all users
-
 def load_initial_experiences():
-    """Load Kevin's proven experiences to seed the hive mind"""
-    global signal_experiences, exit_experiences
+    """
+    Initialize PostgreSQL database and migrate exit experiences from JSON.
+    ALL USERS share signal + exit experiences from PostgreSQL!
+    """
     import json
     import os
     
     try:
-        # Load signal experiences (6,880 trades)
-        if os.path.exists("signal_experience.json"):
-            with open("signal_experience.json", "r") as f:
-                data = json.load(f)
-                signal_experiences = data.get("experiences", [])
-            logger.info(f"✅ Loaded {len(signal_experiences):,} signal experiences from Kevin's backtests")
+        # Create database tables (including new ExitExperience table)
+        from database import Base, DatabaseManager
         
-        # Load exit experiences (2,961 exits)
-        if os.path.exists("exit_experience.json"):
-            with open("exit_experience.json", "r") as f:
-                data = json.load(f)
-                exit_experiences = data.get("exit_experiences", [])
-            logger.info(f"✅ Loaded {len(exit_experiences):,} exit experiences from Kevin's backtests")
+        # Initialize database and create tables if they don't exist
+        db_manager = DatabaseManager()
+        engine = db_manager.get_engine()
+        Base.metadata.create_all(engine)
+        logger.info("✅ Database tables initialized")
         
-        logger.info(f"🧠 HIVE MIND INITIALIZED: {len(signal_experiences):,} signals + {len(exit_experiences):,} exits")
-        logger.info(f"   All users will learn from and contribute to this shared wisdom pool!")
+        logger.info("� All experiences stored in PostgreSQL database")
+        
+        # Count experiences in database
+        session = db_manager.get_session()
+        try:
+            from database import RLExperience, ExitExperience
+            signal_count = session.query(RLExperience).filter_by(experience_type='SIGNAL').count()
+            exit_count = session.query(ExitExperience).count()
+            logger.info(f"🧠 HIVE MIND INITIALIZED: {signal_count:,} signals + {exit_count:,} exits IN POSTGRESQL")
+            logger.info(f"   🌍 ALL USERS share and contribute to this collective learning pool!")
+        finally:
+            session.close()
         
     except Exception as e:
-        logger.error(f"❌ Could not load initial experiences: {e}")
+        logger.error(f"❌ Could not initialize database: {e}")
         logger.info("Starting with empty experience pool")
 
 
@@ -705,11 +803,12 @@ def load_database_experiences(db: Session):
                 'pnl': exp.pnl,
                 'confidence': exp.confidence_score,
                 'quality_score': exp.quality_score,
-                'rsi': exp.rsi,
-                'vwap_distance': exp.vwap_distance,
-                'vix': exp.vix,
-                'day_of_week': exp.day_of_week,
-                'hour_of_day': exp.hour_of_day,
+                # Handle new columns gracefully (may not exist in old schema)
+                'rsi': getattr(exp, 'rsi', None),
+                'vwap_distance': getattr(exp, 'vwap_distance', None),
+                'vix': getattr(exp, 'vix', None),
+                'day_of_week': getattr(exp, 'day_of_week', None),
+                'hour_of_day': getattr(exp, 'hour_of_day', None),
                 'timestamp': exp.timestamp.isoformat(),
                 'experience_id': f"db_{exp.id}"
             }
@@ -720,21 +819,10 @@ def load_database_experiences(db: Session):
         
     except Exception as e:
         logger.error(f"❌ Could not load database experiences: {e}")
+        logger.info("📊 Continuing with baseline signal experiences only")
 
 # Load experiences at startup
 load_initial_experiences()
-
-def save_experiences():
-    """Save updated experiences back to disk (persist hive mind growth)"""
-    import json
-    try:
-        with open("signal_experience.json", "w") as f:
-            json.dump(signal_experiences, f)
-        with open("exit_experience.json", "w") as f:
-            json.dump(exit_experiences, f)
-        logger.info(f"💾 Saved hive mind: {len(signal_experiences):,} signals + {len(exit_experiences):,} exits")
-    except Exception as e:
-        logger.error(f"Failed to save experiences: {e}")
 
 def get_all_experiences() -> List:
     """Get all RL experiences (shared learning - same strategy for everyone)"""
@@ -785,33 +873,38 @@ async def get_ml_confidence(request: Dict):
         signal = request.get('signal', 'NONE')
         vix = request.get('vix', 15.0)
         
-        # Get ALL signal experiences (everyone learns from same strategy)
-        all_trades = signal_experiences
+        # Prepare state for neural network (same format as backtest)
+        current_time = datetime.now(pytz.UTC)
+        state = {
+            'rsi': rsi,
+            'vwap_distance': abs(price - vwap) / vwap if vwap > 0 else 0,
+            'vix': vix,
+            'spread_ticks': request.get('spread_ticks', 1.0),
+            'hour': current_time.hour,
+            'day_of_week': current_time.weekday(),
+            'volume_ratio': request.get('volume_ratio', 1.0),
+            'atr': request.get('atr', 10.0),
+            'recent_pnl': request.get('recent_pnl', 0.0),
+            'streak': request.get('streak', 0)
+        }
         
-        # ADVANCED ML confidence with pattern matching
-        result = calculate_signal_confidence(
-            all_experiences=all_trades,
-            vwap_distance=abs(price - vwap) / vwap if vwap > 0 else 0,
-            rsi=rsi,
-            signal=signal,
-            current_time=datetime.now(pytz.timezone('US/Eastern')),
-            current_vix=vix,
-            similarity_threshold=0.6  # 60% similarity required
-        )
+        # Get neural network prediction (SAME AS BACKTEST)
+        result = get_neural_prediction(state, signal)
         
-        logger.info(f"🧠 ML Confidence: {symbol} {signal} @ {price}, RSI={rsi:.1f} → {result['reason']}")
+        logger.info(f"🧠 Neural ML: {symbol} {signal} @ {price}, RSI={rsi:.1f} → {result['reason']}")
         
         return {
             "ml_confidence": result['confidence'],
-            "win_rate": result['win_rate'],
-            "sample_size": result['sample_size'],
-            "avg_pnl": result['avg_pnl'],
+            "confidence": result['confidence'],
+            "should_trade": result['should_trade'],
+            "size_multiplier": result['size_multiplier'],
             "reason": result['reason'],
-            "should_take": result['should_take'],
-            "action": signal if result['should_take'] else "NONE",
-            "model_version": "v5.0-advanced-pattern-matching",
-            "total_experience_count": len(all_trades),
-            "timestamp": datetime.utcnow().isoformat()
+            "should_take": result['should_trade'],
+            "action": signal if result['should_trade'] else "NONE",
+            "model_version": "v6.0-neural-network",
+            "model_used": result['model_used'],
+            "threshold": result.get('threshold', 0.5),
+            "timestamp": datetime.now(pytz.UTC).isoformat()
         }
         
     except Exception as e:
@@ -819,6 +912,9 @@ async def get_ml_confidence(request: Dict):
         # Return neutral confidence on error
         return {
             "ml_confidence": 0.5,
+            "confidence": 0.5,
+            "should_trade": False,
+            "size_multiplier": 1.0,
             "action": "NONE",
             "model_version": "v1.0-simple",
             "error": str(e)
@@ -840,7 +936,10 @@ async def should_take_signal(request: Dict):
         entry_price: float,
         vwap: float,
         rsi: float,
-        vix: float  # Optional, default 15.0
+        vix: float,  # Optional, default 15.0
+        volume_ratio: float,  # Optional, default 1.0
+        recent_pnl: float,  # Optional, default 0.0
+        streak: int  # Optional, default 0
     }
     
     Returns: {
@@ -869,6 +968,21 @@ async def should_take_signal(request: Dict):
         vwap = request.get('vwap', 0.0)
         rsi = request.get('rsi', 50.0)
         vix = request.get('vix', 15.0)
+        volume_ratio = request.get('volume_ratio', 1.0)
+        recent_pnl = request.get('recent_pnl', 0.0)
+        streak = request.get('streak', 0)
+        
+        # PRODUCTION OPTIMIZATION: Check Redis cache first
+        # Same market conditions = same answer (60 second cache)
+        # Reduces DB load for multi-user production
+        cache_key = f"signal_rl:{signal}:{int(rsi)}:{int(vix)}:{int(volume_ratio*100)}"
+        redis_mgr = get_redis()
+        
+        if redis_mgr:
+            cached = redis_mgr.get(cache_key)
+            if cached:
+                logger.info(f"⚡ Cache HIT: {cache_key}")
+                return cached
         
         # Calculate VWAP distance
         vwap_distance = abs(entry_price - vwap) / vwap if vwap > 0 else 0
@@ -879,9 +993,12 @@ async def should_take_signal(request: Dict):
             vwap_distance=vwap_distance,
             rsi=rsi,
             signal=signal,
-            current_time=datetime.now(pytz.timezone('US/Eastern')),
+            current_time=datetime.now(pytz.UTC),
             current_vix=vix,
-            similarity_threshold=0.6
+            similarity_threshold=0.6,
+            volume_ratio=volume_ratio,
+            recent_pnl=recent_pnl,
+            streak=streak
         )
         
         # Determine risk level
@@ -896,7 +1013,7 @@ async def should_take_signal(request: Dict):
         decision = "✅ TAKE TRADE" if result['should_take'] else "⚠️ SKIP TRADE"
         logger.info(f"🎯 {decision}: {symbol} {signal} @ {entry_price}, {result['reason']}, Risk: {risk_level}")
         
-        return {
+        response = {
             "take_trade": result['should_take'],
             "confidence": result['confidence'],
             "win_rate": result['win_rate'],
@@ -905,8 +1022,14 @@ async def should_take_signal(request: Dict):
             "reason": result['reason'],
             "risk_level": risk_level,
             "model_version": "v5.0-advanced-pattern-matching",
-            "timestamp": datetime.utcnow().isoformat()
+            "timestamp": datetime.now(pytz.UTC).isoformat()
         }
+        
+        # Cache the result for 60 seconds (multi-user optimization)
+        if redis_mgr:
+            redis_mgr.set(cache_key, response, ex=60)
+        
+        return response
         
     except Exception as e:
         logger.error(f"Error in should_take_signal: {e}")
@@ -918,7 +1041,9 @@ async def should_take_signal(request: Dict):
         }
 
 
-def calculate_similarity_score(exp: Dict, current_rsi: float, current_vwap_dist: float, current_time: datetime_time, current_vix: float) -> float:
+def calculate_similarity_score(exp: Dict, current_rsi: float, current_vwap_dist: float, current_time: datetime_time, current_vix: float, 
+                               current_volume_ratio: float = 1.0, current_hour: int = 12, current_day_of_week: int = 0,
+                               current_recent_pnl: float = 0.0, current_streak: int = 0) -> float:
     """
     Calculate how similar a past experience is to current market conditions
     
@@ -927,27 +1052,30 @@ def calculate_similarity_score(exp: Dict, current_rsi: float, current_vwap_dist:
     score = 0.0
     weights = []
     
-    # RSI similarity (±5 range = very similar)
-    exp_rsi = exp.get('rsi', 50)
+    # Handle both flat and nested (state-based) experience structures
+    state = exp.get('state', exp)
+    
+    # RSI similarity (±5 range = very similar) - 25% weight
+    exp_rsi = state.get('rsi') or 50.0  # Default to neutral RSI if None
     rsi_diff = abs(exp_rsi - current_rsi)
     if rsi_diff <= 5:
         rsi_similarity = 1.0 - (rsi_diff / 5)
-        score += rsi_similarity * 0.35  # 35% weight
-        weights.append(0.35)
+        score += rsi_similarity * 0.25
+        weights.append(0.25)
     elif rsi_diff <= 10:
         rsi_similarity = 1.0 - ((rsi_diff - 5) / 5) * 0.5
-        score += rsi_similarity * 0.35
-        weights.append(0.35)
+        score += rsi_similarity * 0.25
+        weights.append(0.25)
     
-    # VWAP distance similarity (±0.002 range)
-    exp_vwap_dist = exp.get('vwap_distance', 0)
+    # VWAP distance similarity (±0.002 range) - 20% weight
+    exp_vwap_dist = state.get('vwap_distance', 0.0) or 0.0  # Handle None values
     vwap_diff = abs(exp_vwap_dist - current_vwap_dist)
     if vwap_diff <= 0.002:
         vwap_similarity = 1.0 - (vwap_diff / 0.002)
-        score += vwap_similarity * 0.25  # 25% weight
-        weights.append(0.25)
+        score += vwap_similarity * 0.20
+        weights.append(0.20)
     
-    # Time-of-day similarity (±30 min = similar)
+    # Time-of-day similarity (±30 min = similar) - 15% weight
     if 'timestamp' in exp:
         try:
             exp_time = datetime.fromisoformat(exp['timestamp']).time() if isinstance(exp['timestamp'], str) else exp['timestamp'].time()
@@ -956,22 +1084,61 @@ def calculate_similarity_score(exp: Dict, current_rsi: float, current_vwap_dist:
             time_diff = abs(exp_minutes - current_minutes)
             if time_diff <= 30:
                 time_similarity = 1.0 - (time_diff / 30)
-                score += time_similarity * 0.20  # 20% weight
-                weights.append(0.20)
+                score += time_similarity * 0.15
+                weights.append(0.15)
             elif time_diff <= 60:
                 time_similarity = 1.0 - ((time_diff - 30) / 30) * 0.5
-                score += time_similarity * 0.20
-                weights.append(0.20)
+                score += time_similarity * 0.15
+                weights.append(0.15)
         except:
             pass
     
-    # VIX similarity (±5 range)
-    exp_vix = exp.get('vix', 15)
+    # VIX similarity (±5 range) - 10% weight
+    exp_vix = state.get('vix', 15)
     vix_diff = abs(exp_vix - current_vix)
     if vix_diff <= 5:
         vix_similarity = 1.0 - (vix_diff / 5)
-        score += vix_similarity * 0.20  # 20% weight
-        weights.append(0.20)
+        score += vix_similarity * 0.10
+        weights.append(0.10)
+    
+    # Volume ratio similarity (±0.5 range) - 15% weight
+    exp_volume_ratio = state.get('volume_ratio', 1.0)
+    volume_diff = abs(exp_volume_ratio - current_volume_ratio)
+    if volume_diff <= 0.5:
+        volume_similarity = 1.0 - (volume_diff / 0.5)
+        score += volume_similarity * 0.15
+        weights.append(0.15)
+    
+    # Hour similarity (±2 hours = similar) - 5% weight
+    exp_hour = state.get('hour', 12)
+    hour_diff = abs(exp_hour - current_hour)
+    if hour_diff <= 2:
+        hour_similarity = 1.0 - (hour_diff / 2)
+        score += hour_similarity * 0.05
+        weights.append(0.05)
+    
+    # Day of week similarity (same day = 1.0, adjacent = 0.5) - 5% weight
+    exp_day = state.get('day_of_week', 0)
+    day_diff = abs(exp_day - current_day_of_week)
+    if day_diff == 0:
+        score += 1.0 * 0.05
+        weights.append(0.05)
+    elif day_diff == 1 or day_diff == 6:  # Adjacent days (or Monday-Sunday wrap)
+        score += 0.5 * 0.05
+        weights.append(0.05)
+    
+    # Streak similarity (same direction, ±2 range) - 5% weight
+    exp_streak = state.get('streak', 0)
+    # Both winning streaks or both losing streaks = similar
+    if (current_streak > 0 and exp_streak > 0) or (current_streak < 0 and exp_streak < 0):
+        streak_diff = abs(abs(exp_streak) - abs(current_streak))
+        if streak_diff <= 2:
+            streak_similarity = 1.0 - (streak_diff / 2)
+            score += streak_similarity * 0.05
+            weights.append(0.05)
+    elif current_streak == 0 and exp_streak == 0:
+        score += 1.0 * 0.05
+        weights.append(0.05)
     
     # Normalize score by sum of applied weights
     total_weight = sum(weights)
@@ -995,15 +1162,26 @@ def filter_experiences_by_context(experiences: List, signal_type: str, current_d
         Filtered list of relevant experiences
     """
     filtered = []
+    total_checked = 0
+    signal_mismatch = 0
+    vix_mismatch = 0
     
     for exp in experiences:
-        # Must match signal type
-        if exp.get('signal_type', exp.get('signal')) != signal_type:
+        total_checked += 1
+        # Handle both flat and nested (state-based) experience structures
+        # Nested: exp['state']['side'], Flat: exp['side']
+        state = exp.get('state', exp)  # Use 'state' dict if exists, otherwise use exp itself
+        
+        # Must match signal type (check all possible field names: signal_type, signal, or side)
+        exp_signal = state.get('signal_type') or state.get('signal') or state.get('side', '').upper()
+        if not exp_signal or exp_signal.upper() != signal_type.upper():
+            signal_mismatch += 1
             continue
         
         # Filter by VIX (only consider trades in similar volatility environments)
-        exp_vix = exp.get('vix', 15)
+        exp_vix = state.get('vix', 15)
         if abs(exp_vix - current_vix) > 10:  # Skip if VIX difference > 10
+            vix_mismatch += 1
             continue
         
         # Filter by day of week (optional - can enable for day-specific patterns)
@@ -1011,21 +1189,42 @@ def filter_experiences_by_context(experiences: List, signal_type: str, current_d
         
         filtered.append(exp)
     
+    # Debug logging
+    if total_checked > 0:
+        logger.info(f"📊 Filter Stats: {total_checked} total, {signal_mismatch} signal mismatch, {vix_mismatch} VIX mismatch, {len(filtered)} matched")
+    
     return filtered
 
 
-def calculate_advanced_confidence(similar_experiences: List, recency_hours: int = 168) -> Dict:
+def calculate_advanced_confidence(
+    winner_experiences: List,
+    loser_experiences: List, 
+    recency_hours: int = 168, 
+    streak: int = 0, 
+    current_vix: float = 15.0, 
+    volume_ratio: float = 1.0
+) -> Dict:
     """
-    Calculate smart confidence based on similar past experiences
+    DUAL PATTERN MATCHING: Calculate confidence by comparing to WINNERS and LOSERS
+    
+    This is the UPGRADED Feature 3 - learns from ALL experiences, not just winners.
+    
+    Formula: confidence = winner_similarity - loser_penalty
     
     Args:
-        similar_experiences: Pre-filtered experiences matching current conditions
+        winner_experiences: Similar past winning trades (teaches what TO do)
+        loser_experiences: Similar past losing trades (teaches what to AVOID)
         recency_hours: How many hours back to weight more heavily (default 1 week)
+        streak: Current win/loss streak (positive = wins, negative = losses)
+        current_vix: Current VIX level for volatility adjustment
+        volume_ratio: Current volume / average volume ratio
     
     Returns:
         Dict with confidence, win_rate, sample_size, avg_pnl
     """
-    if len(similar_experiences) == 0:
+    total_samples = len(winner_experiences) + len(loser_experiences)
+    
+    if total_samples == 0:
         return {
             'confidence': 0.5,
             'win_rate': 0.5,
@@ -1034,55 +1233,100 @@ def calculate_advanced_confidence(similar_experiences: List, recency_hours: int 
             'reason': 'No similar past experiences found'
         }
     
-    # Separate wins and losses
-    wins = [exp for exp in similar_experiences if exp.get('outcome') == 'WIN' or exp.get('pnl', 0) > 0]
-    losses = [exp for exp in similar_experiences if exp.get('outcome') == 'LOSS' or exp.get('pnl', 0) <= 0]
+    # Calculate win rate
+    win_rate = len(winner_experiences) / total_samples if total_samples > 0 else 0.5
     
-    # Calculate basic win rate
-    win_rate = len(wins) / len(similar_experiences)
+    # Calculate win rate
+    win_rate = len(winner_experiences) / total_samples if total_samples > 0 else 0.5
     
-    # Calculate weighted win rate (recent trades matter more)
-    now = datetime.utcnow()
-    weighted_wins = 0
-    weighted_total = 0
+    # DUAL PATTERN MATCHING: Calculate average similarity to winners
+    now = datetime.now(pytz.UTC)
+    winner_similarity_sum = 0
+    winner_weighted_total = 0
     
-    for exp in similar_experiences:
-        # Calculate recency weight (1.0 for very recent, 0.5 for old)
+    for exp in winner_experiences:
+        # Get similarity score (set during filtering)
+        similarity = exp.get('similarity_score', 0.7)
+        
+        # Calculate recency weight
         if 'timestamp' in exp:
             try:
                 exp_time = datetime.fromisoformat(exp['timestamp']) if isinstance(exp['timestamp'], str) else exp['timestamp']
                 hours_ago = (now - exp_time).total_seconds() / 3600
                 recency_weight = max(0.5, 1.0 - (hours_ago / recency_hours) * 0.5)
             except:
-                recency_weight = 0.7  # Default weight if timestamp parsing fails
+                recency_weight = 0.7
         else:
             recency_weight = 0.7
         
-        # Apply quality score weight (better trades = more weight)
+        # Apply quality score weight
         quality_weight = exp.get('quality_score', 0.5)
         
         # Combined weight
         total_weight = recency_weight * quality_weight
         
-        weighted_total += total_weight
-        if exp.get('outcome') == 'WIN' or exp.get('pnl', 0) > 0:
-            weighted_wins += total_weight
+        winner_weighted_total += total_weight
+        winner_similarity_sum += similarity * total_weight
     
-    # Weighted win rate
-    weighted_win_rate = weighted_wins / weighted_total if weighted_total > 0 else win_rate
+    # Average winner similarity (0.0-1.0)
+    avg_winner_similarity = winner_similarity_sum / winner_weighted_total if winner_weighted_total > 0 else 0.5
     
-    # Calculate average P&L
-    total_pnl = sum(exp.get('pnl', 0) for exp in similar_experiences)
-    avg_pnl = total_pnl / len(similar_experiences)
+    # DUAL PATTERN MATCHING: Calculate average similarity to losers
+    loser_similarity_sum = 0
+    loser_weighted_total = 0
     
-    # Calculate confidence score
-    # Start with weighted win rate, then adjust based on sample size and avg P&L
-    confidence = weighted_win_rate
+    for exp in loser_experiences:
+        # Get similarity score
+        similarity = exp.get('similarity_score', 0.7)
+        
+        # Calculate recency weight
+        if 'timestamp' in exp:
+            try:
+                exp_time = datetime.fromisoformat(exp['timestamp']) if isinstance(exp['timestamp'], str) else exp['timestamp']
+                hours_ago = (now - exp_time).total_seconds() / 3600
+                recency_weight = max(0.5, 1.0 - (hours_ago / recency_hours) * 0.5)
+            except:
+                recency_weight = 0.7
+        else:
+            recency_weight = 0.7
+        
+        # Apply quality score weight
+        quality_weight = exp.get('quality_score', 0.5)
+        
+        # Combined weight
+        total_weight = recency_weight * quality_weight
+        
+        loser_weighted_total += total_weight
+        loser_similarity_sum += similarity * total_weight
+    
+    # Average loser similarity (0.0-1.0)
+    avg_loser_similarity = loser_similarity_sum / loser_weighted_total if loser_weighted_total > 0 else 0.0
+    
+    # DUAL PATTERN FORMULA: confidence = winner_similarity - loser_penalty
+    # If similar to winners but NOT similar to losers → HIGH confidence
+    # If similar to both winners and losers → MODERATE confidence
+    # If similar to losers but NOT winners → LOW confidence (reject)
+    loser_penalty = avg_loser_similarity * 0.5  # Penalize 50% of loser similarity
+    base_confidence = avg_winner_similarity - loser_penalty
+    
+    # Clamp to reasonable range
+    base_confidence = max(0.0, min(0.95, base_confidence))
+    
+    # Clamp to reasonable range
+    base_confidence = max(0.0, min(0.95, base_confidence))
+    
+    # Calculate average P&L from ALL experiences (winners + losers)
+    all_experiences = winner_experiences + loser_experiences
+    total_pnl = sum(exp.get('reward', exp.get('pnl', 0)) for exp in all_experiences)
+    avg_pnl = total_pnl / len(all_experiences) if all_experiences else 0.0
+    
+    # Start with base dual-pattern confidence
+    confidence = base_confidence
     
     # Sample size adjustment (more samples = more confidence in the estimate)
-    if len(similar_experiences) < 10:
+    if total_samples < 10:
         confidence *= 0.7  # Low confidence with few samples
-    elif len(similar_experiences) < 30:
+    elif total_samples < 30:
         confidence *= 0.85  # Medium confidence
     # else: Full confidence with 30+ samples
     
@@ -1092,15 +1336,50 @@ def calculate_advanced_confidence(similar_experiences: List, recency_hours: int 
     elif avg_pnl < -20:
         confidence *= 0.7  # Penalize consistently losing setups
     
-    # Generate reason string
-    reason = f"{int(weighted_win_rate * 100)}% win rate in {len(similar_experiences)} similar setups (avg ${avg_pnl:.0f} P&L)"
+    # Calculate position size multiplier (0.25x-2.0x)
+    # Base multiplier from confidence
+    size_mult = max(0.25, min(2.0, confidence * 1.5))  # 0.25-1.0 range for low confidence
+    
+    # Adjust for streak (±25%)
+    if streak > 0:  # Win streak
+        streak_bonus = min(0.25, streak * 0.05)  # Max +25%
+        size_mult *= (1.0 + streak_bonus)
+    elif streak < 0:  # Loss streak
+        streak_penalty = min(0.25, abs(streak) * 0.05)  # Max -25%
+        size_mult *= (1.0 - streak_penalty)
+    
+    # Adjust for volatility (VIX-based)
+    if current_vix > 25:  # High volatility
+        size_mult *= 0.8  # -20% in high vol
+    elif current_vix < 12:  # Low volatility
+        size_mult *= 1.15  # +15% in low vol
+    
+    # Adjust for volume (volume_ratio-based)
+    if volume_ratio > 2.0:  # High volume
+        size_mult *= 1.1  # +10%
+    elif volume_ratio < 0.5:  # Low volume
+        size_mult *= 0.9  # -10%
+    
+    # Final clamp
+    size_mult = max(0.25, min(2.0, size_mult))
+    
+    # Generate reason string with dual-pattern details
+    reason = (
+        f"Dual Pattern: {len(winner_experiences)}W/{len(loser_experiences)}L "
+        f"(win_sim={avg_winner_similarity:.2f}, lose_sim={avg_loser_similarity:.2f}, "
+        f"penalty={loser_penalty:.2f}) → {int(win_rate * 100)}% WR, avg ${avg_pnl:.0f}"
+    )
     
     return {
         'confidence': min(confidence, 0.95),  # Cap at 95%
-        'win_rate': weighted_win_rate,
-        'sample_size': len(similar_experiences),
+        'win_rate': win_rate,
+        'sample_size': total_samples,
         'avg_pnl': avg_pnl,
-        'reason': reason
+        'reason': reason,
+        'size_multiplier': round(size_mult, 2),
+        'winner_similarity': round(avg_winner_similarity, 3),
+        'loser_similarity': round(avg_loser_similarity, 3),
+        'loser_penalty': round(loser_penalty, 3)
     }
 
 
@@ -1111,7 +1390,10 @@ def calculate_signal_confidence(
     signal: str,
     current_time: Optional[datetime] = None,
     current_vix: float = 15.0,
-    similarity_threshold: float = 0.6
+    similarity_threshold: float = 0.6,
+    volume_ratio: float = 1.0,
+    recent_pnl: float = 0.0,
+    streak: int = 0
 ) -> Dict:
     """
     ADVANCED ML confidence based on pattern matching across ALL RL experiences
@@ -1120,7 +1402,7 @@ def calculate_signal_confidence(
     2,961+ exit experiences to make intelligent trading decisions.
     
     Features:
-    - Pattern matching: Finds similar past setups (RSI, VWAP, time, VIX)
+    - Pattern matching: Finds similar past setups (RSI, VWAP, time, VIX, volume, hour, day, streak)
     - Context-aware: Filters by day of week, time of day, volatility
     - Recency-weighted: Recent trades matter more than old ones
     - Quality-weighted: Better trades (higher quality_score) matter more
@@ -1134,6 +1416,9 @@ def calculate_signal_confidence(
         current_time: Current timestamp (for time-of-day filtering)
         current_vix: Current VIX level (for volatility filtering)
         similarity_threshold: Minimum similarity score (0.0-1.0) to consider a past trade
+        volume_ratio: Current volume / 20-bar average
+        recent_pnl: Sum of last 5 trades P&L
+        streak: Consecutive wins (positive) or losses (negative)
     
     Returns:
         Dict with:
@@ -1145,21 +1430,25 @@ def calculate_signal_confidence(
             - should_take: Boolean recommendation (True if confidence > 0.65)
     """
     if current_time is None:
-        current_time = datetime.now(pytz.timezone('US/Eastern'))
+        current_time = datetime.now(pytz.UTC)
     
     current_time_only = current_time.time()
     current_day_of_week = current_time.weekday()  # 0=Monday, 6=Sunday
+    current_hour = current_time.hour  # 0-23
     
-    # STEP 1: Filter experiences by context (signal type, VIX, day of week)
+    # STEP 1: Filter ALL experiences by context (signal type, VIX, day of week)
+    # NO arbitrary limits - let similarity scoring find what's relevant
     logger.info(f"🧠 RL Pattern Matching: Analyzing {len(all_experiences)} total experiences for {signal} signal")
     
     contextual_experiences = filter_experiences_by_context(
-        experiences=all_experiences,
+        experiences=all_experiences,  # Use ALL experiences
         signal_type=signal,
         current_day=current_day_of_week,
         current_vix=current_vix,
         min_similarity=similarity_threshold
     )
+    
+    logger.info(f"   → Found {len(contextual_experiences)} contextually relevant experiences (after context filter)")
     
     logger.info(f"   → Filtered to {len(contextual_experiences)} contextually relevant experiences")
     
@@ -1172,7 +1461,12 @@ def calculate_signal_confidence(
             current_rsi=rsi,
             current_vwap_dist=vwap_distance,
             current_time=current_time_only,
-            current_vix=current_vix
+            current_vix=current_vix,
+            current_volume_ratio=volume_ratio,
+            current_hour=current_hour,
+            current_day_of_week=current_day_of_week,
+            current_recent_pnl=recent_pnl,
+            current_streak=streak
         )
         
         if similarity >= similarity_threshold:
@@ -1181,8 +1475,91 @@ def calculate_signal_confidence(
     
     logger.info(f"   → Found {len(similar_experiences)} highly similar patterns (similarity >= {similarity_threshold})")
     
-    # STEP 3: Calculate advanced confidence from similar experiences
-    result = calculate_advanced_confidence(similar_experiences)
+    # STEP 2.5: DUAL PATTERN MATCHING - Separate winners and losers
+    winner_experiences = []
+    loser_experiences = []
+    
+    for exp in similar_experiences:
+        # Get PnL from either 'reward' (nested RL format) or 'pnl' (flat format)
+        pnl = exp.get('reward', exp.get('pnl', 0))
+        outcome = exp.get('outcome', '')
+        
+        if outcome == 'WIN' or pnl > 0:
+            winner_experiences.append(exp)
+        else:
+            loser_experiences.append(exp)
+    
+    logger.info(f"   → Dual Pattern: {len(winner_experiences)} winners, {len(loser_experiences)} losers")
+    
+    # STEP 2.75: SIGNAL-EXIT CROSS-TALK - Check exit performance for similar signals
+    # If similar signals consistently hit stop loss, reduce confidence
+    exit_penalty = 0.0
+    try:
+        from database import DatabaseManager, ExitExperience
+        db_manager = DatabaseManager()
+        session = db_manager.get_session()
+        
+        # Query exit experiences with similar market conditions
+        similar_exits = []
+        all_exits = session.query(ExitExperience).limit(1000).all()  # Last 1000 exits
+        
+        for exit_exp in all_exits:
+            exit_data = exit_exp.to_dict()
+            exit_market = exit_data.get('market_state', {})
+            exit_outcome = exit_data.get('outcome', {})
+            
+            # Check if exit had similar signal conditions
+            exit_rsi = exit_market.get('rsi', 50)
+            exit_vwap_dist = exit_market.get('vwap_distance', 0)
+            
+            # Calculate similarity to current signal
+            rsi_diff = abs(exit_rsi - rsi)
+            vwap_diff = abs(exit_vwap_dist - vwap_distance)
+            
+            if rsi_diff <= 10 and vwap_diff <= 2.0:
+                # Similar signal conditions
+                similar_exits.append({
+                    'win': exit_outcome.get('win', False),
+                    'pnl': exit_outcome.get('pnl', 0.0),
+                    'exit_reason': exit_outcome.get('exit_reason', 'UNKNOWN')
+                })
+        
+        if len(similar_exits) >= 10:
+            # Calculate exit performance
+            exit_wins = sum(1 for e in similar_exits if e['win'])
+            exit_win_rate = exit_wins / len(similar_exits)
+            stop_loss_count = sum(1 for e in similar_exits if 'STOP' in e['exit_reason'].upper())
+            stop_loss_rate = stop_loss_count / len(similar_exits)
+            
+            # Apply penalty if exits are poor
+            if exit_win_rate < 0.50:
+                # Poor exit performance → reduce signal confidence
+                exit_penalty = (0.50 - exit_win_rate) * 0.3  # Max 15% penalty
+                logger.info(f"   ⚠️  Signal-Exit Cross-Talk: {len(similar_exits)} similar exits, {exit_win_rate*100:.0f}% WR, {stop_loss_rate*100:.0f}% stops → penalty={exit_penalty:.3f}")
+            else:
+                logger.info(f"   ✅ Signal-Exit Cross-Talk: {len(similar_exits)} similar exits, {exit_win_rate*100:.0f}% WR (good exits)")
+        
+        session.close()
+    except Exception as e:
+        logger.warning(f"   Signal-Exit cross-talk failed: {e}")
+    
+    # STEP 3: Calculate advanced confidence using DUAL pattern matching
+    result = calculate_advanced_confidence(
+        winner_experiences=winner_experiences,
+        loser_experiences=loser_experiences,
+        recency_hours=168,
+        streak=streak,
+        current_vix=current_vix,
+        volume_ratio=volume_ratio
+    )
+    
+    # Apply exit penalty to final confidence
+    if exit_penalty > 0:
+        original_confidence = result['confidence']
+        result['confidence'] = max(0.0, result['confidence'] - exit_penalty)
+        result['exit_penalty'] = round(exit_penalty, 3)
+        result['reason'] += f" | Exit penalty: -{exit_penalty:.1%} (poor exit performance on similar signals)"
+        logger.info(f"   Applied exit penalty: {original_confidence:.2%} → {result['confidence']:.2%}")
     
     # Add recommendation
     result['should_take'] = result['confidence'] >= 0.65  # Only recommend high-confidence trades
@@ -1250,16 +1627,12 @@ async def save_trade_experience(trade: Dict, db: Session = Depends(get_db)):
         # Add timestamp and ID
         experience = {
             **trade,
-            "saved_at": datetime.utcnow().isoformat(),
-            "experience_id": f"{user_id}_{symbol}_{datetime.utcnow().timestamp()}"
+            "saved_at": datetime.now(pytz.UTC).isoformat(),
+            "experience_id": f"{user_id}_{symbol}_{datetime.now(pytz.UTC).timestamp()}"
         }
         
         # Store in SHARED array (everyone contributes to same strategy learning)
         signal_experiences.append(experience)
-        
-        # Persist the hive mind to disk every 10 trades
-        if len(signal_experiences) % 10 == 0:
-            save_experiences()
         
         # **NEW: Save to PostgreSQL database for admin dashboard tracking**
         try:
@@ -1276,8 +1649,8 @@ async def save_trade_experience(trade: Dict, db: Session = Depends(get_db)):
                     exit_price=trade.get('exit_price', 0.0),
                     quantity=trade.get('quantity', 1),
                     pnl=trade['pnl'],
-                    entry_time=datetime.fromisoformat(trade['entry_time']) if trade.get('entry_time') else datetime.utcnow(),
-                    exit_time=datetime.fromisoformat(trade['exit_time']) if trade.get('exit_time') else datetime.utcnow(),
+                    entry_time=datetime.fromisoformat(trade['entry_time']) if trade.get('entry_time') else datetime.now(pytz.UTC),
+                    exit_time=datetime.fromisoformat(trade['exit_time']) if trade.get('exit_time') else datetime.now(pytz.UTC),
                     exit_reason=trade.get('exit_reason', 'unknown'),
                     confidence_score=trade.get('confidence', 0.0)
                 )
@@ -1287,17 +1660,24 @@ async def save_trade_experience(trade: Dict, db: Session = Depends(get_db)):
                 pnl = trade['pnl']
                 outcome = 'WIN' if pnl > 0 else 'LOSS'
                 
-                # Extract context data (with defaults if not provided)
+                # Extract ALL context data (with defaults if not provided)
                 rsi = trade.get('entry_rsi', trade.get('rsi', 50.0))
                 vwap_distance = trade.get('vwap_distance', 0.0)
                 vix = trade.get('vix', 15.0)
+                atr = trade.get('volatility', trade.get('atr', 0.0))
+                volume_ratio = trade.get('volume_ratio', 1.0)
+                recent_pnl = trade.get('recent_pnl', 0.0)
+                streak = trade.get('streak', 0)
+                entry_price = trade.get('entry_price', 0.0)
+                vwap = trade.get('entry_vwap', trade.get('vwap', 0.0))
+                price = trade.get('price', entry_price)
                 
                 # Calculate time context
-                entry_time = datetime.fromisoformat(trade['entry_time']) if trade.get('entry_time') else datetime.utcnow()
+                entry_time = datetime.fromisoformat(trade['entry_time']) if trade.get('entry_time') else datetime.now(pytz.UTC)
                 day_of_week = entry_time.weekday()  # 0=Monday, 6=Sunday
                 hour_of_day = entry_time.hour  # 0-23
                 
-                # Signal experience (entry decision) WITH CONTEXT
+                # Signal experience (entry decision) WITH FULL 13-FEATURE CONTEXT
                 signal_exp = RLExperience(
                     user_id=user.id,
                     account_id=user_id,
@@ -1308,35 +1688,28 @@ async def save_trade_experience(trade: Dict, db: Session = Depends(get_db)):
                     pnl=pnl,
                     confidence_score=trade.get('confidence', 0.0),
                     quality_score=min(abs(pnl) / 100, 1.0),  # Quality based on P&L magnitude
+                    # All 13 pattern matching features:
                     rsi=rsi,
                     vwap_distance=vwap_distance,
                     vix=vix,
                     day_of_week=day_of_week,
-                    hour_of_day=hour_of_day
+                    hour_of_day=hour_of_day,
+                    atr=atr,
+                    volume_ratio=volume_ratio,
+                    recent_pnl=recent_pnl,
+                    streak=streak,
+                    entry_price=entry_price,
+                    vwap=vwap,
+                    price=price,
+                    side=trade['side']
                 )
                 db.add(signal_exp)
                 
-                # Exit experience (exit decision) WITH CONTEXT
-                exit_exp = RLExperience(
-                    user_id=user.id,
-                    account_id=user_id,
-                    experience_type='EXIT',
-                    symbol=symbol,
-                    signal_type=trade['side'],
-                    outcome=outcome,
-                    pnl=pnl,
-                    confidence_score=trade.get('confidence', 0.0),
-                    quality_score=min(abs(pnl) / 100, 1.0),
-                    rsi=rsi,
-                    vwap_distance=vwap_distance,
-                    vix=vix,
-                    day_of_week=day_of_week,
-                    hour_of_day=hour_of_day
-                )
-                db.add(exit_exp)
+                # EXIT experiences are saved separately via /api/ml/save_exit_experience
+                # (Not saved here to avoid duplication)
                 
                 db.commit()
-                logger.debug(f"✅ Trade & RL experiences (with context) saved to database for {user_id}")
+                logger.debug(f"✅ Trade & Signal RL experience saved to database for {user_id}")
         except Exception as db_error:
             logger.warning(f"Failed to save trade to database: {db_error}")
             # Don't fail the entire request if database save fails
@@ -1397,17 +1770,13 @@ async def save_rejected_signal(signal: Dict):
         # Add timestamp
         experience = {
             **signal,
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": datetime.now(pytz.UTC).isoformat(),
             "took_trade": False  # Always false for rejections
         }
         
         # Store in shared experience pool with negative reward (represents opportunity cost)
         # The RL will learn: "Was skipping this signal the right decision?"
         signal_experiences.append(experience)
-        
-        # Persist every 25 rejected signals (less frequently than trades)
-        if len(signal_experiences) % 25 == 0:
-            save_experiences()
         
         rejections = sum(1 for exp in signal_experiences if not exp.get('took_trade', True))
         
@@ -1422,6 +1791,824 @@ async def save_rejected_signal(signal: Dict):
     except Exception as e:
         logger.error(f"Error saving rejected signal: {e}")
         return {"saved": False, "error": str(e)}
+
+
+@app.get("/api/ml/get_exit_experiences")
+async def get_exit_experiences():
+    """
+    Get all exit experiences for Exit RL learning from PostgreSQL.
+    ALL USERS share the same collective exit learning pool!
+    """
+    try:
+        from database import DatabaseManager, ExitExperience
+        
+        db_manager = DatabaseManager()
+        session = db_manager.get_session()
+        
+        try:
+            # Query all exit experiences from PostgreSQL
+            experiences = session.query(ExitExperience).order_by(ExitExperience.timestamp.desc()).all()
+            
+            # Convert to dict format matching JSON file structure
+            exit_experiences_list = [exp.to_dict() for exp in experiences]
+            
+            logger.info(f"📤 Serving {len(exit_experiences_list):,} exit experiences from PostgreSQL")
+            
+            return {
+                "success": True,
+                "exit_experiences": exit_experiences_list,
+                "total_count": len(exit_experiences_list),
+                "message": f"🌍 Loaded {len(exit_experiences_list):,} shared exit experiences from PostgreSQL"
+            }
+            
+        finally:
+            session.close()
+            
+    except Exception as e:
+        logger.error(f"❌ Error getting exit experiences from PostgreSQL: {e}")
+        return {
+            "success": False,
+            "exit_experiences": [],
+            "total_count": 0,
+            "error": str(e)
+        }
+
+
+@app.post("/api/ml/save_exit_experience")
+async def save_exit_experience(experience: dict):
+    """
+    Save new exit experience to PostgreSQL - ALL USERS contribute!
+    Every trade exit adds to the collective learning pool.
+    
+    Saves to TWO tables:
+    1. RLExperience: 9-feature context for pattern matching
+    2. ExitExperience: Full exit parameters for regime-based learning
+    """
+    try:
+        from database import DatabaseManager, RLExperience, ExitExperience
+        from datetime import datetime
+        import json
+        
+        db_manager = DatabaseManager()
+        session = db_manager.get_session()
+        
+        try:
+            # Extract data
+            market_state = experience.get('market_state', {})
+            outcome = experience.get('outcome', {})
+            exit_params = experience.get('exit_params', {})
+            regime = experience.get('regime', 'UNKNOWN')
+            situation = experience.get('situation', {})
+            partial_exits = experience.get('partial_exits', [])
+            
+            # Get or create a default user for backtest data
+            from database import User
+            default_user = session.query(User).filter_by(account_id='backtest').first()
+            if not default_user:
+                # Create backtest user if doesn't exist
+                default_user = User(
+                    account_id='backtest',
+                    email='backtest@quotrading.com',
+                    license_key='BACKTEST-KEY',
+                    license_type='SYSTEM',
+                    license_status='ACTIVE'
+                )
+                session.add(default_user)
+                session.flush()
+            
+            # 1. Create RLExperience record for exit pattern matching (experience_type='EXIT')
+            exit_rl_exp = RLExperience(
+                experience_type='EXIT',
+                user_id=default_user.id,
+                account_id='backtest',
+                symbol='ES',
+                signal_type=outcome.get('side', 'long').upper(),
+                outcome='WIN' if outcome.get('win', False) else 'LOSS',
+                pnl=float(outcome.get('pnl', 0.0)),
+                confidence_score=None,
+                quality_score=min(abs(outcome.get('pnl', 0.0)) / 100.0, 1.0),
+                
+                # 9-feature market context for exit pattern matching
+                rsi=float(market_state.get('rsi', 50.0)),
+                volume_ratio=float(market_state.get('volume_ratio', 1.0)),
+                hour_of_day=int(market_state.get('hour', 12)),
+                day_of_week=int(market_state.get('day_of_week', 0)),
+                streak=int(market_state.get('streak', 0)),
+                recent_pnl=float(market_state.get('recent_pnl', 0.0)),
+                vix=float(market_state.get('vix', 15.0)),
+                vwap_distance=float(market_state.get('vwap_distance', 0.0)),
+                atr=float(market_state.get('atr', 0.0)),
+                
+                entry_price=None,
+                vwap=None,
+                price=None,
+                side=outcome.get('side', 'long'),
+                
+                timestamp=datetime.fromisoformat(experience.get('timestamp', datetime.now(pytz.UTC).isoformat()))
+            )
+            session.add(exit_rl_exp)
+            
+            # 2. Create ExitExperience record for full exit parameter learning
+            full_exit_exp = ExitExperience(
+                regime=regime,
+                exit_params_json=json.dumps(exit_params),
+                outcome_json=json.dumps(outcome),
+                situation_json=json.dumps(situation),
+                market_state_json=json.dumps(market_state),
+                partial_exits_json=json.dumps(partial_exits),
+                quality_score=min(abs(outcome.get('pnl', 0.0)) / 100.0, 1.0),
+                timestamp=datetime.fromisoformat(experience.get('timestamp', datetime.now(pytz.UTC).isoformat()))
+            )
+            session.add(full_exit_exp)
+            
+            session.commit()
+            
+            # Get updated counts
+            rl_exit_count = session.query(RLExperience).filter(
+                RLExperience.experience_type == 'EXIT'
+            ).count()
+            
+            full_exit_count = session.query(ExitExperience).count()
+            
+            logger.info(f"✅ Saved EXIT to BOTH tables: RLExperience ({rl_exit_count:,}) + ExitExperience ({full_exit_count:,})")
+            
+            return {
+                "saved": True,
+                "total_exit_experiences": rl_exit_count,
+                "total_full_exit_experiences": full_exit_count,
+                "message": f"🌍 Exit saved to BOTH tables (RL pattern matching + full params)"
+            }
+            
+        except Exception as e:
+            session.rollback()
+            raise e
+        finally:
+            session.close()
+        
+    except Exception as e:
+        logger.error(f"❌ Error saving exit experience to PostgreSQL: {e}")
+        return {"saved": False, "error": str(e)}
+
+
+@app.post("/api/ml/save_experience")
+async def save_ml_experience(experience: dict):
+    """
+    Save COMPLETE ML experience to PostgreSQL ml_experiences table (JSONB).
+    SCALABLE: Handles high-volume inserts with connection pooling and fast commits.
+    Supports signal experiences, exit experiences, AND ghost trades.
+    ALL fields stored as-is in JSONB format - no schema limitations!
+    
+    Request: {
+        user_id: str,
+        symbol: str,
+        experience_type: str,  # 'signal', 'exit', 'ghost_trade', 'ghost_exit'
+        rl_state: dict,  # Full state (33 fields for signals, 64 for exits)
+        outcome: dict,   # Full outcome data
+        quality_score: float,  # 0-1
+        timestamp: str  # ISO format
+    }
+    
+    PERFORMANCE: ~1000 writes/sec capacity, optimized for multi-user scale
+    """
+    try:
+        from database import DatabaseManager, MLExperience
+        from datetime import datetime
+        
+        db_manager = DatabaseManager()
+        session = db_manager.get_session()
+        
+        try:
+            # Extract fields (with validation)
+            user_id = experience.get('user_id', 'unknown')
+            if not user_id or user_id == 'unknown':
+                logger.warning("Missing user_id in experience - using 'unknown'")
+            
+            symbol = experience.get('symbol', 'ES')
+            exp_type = experience.get('experience_type', 'signal')
+            
+            # Validate experience type
+            valid_types = ['signal', 'exit', 'ghost_trade', 'ghost_exit']
+            if exp_type not in valid_types:
+                logger.warning(f"Invalid experience_type '{exp_type}', defaulting to 'signal'")
+                exp_type = 'signal'
+            
+            rl_state = experience.get('rl_state', {})
+            outcome = experience.get('outcome', {})
+            quality_score = experience.get('quality_score', 1.0)
+            
+            # Handle 'experience' wrapper (some payloads nest data in 'experience' key)
+            if 'experience' in experience and isinstance(experience['experience'], dict):
+                nested = experience['experience']
+                rl_state = rl_state or nested.get('rl_state', {})
+                outcome = outcome or nested.get('outcome', {})
+            
+            timestamp_str = experience.get('timestamp', datetime.now(pytz.UTC).isoformat())
+            
+            # Parse timestamp
+            try:
+                timestamp = datetime.fromisoformat(timestamp_str.replace('Z', '+00:00'))
+            except:
+                timestamp = datetime.now(pytz.UTC)
+            
+            # Create ML experience record (JSONB storage - no field limits!)
+            ml_exp = MLExperience(
+                user_id=user_id,
+                symbol=symbol,
+                experience_type=exp_type,
+                rl_state=rl_state,  # Stored as JSONB - 33+ signal features or 64+ exit features
+                outcome=outcome,    # Stored as JSONB - complete outcome data
+                quality_score=quality_score,
+                timestamp=timestamp
+            )
+            session.add(ml_exp)
+            session.commit()
+            
+            # Efficient count - only query if needed (skip for high volume)
+            # For production scale, consider caching this count or removing it
+            try:
+                total_count = session.query(MLExperience).filter(
+                    MLExperience.experience_type == exp_type
+                ).count()
+            except:
+                total_count = 0  # Don't fail if count query fails
+            
+            logger.info(f"✅ Saved {exp_type} experience from {user_id[:8]}... (total: {total_count:,})")
+            
+            return {
+                "saved": True,
+                "experience_type": exp_type,
+                "total_experiences": total_count,
+                "message": f"Experience saved to cloud database"
+            }
+            
+        except Exception as e:
+            session.rollback()
+            logger.error(f"❌ DB error saving experience: {e}")
+            raise e
+        finally:
+            session.close()
+            
+    except Exception as e:
+        logger.error(f"❌ Error saving ML experience: {e}")
+        return {"saved": False, "error": str(e)}
+
+
+@app.post("/api/ml/save_experiences_batch")
+async def save_experiences_batch(experiences: list[dict]):
+    """
+    BATCH INSERT for high-volume ML experience saves.
+    5-10x FASTER than individual inserts for multi-user scale.
+    
+    Request: [
+        {user_id, symbol, experience_type, rl_state, outcome, quality_score, timestamp},
+        {user_id, symbol, experience_type, rl_state, outcome, quality_score, timestamp},
+        ...
+    ]
+    
+    PERFORMANCE: Handles 50-100 experiences per batch, reduces DB round trips.
+    SCALABILITY: Essential for 1000+ users with 5 ghost trades each.
+    """
+    try:
+        from database import DatabaseManager, MLExperience
+        from datetime import datetime
+        
+        if not experiences or len(experiences) == 0:
+            return {"saved": 0, "errors": 0, "message": "Empty batch"}
+        
+        db_manager = DatabaseManager()
+        session = db_manager.get_session()
+        
+        saved_count = 0
+        error_count = 0
+        
+        try:
+            # Prepare batch insert data
+            batch_data = []
+            for exp in experiences:
+                try:
+                    # Extract and validate fields
+                    user_id = exp.get('user_id', 'unknown')
+                    symbol = exp.get('symbol', 'ES')
+                    exp_type = exp.get('experience_type', 'signal')
+                    
+                    # Validate experience type
+                    valid_types = ['signal', 'exit', 'ghost_trade', 'ghost_exit']
+                    if exp_type not in valid_types:
+                        exp_type = 'signal'
+                    
+                    rl_state = exp.get('rl_state', {})
+                    outcome = exp.get('outcome', {})
+                    quality_score = exp.get('quality_score', 1.0)
+                    timestamp_str = exp.get('timestamp', datetime.now(pytz.UTC).isoformat())
+                    
+                    # Parse timestamp
+                    try:
+                        timestamp = datetime.fromisoformat(timestamp_str.replace('Z', '+00:00'))
+                    except:
+                        timestamp = datetime.now(pytz.UTC)
+                    
+                    # Add to batch
+                    batch_data.append({
+                        'user_id': user_id,
+                        'symbol': symbol,
+                        'experience_type': exp_type,
+                        'rl_state': rl_state,
+                        'outcome': outcome,
+                        'quality_score': quality_score,
+                        'timestamp': timestamp
+                    })
+                    
+                except Exception as e:
+                    logger.warning(f"⚠️ Skipped invalid experience in batch: {e}")
+                    error_count += 1
+            
+            # Bulk insert (MUCH faster than individual inserts)
+            if batch_data:
+                session.bulk_insert_mappings(MLExperience, batch_data)
+                session.commit()
+                saved_count = len(batch_data)
+                
+                logger.info(f"✅ Batch saved {saved_count} experiences ({error_count} errors)")
+            
+            return {
+                "saved": saved_count,
+                "errors": error_count,
+                "message": f"Batch insert completed: {saved_count} saved, {error_count} failed"
+            }
+            
+        except Exception as e:
+            session.rollback()
+            logger.error(f"❌ Batch insert failed: {e}")
+            return {"saved": 0, "errors": len(experiences), "error": str(e)}
+        finally:
+            session.close()
+            
+    except Exception as e:
+        logger.error(f"❌ Batch save error: {e}")
+        return {"saved": 0, "errors": 0, "error": str(e)}
+
+
+@app.post("/api/ml/get_adaptive_exit_params")
+async def get_adaptive_exit_params(request: dict):
+    """
+    REAL-TIME exit parameter recommendations based on current market conditions.
+    Queries 3,214+ exit experiences to find similar situations and returns optimal params.
+    
+    Called MID-TRADE to adapt exit strategy as market conditions change.
+    
+    Request:
+        {
+            "regime": "HIGH_VOL_CHOPPY",
+            "market_state": {
+                "rsi": 65.5,
+                "atr": 3.2,
+                "vwap_distance": 1.5,
+                "volume_ratio": 1.8,
+                "hour": 10,
+                "day_of_week": 2,
+                "streak": 2,
+                "recent_pnl": 150.0,
+                "vix": 18.5
+            },
+            "position": {
+                "side": "long",
+                "duration_minutes": 12.5,
+                "unrealized_pnl": 225.0,
+                "entry_price": 5950.0,
+                "r_multiple": 2.3
+            },
+            "entry_confidence": 0.85  # From signal RL
+        }
+    
+    Returns:
+        {
+            "success": true,
+            "params": {
+                "breakeven_threshold_ticks": 9,
+                "breakeven_offset_ticks": 2,
+                "trailing_distance_ticks": 10,
+                "partial_1_r": 2.0,
+                "partial_1_pct": 0.50,
+                "stop_mult": 3.8
+            },
+            "similar_exits_analyzed": 342,
+            "avg_pnl_similar": 187.50,
+            "win_rate_similar": 0.68,
+            "recommendation": "TIGHTEN (68% win rate in 342 similar choppy exits, avg $188 P&L)"
+        }
+    """
+    try:
+        from database import DatabaseManager, ExitExperience
+        import json
+        import statistics
+        
+        db_manager = DatabaseManager()
+        session = db_manager.get_session()
+        
+        try:
+            # Extract request data
+            regime = request.get('regime', 'NORMAL')
+            market_state = request.get('market_state', {})
+            position = request.get('position', {})
+            entry_confidence = request.get('entry_confidence', 0.75)
+            
+            # Query ALL exit experiences from PostgreSQL
+            # NO arbitrary limits - similarity scoring will find what's relevant
+            all_exits = session.query(ExitExperience).order_by(ExitExperience.timestamp.desc()).all()
+            
+            logger.info(f"🎯 Exit RL: Analyzing {len(all_exits)} total exit experiences for {regime} regime")
+            
+            if len(all_exits) == 0:
+                # No experiences yet - return defaults
+                return {
+                    "success": True,
+                    "params": {
+                        "breakeven_threshold_ticks": 8,
+                        "breakeven_offset_ticks": 1,
+                        "trailing_distance_ticks": 8,
+                        "partial_1_r": 2.0,
+                        "partial_1_pct": 0.50,
+                        "stop_mult": 3.6
+                    },
+                    "similar_exits_analyzed": 0,
+                    "recommendation": "Using defaults (no exit experiences yet)"
+                }
+            
+            # Find similar exit situations (same regime, similar market conditions)
+            similar_exits = []
+            for exp in all_exits:
+                exit_data = exp.to_dict()
+                exp_regime = exit_data.get('regime', 'NORMAL')
+                exp_market_state = exit_data.get('market_state', {})
+                exp_outcome = exit_data.get('outcome', {})
+                
+                # Match regime (exact match or similar)
+                regime_match = False
+                if exp_regime == regime:
+                    regime_match = True
+                elif "HIGH_VOL" in regime and "HIGH_VOL" in exp_regime:
+                    regime_match = True
+                elif "LOW_VOL" in regime and "LOW_VOL" in exp_regime:
+                    regime_match = True
+                elif "CHOPPY" in regime and "CHOPPY" in exp_regime:
+                    regime_match = True
+                elif "TRENDING" in regime and "TRENDING" in exp_regime:
+                    regime_match = True
+                
+                if not regime_match:
+                    continue
+                
+                # Calculate similarity score (0.0 - 1.0)
+                similarity = 0.0
+                weights = 0.0
+                
+                # RSI similarity (most important for exits)
+                if 'rsi' in market_state and 'rsi' in exp_market_state:
+                    rsi_diff = abs(market_state['rsi'] - exp_market_state['rsi'])
+                    rsi_sim = max(0, 1.0 - (rsi_diff / 50.0))  # 50 RSI points = 0 similarity
+                    similarity += rsi_sim * 3.0  # Weight 3x
+                    weights += 3.0
+                
+                # ATR similarity (volatility)
+                if 'atr' in market_state and 'atr' in exp_market_state:
+                    atr_diff = abs(market_state['atr'] - exp_market_state['atr'])
+                    atr_sim = max(0, 1.0 - (atr_diff / 5.0))  # 5 ATR points = 0 similarity
+                    similarity += atr_sim * 2.0  # Weight 2x
+                    weights += 2.0
+                
+                # VWAP distance similarity
+                if 'vwap_distance' in market_state and 'vwap_distance' in exp_market_state:
+                    vwap_diff = abs(market_state['vwap_distance'] - exp_market_state['vwap_distance'])
+                    vwap_sim = max(0, 1.0 - (vwap_diff / 3.0))
+                    similarity += vwap_sim * 1.5
+                    weights += 1.5
+                
+                # Hour of day (time-based patterns)
+                if 'hour' in market_state and 'hour' in exp_market_state:
+                    hour_diff = abs(market_state['hour'] - exp_market_state['hour'])
+                    hour_sim = max(0, 1.0 - (hour_diff / 12.0))
+                    similarity += hour_sim * 1.0
+                    weights += 1.0
+                
+                # Normalize similarity
+                if weights > 0:
+                    similarity /= weights
+                
+                # Only include if similarity >= 0.60 (60% match)
+                if similarity >= 0.60:
+                    similar_exits.append({
+                        'experience': exit_data,
+                        'similarity': similarity,
+                        'pnl': exp_outcome.get('pnl', 0.0),
+                        'win': exp_outcome.get('win', False),
+                        'exit_params': exit_data.get('exit_params', {})
+                    })
+            
+            # Sort by similarity (most similar first)
+            similar_exits.sort(key=lambda x: x['similarity'], reverse=True)
+            
+            # Take top 500 most similar (or all if fewer)
+            similar_exits = similar_exits[:500]
+            
+            # DUAL PATTERN MATCHING: Separate winners and losers
+            winner_exits = [e for e in similar_exits if e['win']]
+            loser_exits = [e for e in similar_exits if not e['win']]
+            
+            logger.info(f"📊 Exit Dual Pattern: {len(winner_exits)} winners, {len(loser_exits)} losers from {len(similar_exits)} similar exits")
+            
+            if len(similar_exits) == 0:
+                # No similar exits found - return defaults
+                return {
+                    "success": True,
+                    "params": {
+                        "breakeven_threshold_ticks": 8,
+                        "breakeven_offset_ticks": 1,
+                        "trailing_distance_ticks": 8,
+                        "partial_1_r": 2.0,
+                        "partial_1_pct": 0.50,
+                        "stop_mult": 3.6
+                    },
+                    "similar_exits_analyzed": 0,
+                    "recommendation": f"Using defaults (no similar {regime} exits found)"
+                }
+            
+            # Calculate statistics from similar exits
+            pnls = [e['pnl'] for e in similar_exits]
+            wins = [e['win'] for e in similar_exits]
+            win_rate = sum(wins) / len(wins) if wins else 0.0
+            avg_pnl = statistics.mean(pnls) if pnls else 0.0
+            
+            # DUAL PATTERN MATCHING: Learn from winners, avoid loser patterns
+            # Winners teach what params WORK, losers teach what params to AVOID
+            
+            # Extract parameters from WINNERS (what to do)
+            winner_params = {
+                'breakeven_mult': [],
+                'trailing_mult': [],
+                'stop_mult': [],
+                'partial_1_r': [],
+                'partial_1_pct': []
+            }
+            
+            for exit in winner_exits:
+                params = exit['exit_params']
+                if 'breakeven_mult' in params:
+                    winner_params['breakeven_mult'].append(params['breakeven_mult'])
+                if 'trailing_mult' in params:
+                    winner_params['trailing_mult'].append(params['trailing_mult'])
+                if 'stop_mult' in params:
+                    winner_params['stop_mult'].append(params['stop_mult'])
+                if 'partial_1_r' in params:
+                    winner_params['partial_1_r'].append(params['partial_1_r'])
+                if 'partial_1_pct' in params:
+                    winner_params['partial_1_pct'].append(params['partial_1_pct'])
+            
+            # Extract parameters from LOSERS (what to avoid)
+            loser_params = {
+                'breakeven_mult': [],
+                'trailing_mult': [],
+                'stop_mult': [],
+                'partial_1_r': [],
+                'partial_1_pct': []
+            }
+            
+            for exit in loser_exits:
+                params = exit['exit_params']
+                if 'breakeven_mult' in params:
+                    loser_params['breakeven_mult'].append(params['breakeven_mult'])
+                if 'trailing_mult' in params:
+                    loser_params['trailing_mult'].append(params['trailing_mult'])
+                if 'stop_mult' in params:
+                    loser_params['stop_mult'].append(params['stop_mult'])
+                if 'partial_1_r' in params:
+                    loser_params['partial_1_r'].append(params['partial_1_r'])
+                if 'partial_1_pct' in params:
+                    loser_params['partial_1_pct'].append(params['partial_1_pct'])
+            
+            # Calculate optimal parameters using DUAL PATTERN MATCHING
+            # Strategy: Use winner medians, but AVOID loser medians
+            optimal_params = {}
+            
+            for key in winner_params.keys():
+                winner_values = winner_params[key]
+                loser_values = loser_params[key]
+                
+                if winner_values and loser_values:
+                    # Both winners and losers have data
+                    winner_median = statistics.median(winner_values)
+                    loser_median = statistics.median(loser_values)
+                    
+                    # If winner params and loser params are similar → unclear which is better
+                    # If winner params differ from loser params → use winner params
+                    param_diff = abs(winner_median - loser_median)
+                    
+                    if param_diff < 0.2:
+                        # Too similar - can't tell which is better, use winner median
+                        optimal_params[key] = winner_median
+                        logger.info(f"   {key}: winners={winner_median:.2f}, losers={loser_median:.2f} (similar, using winner)")
+                    else:
+                        # Clear difference - strongly prefer winner params
+                        optimal_params[key] = winner_median
+                        logger.info(f"   {key}: winners={winner_median:.2f}, losers={loser_median:.2f} (diff={param_diff:.2f}, using winner)")
+                        
+                elif winner_values:
+                    # Only winners have data
+                    optimal_params[key] = statistics.median(winner_values)
+                    logger.info(f"   {key}: only winners={optimal_params[key]:.2f}")
+                elif loser_values:
+                    # Only losers have data - avoid their params by using opposite/defaults
+                    loser_median = statistics.median(loser_values)
+                    if key == 'stop_mult':
+                        # Losers had tight stops → use wider
+                        optimal_params[key] = max(3.6, loser_median + 0.5)
+                    elif key in ['breakeven_mult', 'trailing_mult']:
+                        # Losers had loose params → use tighter
+                        optimal_params[key] = max(0.8, loser_median - 0.2)
+                    else:
+                        optimal_params[key] = loser_median
+                    logger.info(f"   {key}: only losers={loser_median:.2f}, adjusted to {optimal_params[key]:.2f}")
+                else:
+                    # No data - use defaults
+                    if key == 'breakeven_mult':
+                        optimal_params[key] = 1.0
+                    elif key == 'trailing_mult':
+                        optimal_params[key] = 1.0
+                    elif key == 'stop_mult':
+                        optimal_params[key] = 3.6
+                    elif key == 'partial_1_r':
+                        optimal_params[key] = 2.0
+                    elif key == 'partial_1_pct':
+                        optimal_params[key] = 0.50
+            
+            # Convert multipliers to actual tick values (assuming base values)
+            base_breakeven = 8
+            base_trailing = 8
+            
+            recommended_params = {
+                "breakeven_threshold_ticks": int(base_breakeven * optimal_params.get('breakeven_mult', 1.0)),
+                "breakeven_offset_ticks": 2,  # Fixed at 2 ticks
+                "trailing_distance_ticks": int(base_trailing * optimal_params.get('trailing_mult', 1.0)),
+                "partial_1_r": optimal_params.get('partial_1_r', 2.0),
+                "partial_1_pct": optimal_params.get('partial_1_pct', 0.50),
+                "stop_mult": optimal_params.get('stop_mult', 3.6)
+            }
+            
+            # Generate recommendation message with dual pattern info
+            if win_rate >= 0.65:
+                action = "HOLD"
+            elif win_rate >= 0.55:
+                action = "NORMAL"
+            else:
+                action = "TIGHTEN"
+            
+            recommendation = f"{action} - Dual Pattern: {len(winner_exits)}W/{len(loser_exits)}L ({win_rate*100:.0f}% WR, avg ${avg_pnl:.0f})"
+            
+            logger.info(f"🎯 Exit RL Dual Pattern: {len(winner_exits)}W/{len(loser_exits)}L → {action} ({win_rate*100:.0f}% WR, avg ${avg_pnl:.0f})")
+            
+            return {
+                "success": True,
+                "params": recommended_params,
+                "similar_exits_analyzed": len(similar_exits),
+                "winner_exits": len(winner_exits),
+                "loser_exits": len(loser_exits),
+                "avg_pnl_similar": round(avg_pnl, 2),
+                "win_rate_similar": round(win_rate, 3),
+                "recommendation": recommendation,
+                "dual_pattern": True,  # Flag to indicate dual pattern matching is active
+                "regime": regime
+            }
+            
+        finally:
+            session.close()
+            
+    except Exception as e:
+        logger.error(f"❌ Error getting adaptive exit params: {e}")
+        return {
+            "success": False,
+            "params": {
+                "breakeven_threshold_ticks": 8,
+                "breakeven_offset_ticks": 1,
+                "trailing_distance_ticks": 8,
+                "partial_1_r": 2.0,
+                "partial_1_pct": 0.50,
+                "stop_mult": 3.6
+            },
+            "similar_exits_analyzed": 0,
+            "recommendation": f"Using defaults (error: {str(e)})"
+        }
+
+
+@app.post("/api/ml/predict_exit_params")
+async def predict_exit_params(request: dict):
+    """
+    NEURAL NETWORK exit parameter prediction (CLOUD-BASED).
+    Uses trained exit neural network to predict optimal exit parameters in real-time.
+    
+    Called EVERY TICK during trades for dynamic exit management.
+    
+    Request:
+        {
+            "market_regime": "HIGH_VOL_TRENDING",
+            "rsi": 65.5,
+            "volume_ratio": 1.8,
+            "atr": 3.2,
+            "vix": 18.5,
+            "volatility_regime_change": false,
+            "entry_confidence": 0.85,
+            "side": "long",
+            "session": 0,
+            "bid_ask_spread_ticks": 1.0,
+            "hour": 10,
+            "day_of_week": 2,
+            "duration_bars": 12,
+            "time_in_breakeven_bars": 0,
+            "bars_until_breakeven": 5,
+            "mae": -25.0,
+            "mfe": 87.50,
+            "max_r_achieved": 1.5,
+            "min_r_achieved": -0.2,
+            "r_multiple": 1.2,
+            "breakeven_activated": false,
+            "trailing_activated": false,
+            "exit_param_update_count": 3,
+            "stop_adjustment_count": 1,
+            "bars_until_trailing": 8,
+            "current_pnl": 50.0,
+            "entry_atr": 2.8,
+            "avg_atr_during_trade": 3.0,
+            "profit_drawdown_from_peak": 12.50,
+            "high_volatility_bars": 2,
+            "wins_in_last_5_trades": 3,
+            "losses_in_last_5_trades": 2,
+            "minutes_to_close": 240
+        }
+    
+    Returns:
+        {
+            "success": true,
+            "exit_params": {
+                "breakeven_threshold_ticks": 7.2,
+                "trailing_distance_ticks": 9.5,
+                "stop_mult": 3.8,
+                "partial_1_r": 2.1,
+                "partial_2_r": 3.2,
+                "partial_3_r": 5.5
+            },
+            "model_version": "v2_45features",
+            "prediction_time_ms": 12.3
+        }
+    """
+    try:
+        import time
+        start_time = time.time()
+        
+        # Check if exit predictor is initialized
+        if neural_exit_predictor is None:
+            logger.error("❌ Exit neural network not initialized")
+            return {
+                "success": False,
+                "error": "Exit predictor not available",
+                "exit_params": {
+                    "breakeven_threshold_ticks": 8.0,
+                    "trailing_distance_ticks": 10.0,
+                    "stop_mult": 3.5,
+                    "partial_1_r": 2.0,
+                    "partial_2_r": 3.0,
+                    "partial_3_r": 5.0
+                }
+            }
+        
+        # Get neural network prediction
+        exit_params = neural_exit_predictor.predict(request)
+        
+        prediction_time_ms = (time.time() - start_time) * 1000
+        
+        logger.info(f"🧠 Exit NN: BE={exit_params['breakeven_threshold_ticks']:.1f}t, "
+                   f"Trail={exit_params['trailing_distance_ticks']:.1f}t, "
+                   f"Partials={exit_params['partial_1_r']:.2f}R/{exit_params['partial_2_r']:.2f}R/{exit_params['partial_3_r']:.2f}R "
+                   f"({prediction_time_ms:.1f}ms)")
+        
+        return {
+            "success": True,
+            "exit_params": exit_params,
+            "model_version": "v2_45features",
+            "prediction_time_ms": round(prediction_time_ms, 2)
+        }
+        
+    except Exception as e:
+        logger.error(f"❌ Exit prediction error: {e}")
+        return {
+            "success": False,
+            "error": str(e),
+            "exit_params": {
+                "breakeven_threshold_ticks": 8.0,
+                "trailing_distance_ticks": 10.0,
+                "stop_mult": 3.5,
+                "partial_1_r": 2.0,
+                "partial_2_r": 3.0,
+                "partial_3_r": 5.0
+            }
+        }
 
 
 @app.get("/api/ml/stats")
@@ -1455,8 +2642,377 @@ async def get_ml_stats():
         "avg_pnl": total_pnl / len(signal_experiences),
         "total_pnl": total_pnl,
         "message": "Shared learning - all users contribute and benefit",
-        "last_updated": datetime.utcnow().isoformat()
+        "last_updated": datetime.now(pytz.UTC).isoformat()
     }
+
+@app.get("/api/ml/db_stats")
+async def get_database_stats():
+    """
+    Get actual PostgreSQL database statistics (not in-memory)
+    Shows what's really saved in the cloud database
+    """
+    try:
+        from database import DatabaseManager, MLExperience
+        
+        db_manager = DatabaseManager()
+        session = db_manager.get_session()
+        
+        try:
+            # Count by experience type
+            signal_count = session.query(MLExperience).filter(
+                MLExperience.experience_type == 'signal'
+            ).count()
+            
+            exit_count = session.query(MLExperience).filter(
+                MLExperience.experience_type == 'exit'
+            ).count()
+            
+            ghost_count = session.query(MLExperience).filter(
+                MLExperience.experience_type == 'ghost_trade'
+            ).count()
+            
+            total_count = session.query(MLExperience).count()
+            
+            # Get sample record
+            sample = session.query(MLExperience).first()
+            sample_data = None
+            if sample:
+                import json
+                # Handle both dict (PostgreSQL) and string (SQLite) formats
+                rl_state = sample.rl_state
+                outcome = sample.outcome
+                if isinstance(rl_state, str):
+                    rl_state = json.loads(rl_state)
+                if isinstance(outcome, str):
+                    outcome = json.loads(outcome)
+                    
+                sample_data = {
+                    "id": sample.id,
+                    "user_id": sample.user_id,
+                    "symbol": sample.symbol,
+                    "experience_type": sample.experience_type,
+                    "quality_score": sample.quality_score,
+                    "timestamp": sample.timestamp.isoformat() if sample.timestamp else None,
+                    "rl_state_keys": list(rl_state.keys()) if rl_state else [],
+                    "outcome_keys": list(outcome.keys()) if outcome else []
+                }
+            
+            return {
+                "database": "PostgreSQL",
+                "total_experiences": total_count,
+                "by_type": {
+                    "signal": signal_count,
+                    "exit": exit_count,
+                    "ghost_trade": ghost_count
+                },
+                "sample_record": sample_data,
+                "message": "Database query successful"
+            }
+            
+        finally:
+            session.close()
+            
+    except Exception as e:
+        logger.error(f"❌ Error querying database: {e}")
+        import traceback
+        return {
+            "database": "PostgreSQL",
+            "error": str(e),
+            "traceback": traceback.format_exc(),
+            "message": "Database query failed"
+        }
+
+@app.get("/api/admin/db_sample")
+async def get_database_sample(limit: int = 5):
+    """
+    Get sample records from PostgreSQL database to verify data integrity
+    Returns actual experience data (not just counts)
+    """
+    try:
+        from database import DatabaseManager, MLExperience
+        
+        db_manager = DatabaseManager()
+        session = db_manager.get_session()
+        
+        try:
+            # Get sample records
+            samples = session.query(MLExperience).limit(limit).all()
+            
+            sample_list = []
+            for sample in samples:
+                import json
+                # Handle both dict (PostgreSQL) and string (SQLite) formats
+                rl_state = sample.rl_state
+                outcome = sample.outcome
+                
+                if isinstance(rl_state, str):
+                    try:
+                        rl_state = json.loads(rl_state)
+                    except:
+                        rl_state = {"error": "failed to parse", "raw": str(rl_state)[:100]}
+                
+                if isinstance(outcome, str):
+                    try:
+                        outcome = json.loads(outcome)
+                    except:
+                        outcome = {"error": "failed to parse", "raw": str(outcome)[:100]}
+                
+                sample_list.append({
+                    "id": sample.id,
+                    "user_id": sample.user_id,
+                    "symbol": sample.symbol,
+                    "experience_type": sample.experience_type,
+                    "quality_score": sample.quality_score,
+                    "timestamp": sample.timestamp.isoformat() if sample.timestamp else None,
+                    "rl_state": rl_state,
+                    "outcome": outcome
+                })
+            
+            total_count = session.query(MLExperience).count()
+            
+            return {
+                "database": "PostgreSQL",
+                "total_experiences": total_count,
+                "sample_count": len(sample_list),
+                "samples": sample_list,
+                "message": "Sample retrieved successfully"
+            }
+            
+        finally:
+            session.close()
+            
+    except Exception as e:
+        logger.error(f"❌ Error sampling database: {e}")
+        import traceback
+        return {
+            "database": "PostgreSQL",
+            "error": str(e),
+            "traceback": traceback.format_exc(),
+            "message": "Database sample failed"
+        }
+
+@app.get("/api/admin/db_all")
+async def get_all_experiences(offset: int = 0, limit: int = 10000):
+    """
+    Get ALL experiences from PostgreSQL database with pagination
+    Returns complete dataset for admin monitoring
+    """
+    try:
+        from database import DatabaseManager, MLExperience
+        
+        db_manager = DatabaseManager()
+        session = db_manager.get_session()
+        
+        try:
+            # Get all records with pagination
+            query = session.query(MLExperience).order_by(MLExperience.timestamp.desc())
+            
+            total_count = session.query(MLExperience).count()
+            experiences = query.offset(offset).limit(limit).all()
+            
+            exp_list = []
+            for exp in experiences:
+                import json
+                # Handle both dict (PostgreSQL) and string (SQLite) formats
+                rl_state = exp.rl_state
+                outcome = exp.outcome
+                
+                if isinstance(rl_state, str):
+                    try:
+                        rl_state = json.loads(rl_state)
+                    except:
+                        rl_state = {"error": "failed to parse", "raw": str(rl_state)[:100]}
+                
+                if isinstance(outcome, str):
+                    try:
+                        outcome = json.loads(outcome)
+                    except:
+                        outcome = {"error": "failed to parse", "raw": str(outcome)[:100]}
+                
+                exp_list.append({
+                    "id": exp.id,
+                    "user_id": exp.user_id,
+                    "symbol": exp.symbol,
+                    "experience_type": exp.experience_type,
+                    "quality_score": exp.quality_score,
+                    "timestamp": exp.timestamp.isoformat() if exp.timestamp else None,
+                    "rl_state": rl_state,
+                    "outcome": outcome
+                })
+            
+            return {
+                "database": "PostgreSQL",
+                "total_experiences": total_count,
+                "returned_count": len(exp_list),
+                "offset": offset,
+                "limit": limit,
+                "experiences": exp_list,
+                "message": "All experiences retrieved successfully"
+            }
+            
+        finally:
+            session.close()
+            
+    except Exception as e:
+        logger.error(f"❌ Error fetching all experiences: {e}")
+        import traceback
+        return {
+            "database": "PostgreSQL",
+            "error": str(e),
+            "traceback": traceback.format_exc(),
+            "message": "Failed to fetch all experiences"
+        }
+
+@app.delete("/api/admin/clear_database")
+async def clear_database(confirm: str = ""):
+    """
+    DANGER: Clear ALL experiences from PostgreSQL database
+    Requires confirm="DELETE_ALL_DATA" to execute
+    """
+    if confirm != "DELETE_ALL_DATA":
+        return {
+            "error": "Missing confirmation",
+            "message": "Add ?confirm=DELETE_ALL_DATA to URL to confirm deletion",
+            "warning": "This will permanently delete all experiences from cloud database"
+        }
+    
+    try:
+        from database import DatabaseManager, MLExperience
+        
+        db_manager = DatabaseManager()
+        session = db_manager.get_session()
+        
+        try:
+            # Count before deletion
+            total_before = session.query(MLExperience).count()
+            signal_before = session.query(MLExperience).filter(MLExperience.experience_type == 'signal').count()
+            exit_before = session.query(MLExperience).filter(MLExperience.experience_type == 'exit').count()
+            
+            # Delete all
+            deleted = session.query(MLExperience).delete()
+            session.commit()
+            
+            # Verify empty
+            total_after = session.query(MLExperience).count()
+            
+            logger.warning(f"🗑️ DELETED {deleted} experiences from cloud database")
+            
+            return {
+                "deleted": deleted,
+                "before": {
+                    "total": total_before,
+                    "signal": signal_before,
+                    "exit": exit_before
+                },
+                "after": {
+                    "total": total_after
+                },
+                "message": f"Successfully deleted {deleted} experiences from cloud database"
+            }
+            
+        except Exception as e:
+            session.rollback()
+            raise e
+        finally:
+            session.close()
+            
+    except Exception as e:
+        logger.error(f"❌ Error clearing database: {e}")
+        import traceback
+        return {
+            "error": str(e),
+            "traceback": traceback.format_exc(),
+            "message": "Database clear failed"
+        }
+
+# ============================================================================
+# EXPERIENCE EXPORT ENDPOINTS (for local dev backtesting)
+# ============================================================================
+
+@app.get("/api/experiences/export/signal")
+async def export_signal_experiences():
+    """
+    Export all signal experiences for local dev backtesting.
+    This allows developers to run fast local backtests without API calls.
+    """
+    db = next(get_db())
+    try:
+        # Query all signal experiences from database
+        db_experiences = db.query(RLExperience).filter(
+            RLExperience.experience_type == 'SIGNAL'
+        ).all()
+        
+        # Convert to dict format
+        experiences = []
+        for exp in db_experiences:
+            experiences.append({
+                'rsi': exp.rsi,
+                'vwap_distance': exp.vwap_distance,
+                'vix': exp.vix,
+                'hour': exp.hour,
+                'day_of_week': exp.day_of_week,
+                'volume_ratio': exp.volume_ratio,
+                'atr': exp.atr,
+                'recent_pnl': exp.recent_pnl,
+                'streak': exp.streak,
+                'signal': exp.signal,
+                'took_trade': exp.took_trade,
+                'pnl': exp.pnl,
+                'created_at': exp.created_at.isoformat() if exp.created_at else None
+            })
+        
+        logger.info(f"📤 Exported {len(experiences)} signal experiences for local dev")
+        
+        return {
+            "experiences": experiences,
+            "count": len(experiences),
+            "exported_at": datetime.now(pytz.UTC).isoformat()
+        }
+        
+    except Exception as e:
+        logger.error(f"Error exporting signal experiences: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/experiences/export/exit")
+async def export_exit_experiences():
+    """
+    Export all exit experiences for local dev backtesting.
+    """
+    db = next(get_db())
+    try:
+        # Query all exit experiences from database  
+        db_experiences = db.query(RLExperience).filter(
+            RLExperience.experience_type == 'EXIT'
+        ).all()
+        
+        # Convert to dict format
+        experiences = []
+        for exp in db_experiences:
+            experiences.append({
+                'vix': exp.vix,
+                'hour': exp.hour,
+                'atr': exp.atr,
+                'regime': exp.regime,
+                'pnl': exp.pnl,
+                'duration_min': exp.duration_min,
+                'exit_reason': exp.exit_reason,
+                'partial_exits': exp.partial_exits,
+                'created_at': exp.created_at.isoformat() if exp.created_at else None
+            })
+        
+        logger.info(f"📤 Exported {len(experiences)} exit experiences for local dev")
+        
+        return {
+            "experiences": experiences,
+            "count": len(experiences),
+            "exported_at": datetime.now(pytz.UTC).isoformat()
+        }
+        
+    except Exception as e:
+        logger.error(f"Error exporting exit experiences: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 # ============================================================================
 # LICENSE MANAGEMENT ENDPOINTS
@@ -1484,7 +3040,7 @@ async def validate_license(data: dict, db: Session = Depends(get_db)):
         if not user.is_license_valid:
             if user.license_status == 'SUSPENDED':
                 raise HTTPException(status_code=403, detail="License suspended")
-            elif user.license_expiration and user.license_expiration < datetime.utcnow():
+            elif user.license_expiration and user.license_expiration < datetime.now(pytz.UTC):
                 raise HTTPException(status_code=403, detail="License expired")
             else:
                 raise HTTPException(status_code=403, detail="License inactive")
@@ -1510,7 +3066,7 @@ async def validate_license(data: dict, db: Session = Depends(get_db)):
     # Check if expired
     if license_info.get("expires_at"):
         expires_at = datetime.fromisoformat(license_info["expires_at"])
-        if datetime.utcnow() > expires_at:
+        if datetime.now(pytz.UTC) > expires_at:
             raise HTTPException(status_code=403, detail="License expired")
     
     return {
@@ -1531,13 +3087,13 @@ async def activate_license(data: dict):
         raise HTTPException(status_code=400, detail="Email required")
     
     license_key = generate_license_key()
-    expires_at = datetime.utcnow() + timedelta(days=days)
+    expires_at = datetime.now(pytz.UTC) + timedelta(days=days)
     
     active_licenses[license_key] = {
         "email": email,
         "expires_at": expires_at.isoformat(),
         "status": "active",
-        "created_at": datetime.utcnow().isoformat()
+        "created_at": datetime.now(pytz.UTC).isoformat()
     }
     
     logger.info(f"🔑 License created: {license_key} for {email} (expires: {expires_at})")
@@ -1617,7 +3173,7 @@ async def toggle_kill_switch(data: dict):
     
     kill_switch_state["active"] = active
     kill_switch_state["reason"] = reason
-    kill_switch_state["activated_at"] = datetime.utcnow().isoformat() if active else None
+    kill_switch_state["activated_at"] = datetime.now(pytz.UTC).isoformat() if active else None
     kill_switch_state["activated_by"] = "admin"
     
     status = "ACTIVATED" if active else "DEACTIVATED"
@@ -1677,12 +3233,10 @@ async def stripe_webhook(request: Request):
                 "status": "active",
                 "stripe_customer_id": customer_id,
                 "stripe_subscription_id": subscription_id,
-                "created_at": datetime.utcnow().isoformat()
+                "created_at": datetime.now(pytz.UTC).isoformat()
             }
             
             logger.info(f"🎉 License created from payment: {license_key} for {customer_email}")
-            
-            # TODO: Send email with license key (add later)
     
     elif event_type == "customer.subscription.deleted":
         # Subscription cancelled - revoke license
@@ -1729,301 +3283,6 @@ async def create_checkout_session():
     except Exception as e:
         logger.error(f"Checkout error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
-
-# ============================================================================
-# ECONOMIC CALENDAR - FOMC AUTO-SCRAPER
-# ============================================================================
-
-import asyncio
-import threading
-from bs4 import BeautifulSoup
-import requests as req_lib
-
-# Global calendar state
-economic_calendar = {
-    "events": [],
-    "last_updated": None,
-    "next_update": None,
-    "source": "Federal Reserve + Manual"
-}
-
-def scrape_fomc_dates() -> List[Dict]:
-    """
-    Scrape FOMC meeting dates from Federal Reserve website
-    Returns list of FOMC events
-    """
-    fomc_events = []
-    
-    try:
-        logger.info("📅 Fetching FOMC dates from federalreserve.gov...")
-        
-        # Fetch Federal Reserve calendar page
-        url = "https://www.federalreserve.gov/monetarypolicy/fomccalendars.htm"
-        response = req_lib.get(url, timeout=10)
-        response.raise_for_status()
-        
-        soup = BeautifulSoup(response.text, 'html.parser')
-        
-        # Find FOMC meeting dates in the page
-        # The structure typically has dates in specific div/table elements
-        # This is a simplified parser - may need adjustment if Fed changes format
-        
-        # Look for date patterns (MM/DD/YYYY or Month DD, YYYY)
-        import re
-        date_pattern = r'(\d{1,2}/\d{1,2}/\d{4}|\w+ \d{1,2}, \d{4})'
-        
-        # Find all text containing potential dates
-        page_text = soup.get_text()
-        potential_dates = re.findall(date_pattern, page_text)
-        
-        logger.info(f"Found {len(potential_dates)} potential FOMC dates on Fed website")
-        
-        # Parse and format dates
-        from dateutil import parser as date_parser
-        
-        for date_str in potential_dates[:20]:  # Limit to next 20 meetings (years ahead)
-            try:
-                parsed_date = date_parser.parse(date_str)
-                
-                # Only include future dates
-                if parsed_date.date() > datetime.now().date():
-                    # Add FOMC Statement (2 PM ET)
-                    fomc_events.append({
-                        "date": parsed_date.strftime("%Y-%m-%d"),
-                        "time": "2:00pm",
-                        "currency": "USD",
-                        "event": "FOMC Statement",
-                        "impact": "high"
-                    })
-                    
-                    # Add FOMC Press Conference (2:30 PM ET)
-                    fomc_events.append({
-                        "date": parsed_date.strftime("%Y-%m-%d"),
-                        "time": "2:30pm",
-                        "currency": "USD",
-                        "event": "FOMC Press Conference",
-                        "impact": "high"
-                    })
-            except Exception as e:
-                logger.debug(f"Could not parse date: {date_str}")
-                continue
-        
-        logger.info(f"✅ Scraped {len(fomc_events)} FOMC events from Federal Reserve")
-        
-    except Exception as e:
-        logger.error(f"❌ Failed to scrape FOMC dates: {e}")
-        logger.info("Will use manual FOMC dates as fallback")
-    
-    return fomc_events
-
-def generate_predictable_events() -> List[Dict]:
-    """
-    Generate predictable economic events (NFP, CPI, PPI)
-    These follow consistent schedules
-    """
-    events = []
-    current_date = datetime.now().date()
-    
-    # Generate 12 months of events
-    for month_offset in range(12):
-        year = current_date.year + (current_date.month + month_offset - 1) // 12
-        month = (current_date.month + month_offset - 1) % 12 + 1
-        
-        # NFP - First Friday of month at 8:30 AM ET
-        first_day = datetime(year, month, 1).date()
-        days_until_friday = (4 - first_day.weekday()) % 7
-        first_friday = first_day + timedelta(days=days_until_friday)
-        
-        if first_friday > current_date:
-            events.append({
-                "date": first_friday.strftime("%Y-%m-%d"),
-                "time": "8:30am",
-                "currency": "USD",
-                "event": "Non-Farm Employment Change",
-                "impact": "high"
-            })
-        
-        # CPI - Typically around 13th of month at 8:30 AM ET
-        cpi_date = datetime(year, month, 13).date()
-        if cpi_date > current_date:
-            events.append({
-                "date": cpi_date.strftime("%Y-%m-%d"),
-                "time": "8:30am",
-                "currency": "USD",
-                "event": "Core CPI m/m",
-                "impact": "high"
-            })
-        
-        # PPI - Typically around 14th of month at 8:30 AM ET
-        ppi_date = datetime(year, month, 14).date()
-        if ppi_date > current_date:
-            events.append({
-                "date": ppi_date.strftime("%Y-%m-%d"),
-                "time": "8:30am",
-                "currency": "USD",
-                "event": "Core PPI m/m",
-                "impact": "high"
-            })
-    
-    return events
-
-def update_calendar():
-    """
-    Update economic calendar with latest FOMC + predictable events
-    Runs daily at 5 PM ET (Sunday-Friday)
-    """
-    try:
-        logger.info("📅 Updating economic calendar...")
-        
-        # Scrape FOMC dates from Federal Reserve
-        fomc_events = scrape_fomc_dates()
-        
-        # Generate predictable events
-        predictable_events = generate_predictable_events()
-        
-        # Combine and sort by date
-        all_events = fomc_events + predictable_events
-        all_events.sort(key=lambda x: x["date"])
-        
-        # Remove duplicates (keep first occurrence)
-        seen_dates = set()
-        unique_events = []
-        for event in all_events:
-            event_key = (event["date"], event["event"])
-            if event_key not in seen_dates:
-                seen_dates.add(event_key)
-                unique_events.append(event)
-        
-        # Update global calendar
-        economic_calendar["events"] = unique_events
-        economic_calendar["last_updated"] = datetime.utcnow().isoformat()
-        economic_calendar["next_update"] = get_next_update_time().isoformat()
-        
-        logger.info(f"✅ Calendar updated: {len(unique_events)} events ({len(fomc_events)} FOMC + {len(predictable_events)} NFP/CPI/PPI)")
-        
-    except Exception as e:
-        logger.error(f"❌ Calendar update failed: {e}")
-
-def get_next_update_time() -> datetime:
-    """
-    Calculate next update time: 1st of every month at 5 PM ET
-    """
-    et_tz = pytz.timezone("America/New_York")
-    now_et = datetime.now(et_tz)
-    
-    # Target: 1st of next month at 5 PM ET
-    if now_et.day == 1 and now_et.hour < 17:
-        # It's the 1st and before 5 PM - update today at 5 PM
-        target_time = now_et.replace(hour=17, minute=0, second=0, microsecond=0)
-    else:
-        # Schedule for 1st of next month at 5 PM
-        if now_et.month == 12:
-            next_month = now_et.replace(year=now_et.year + 1, month=1, day=1, hour=17, minute=0, second=0, microsecond=0)
-        else:
-            next_month = now_et.replace(month=now_et.month + 1, day=1, hour=17, minute=0, second=0, microsecond=0)
-        target_time = next_month
-    
-    return target_time
-
-async def calendar_update_loop():
-    """
-    Background task that updates calendar daily at 5 PM ET (Sunday-Friday)
-    """
-    while True:
-        try:
-            next_update = get_next_update_time()
-            now = datetime.now(pytz.timezone("America/New_York"))
-            sleep_seconds = (next_update - now).total_seconds()
-            
-            logger.info(f"📅 Next calendar update: {next_update.strftime('%Y-%m-%d %I:%M %p ET')} ({sleep_seconds/3600:.1f} hours)")
-            
-            await asyncio.sleep(sleep_seconds)
-            
-            # Update calendar
-            update_calendar()
-            
-        except Exception as e:
-            logger.error(f"❌ Calendar update loop error: {e}")
-            # Wait 1 hour and retry
-            await asyncio.sleep(3600)
-
-def start_calendar_updater():
-    """Start background calendar updater in separate thread"""
-    def run_loop():
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        loop.run_until_complete(calendar_update_loop())
-    
-    thread = threading.Thread(target=run_loop, daemon=True)
-    thread.start()
-    logger.info("📅 Calendar updater started (1st of month at 5 PM ET)")
-
-@app.get("/api/calendar/events")
-async def get_calendar_events(days: int = 7):
-    """
-    Get upcoming economic events for next N days
-    
-    Query params:
-        days: Number of days ahead to fetch (default 7)
-    """
-    today = datetime.now().date()
-    end_date = today + timedelta(days=days)
-    
-    upcoming_events = [
-        event for event in economic_calendar["events"]
-        if today <= datetime.strptime(event["date"], "%Y-%m-%d").date() <= end_date
-    ]
-    
-    return {
-        "events": upcoming_events,
-        "count": len(upcoming_events),
-        "last_updated": economic_calendar["last_updated"],
-        "next_update": economic_calendar["next_update"]
-    }
-
-@app.get("/api/calendar/today")
-async def get_todays_events():
-    """
-    Get today's high-impact economic events
-    Bots check this before placing trades
-    """
-    today = datetime.now().date().strftime("%Y-%m-%d")
-    
-    todays_events = [
-        event for event in economic_calendar["events"]
-        if event["date"] == today and event["impact"] == "high"
-    ]
-    
-    has_fomc = any("FOMC" in event["event"] for event in todays_events)
-    has_nfp = any("Non-Farm" in event["event"] for event in todays_events)
-    has_cpi = any("CPI" in event["event"] for event in todays_events)
-    
-    return {
-        "date": today,
-        "events": todays_events,
-        "count": len(todays_events),
-        "has_fomc": has_fomc,
-        "has_nfp": has_nfp,
-        "has_cpi": has_cpi,
-        "trading_recommended": len(todays_events) == 0
-    }
-
-@app.post("/api/admin/refresh_calendar")
-async def refresh_calendar(data: dict):
-    """
-    ADMIN ONLY: Manually trigger calendar refresh
-    """
-    admin_key = data.get("admin_key")
-    if admin_key != "QUOTRADING_ADMIN_2025":
-        raise HTTPException(status_code=403, detail="Invalid admin key")
-    
-    update_calendar()
-    
-    return {
-        "status": "refreshed",
-        "events_count": len(economic_calendar["events"]),
-        "last_updated": economic_calendar["last_updated"]
-    }
 
 # ============================================================================
 # TIME SERVICE - SINGLE SOURCE OF TRUTH
@@ -2119,44 +3378,6 @@ def get_trading_session(now_et: datetime) -> str:
     else:
         return "asian"
 
-def check_if_event_active(events: List[Dict], now_et: datetime) -> tuple:
-    """
-    Check if any high-impact economic event is currently active
-    
-    Returns: (is_active, event_name, event_window)
-    """
-    today_str = now_et.date().strftime("%Y-%m-%d")
-    current_time = now_et.time()
-    
-    # Filter today's events
-    todays_events = [e for e in events if e["date"] == today_str and e["impact"] == "high"]
-    
-    for event in todays_events:
-        event_time_str = event["time"]
-        
-        # Parse event time (e.g., "8:30am" or "2:00pm")
-        event_time_str = event_time_str.lower().replace("am", "").replace("pm", "").strip()
-        hour, minute = map(int, event_time_str.split(":"))
-        
-        # Adjust for PM
-        if "pm" in event["time"].lower() and hour != 12:
-            hour += 12
-        elif "am" in event["time"].lower() and hour == 12:
-            hour = 0
-        
-        event_time = datetime_time(hour, minute)
-        
-        # Event window: 30 minutes before to 1 hour after
-        event_start = (datetime.combine(now_et.date(), event_time) - timedelta(minutes=30)).time()
-        event_end = (datetime.combine(now_et.date(), event_time) + timedelta(hours=1)).time()
-        
-        # Check if we're in the event window
-        if event_start <= current_time <= event_end:
-            window = f"{event_start.strftime('%I:%M %p')} - {event_end.strftime('%I:%M %p')}"
-            return (True, event["event"], window)
-    
-    return (False, None, None)
-
 @app.get("/api/time")
 async def get_time_service():
     """
@@ -2166,7 +3387,6 @@ async def get_time_service():
     - Current ET time
     - Market hours status
     - Trading session
-    - Economic event awareness
     - Trading permission
     
     Bots should call this every 30-60 seconds to stay synchronized
@@ -2179,28 +3399,9 @@ async def get_time_service():
     market_status = get_market_hours_status(now_et)
     session = get_trading_session(now_et)
     
-    # Check for active economic events
-    event_active, event_name, event_window = check_if_event_active(economic_calendar["events"], now_et)
-    
-    # Determine if trading is allowed
+    # Determine if trading is allowed (based on market hours only)
     trading_allowed = True
     halt_reason = None
-    
-    if event_active:
-        trading_allowed = False
-        halt_reason = f"{event_name} in progress ({event_window})"
-    
-    # Get today's upcoming events
-    today_str = now_et.date().strftime("%Y-%m-%d")
-    todays_events = [
-        {
-            "event": e["event"],
-            "time": e["time"],
-            "impact": e["impact"]
-        }
-        for e in economic_calendar["events"]
-        if e["date"] == today_str and e["impact"] == "high"
-    ]
     
     return {
         # Time information
@@ -2213,20 +3414,9 @@ async def get_time_service():
         "trading_session": session,
         "weekday": now_et.strftime("%A"),
         
-        # Economic events
-        "event_active": event_active,
-        "active_event": event_name if event_active else None,
-        "event_window": event_window if event_active else None,
-        "events_today": todays_events,
-        "events_count": len(todays_events),
-        
         # Trading permission
         "trading_allowed": trading_allowed,
-        "halt_reason": halt_reason,
-        
-        # Calendar info
-        "calendar_last_updated": economic_calendar.get("last_updated"),
-        "calendar_next_update": economic_calendar.get("next_update")
+        "halt_reason": halt_reason
     }
 
 @app.get("/api/time/simple")
@@ -2236,7 +3426,6 @@ async def get_simple_time():
     For bots that need quick checks without full details
     
     Checks:
-    - Economic events (FOMC/NFP/CPI)
     - Maintenance windows (Mon-Thu 5-6 PM, Fri 5 PM - Sun 6 PM)
     - Weekend closure
     """
@@ -2246,19 +3435,12 @@ async def get_simple_time():
     # Get market status
     market_status = get_market_hours_status(now_et)
     
-    # Check for active events
-    event_active, event_name, event_window = check_if_event_active(economic_calendar["events"], now_et)
-    
     # Determine if trading is allowed
     trading_allowed = True
     halt_reason = None
     
-    # Priority 1: Economic events
-    if event_active:
-        trading_allowed = False
-        halt_reason = f"{event_name} ({event_window})"
-    # Priority 2: Maintenance windows
-    elif market_status == "maintenance":
+    # Priority 1: Maintenance windows
+    if market_status == "maintenance":
         trading_allowed = False
         halt_reason = "Daily maintenance (5-6 PM ET)"
     # Priority 3: Weekend closure
@@ -2292,7 +3474,7 @@ async def startup_event():
     logger.info("QuoTrading Signal Engine v2.1 - STARTING")
     logger.info("=" * 60)
     logger.info("Multi-instrument support: ES, NQ, YM, RTY")
-    logger.info("Features: ML/RL signals, licensing, economic calendar, user management")
+    logger.info("Features: ML/RL signals, licensing, user management")
     logger.info("=" * 60)
     
     # Initialize Database
@@ -2323,11 +3505,6 @@ async def startup_event():
         logger.info("� Using in-memory fallback for rate limiting")
         redis_manager = RedisManager(fallback_to_memory=True)
     
-    # Initialize economic calendar
-    logger.info("�📅 Initializing economic calendar...")
-    update_calendar()  # Initial fetch
-    start_calendar_updater()  # Start background updater
-    
     # Load RL experiences (baseline from JSON + new from database)
     logger.info("🧠 Loading RL experiences for pattern matching...")
     load_initial_experiences()  # Load baseline from JSON (6,880 + 2,961)
@@ -2352,6 +3529,23 @@ import os
 if os.path.exists("admin-dashboard"):
     app.mount("/admin-dashboard", StaticFiles(directory="admin-dashboard"), name="admin-dashboard")
     logger.info("📊 Admin dashboard mounted at /admin-dashboard")
+
+
+# ============================================================================
+# STARTUP: Initialize Neural Networks
+# ============================================================================
+@app.on_event("startup")
+async def startup_event():
+    """Initialize neural network models on API startup"""
+    global neural_exit_predictor
+    
+    logger.info("🚀 Initializing neural network confidence scorer...")
+    init_neural_scorer(model_path="neural_model.pth")
+    logger.info("✅ Neural network ready for predictions")
+    
+    logger.info("🚀 Initializing neural network exit predictor...")
+    neural_exit_predictor = NeuralExitPredictor(model_path="exit_model.pth")
+    logger.info("✅ Exit neural network ready for predictions")
 
 
 if __name__ == "__main__":

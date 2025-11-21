@@ -9,11 +9,33 @@ from typing import Dict, Any, Optional
 from datetime import time
 from dataclasses import dataclass, field
 import pytz
+from pathlib import Path
+
+# Load .env file if it exists
+try:
+    from dotenv import load_dotenv
+    # Look for .env in the project root (parent of src/)
+    env_path = Path(__file__).parent.parent / '.env'
+    if env_path.exists():
+        load_dotenv(env_path)
+        print(f"[OK] Loaded configuration from {env_path}")
+    else:
+        print(f"[WARN] No .env file found at {env_path}")
+except ImportError:
+    print("[WARN] python-dotenv not installed, using system environment variables only")
 
 
 @dataclass
 class BotConfiguration:
-    """Type-safe configuration for the VWAP Bounce Bot."""
+    """
+    Type-safe configuration for the VWAP Bounce Bot.
+    
+    IMPORTANT: These are BASELINE values for neural network systems.
+    - Signal Neural Network (data/neural_model.pth) learns which signals to take
+    - Exit Neural Network (data/exit_model.pth) predicts optimal exit parameters
+    - These config values are only used as fallbacks or starting points
+    - The actual trading logic is controlled by trained neural networks
+    """
     
     # Default account size constant
     DEFAULT_ACCOUNT_SIZE: float = 50000.0
@@ -21,7 +43,7 @@ class BotConfiguration:
     # Instrument Configuration
     instrument: str = "ES"  # Single instrument (legacy support)
     instruments: list = field(default_factory=lambda: ["ES"])  # Multi-symbol support
-    timezone: str = "America/New_York"
+    timezone: str = "UTC"  # All times in UTC (ES futures schedule: Sunday 23:00 → Friday 21:00, maintenance 21:00-22:00 UTC daily)
     
     # Broker Configuration
     broker: str = ""  # USER CONFIGURABLE - TopStep, Tradovate, Rithmic, NinjaTrader, etc.
@@ -29,7 +51,6 @@ class BotConfiguration:
     username: str = ""  # Broker username/email
     
     # Trading Parameters
-    risk_per_trade: float = 0.012  # 1.2% of account per trade (increased for more profit)
     max_contracts: int = 3  # USER CONFIGURABLE - maximum contracts allowed (user sets their own limit)
     max_trades_per_day: int = 9999  # USER CONFIGURABLE - customers can adjust (9999 = unlimited)
     risk_reward_ratio: float = 2.0  # Realistic 2:1 for mean reversion with tight stops
@@ -39,26 +60,26 @@ class BotConfiguration:
     commission_per_contract: float = 2.50  # Round-turn commission (adjust to your broker)
         # Total cost per round-trip: ~3 ticks slippage + $2.50 commission = ~$42.50/contract
     
-    # VWAP bands (standard deviation multipliers) - ITERATION 3 (PROVEN WINNER!)
+    # VWAP bands (standard deviation multipliers) - Neural network baseline values
     vwap_std_dev_1: float = 2.5  # Warning zone (potential reversal area)
-    vwap_std_dev_2: float = 2.1  # Entry zone - Iteration 3
-    vwap_std_dev_3: float = 3.7  # Exit/stop zone - Iteration 3
+    vwap_std_dev_2: float = 2.1  # Entry zone - baseline for signal detection
+    vwap_std_dev_3: float = 3.7  # Exit/stop zone - baseline for exits
     
     # Trend Filter Parameters
     trend_ema_period: int = 21  # Optimizer best
     trend_threshold: float = 0.0001
     
-    # Technical Filters - ITERATION 3
-    use_trend_filter: bool = False  # Trend filter OFF (optimizer found better without)
+    # Technical Filters - Neural network learned settings
+    use_trend_filter: bool = False  # Trend filter OFF (neural network learned better without)
     use_rsi_filter: bool = True
-    use_vwap_direction_filter: bool = True  # VWAP direction filter ON (optimizer confirmed)
+    use_vwap_direction_filter: bool = True  # VWAP direction filter ON (neural network validated)
     use_volume_filter: bool = False  # Don't use volume filter - blocks overnight trades
     use_macd_filter: bool = False
     
-    # RSI Settings - ITERATION 3 (Conservative, Selective)
-    rsi_period: int = 10  # Iteration 3
-    rsi_oversold: int = 35  # Iteration 3 - selective entry
-    rsi_overbought: int = 65  # Iteration 3 - selective entry
+    # RSI Settings - Neural network baseline (conservative, selective)
+    rsi_period: int = 10  # Fast RSI - baseline for neural network features
+    rsi_oversold: int = 35  # Baseline - neural network learns when to override
+    rsi_overbought: int = 65  # Baseline - neural network learns when to override
     
     # MACD - Keep for reference but disabled
     macd_fast: int = 12
@@ -69,18 +90,22 @@ class BotConfiguration:
     volume_spike_multiplier: float = 1.5
     volume_lookback: int = 20
     
-    # Time Windows (all in Eastern Time)
-    market_open_time: time = field(default_factory=lambda: time(9, 30))
-    entry_start_time: time = field(default_factory=lambda: time(18, 0))  # 6 PM ET - ES futures session opens
-    entry_end_time: time = field(default_factory=lambda: time(16, 55))  # 4:55 PM ET next day - before maintenance
-    flatten_time: time = field(default_factory=lambda: time(16, 45))  # 4:45 PM ET - 15 min before maintenance
-    forced_flatten_time: time = field(default_factory=lambda: time(17, 0))  # 5:00 PM ET - maintenance starts
-    shutdown_time: time = field(default_factory=lambda: time(18, 0))  # 6:00 PM ET - after maintenance, session restarts
-    vwap_reset_time: time = field(default_factory=lambda: time(18, 0))  # 6 PM ET - futures daily session reset
+    # Time Windows (all in UTC - ES futures schedule)
+    # ES Schedule: Sunday 23:00 → Friday 21:00 UTC, maintenance 21:00-22:00 UTC daily
+    market_open_time: time = field(default_factory=lambda: time(9, 30))  # Legacy - not used for futures
+    entry_start_time: time = field(default_factory=lambda: time(23, 0))  # 23:00 UTC (Sunday open)
+    entry_end_time: time = field(default_factory=lambda: time(20, 55))  # 20:55 UTC (before maintenance)
+    flatten_time: time = field(default_factory=lambda: time(20, 45))  # 20:45 UTC (15 min before maintenance)
+    forced_flatten_time: time = field(default_factory=lambda: time(21, 0))  # 21:00 UTC (maintenance starts)
+    shutdown_time: time = field(default_factory=lambda: time(22, 0))  # 22:00 UTC (after maintenance, session resumes)
+    vwap_reset_time: time = field(default_factory=lambda: time(23, 0))  # 23:00 UTC (Sunday session reset)
+    
+    # Entry Cutoff - Stop new entries (can still hold existing positions)
+    daily_entry_cutoff: time = field(default_factory=lambda: time(20, 0))  # Stop entries 20:00 UTC (1 hr before maintenance)
     
     # Friday Special Rules - Close before weekend
-    friday_entry_cutoff: time = field(default_factory=lambda: time(16, 30))  # Stop entries 4:30 PM Friday
-    friday_close_target: time = field(default_factory=lambda: time(16, 45))  # Flatten by 4:45 PM Friday
+    friday_entry_cutoff: time = field(default_factory=lambda: time(20, 30))  # Stop entries 20:30 UTC Friday
+    friday_close_target: time = field(default_factory=lambda: time(20, 45))  # Flatten by 20:45 UTC Friday
     
     # Safety Parameters - USER CONFIGURABLE
     daily_loss_limit: float = 1000.0  # USER CONFIGURABLE - max $ loss per day (or auto-calculated)
@@ -232,17 +257,76 @@ class BotConfiguration:
             "daily_loss_limit": self.daily_loss_limit,
             "max_contracts": self.max_contracts,
             "max_trades_per_day": self.max_trades_per_day,
-            "risk_per_trade": self.risk_per_trade,
             "risk_reward_ratio": self.risk_reward_ratio,
         }
     
     # Removed: validate_topstep_compliance() - broker-specific logic not needed
     
-    # ATR-Based Dynamic Risk Management - ITERATION 3 (PROVEN WINNER!)
-    use_atr_stops: bool = False  # ATR stops disabled - using proven 11-tick fixed stops
-    atr_period: int = 14  # ATR calculation period
-    stop_loss_atr_multiplier: float = 3.6  # Iteration 3 (tight stops)
-    profit_target_atr_multiplier: float = 4.75  # Iteration 3 (solid targets)
+    def get_topstep_max_contracts(self, account_balance: float) -> int:
+        """
+        Get TopStep's maximum allowed contracts based on account size.
+        
+        TopStep Rules (same for evaluation and funded accounts):
+        - $150K+ account: Max 15 contracts
+        - $100K account: Max 10 contracts  
+        - $50K account: Max 5 contracts
+        - Under $50K: Max 3 contracts (smaller eval accounts)
+        
+        Args:
+            account_balance: Current account balance
+            
+        Returns:
+            Maximum contracts allowed by TopStep rules
+        """
+        if account_balance >= 150000:
+            return 15
+        elif account_balance >= 100000:
+            return 10
+        elif account_balance >= 50000:
+            return 5
+        else:
+            # Under $50K (e.g., $25K evaluation accounts)
+            return 3
+    
+    def validate_topstep_contract_limit(self, account_balance: float, logger=None) -> bool:
+        """
+        Validate that max_contracts doesn't exceed TopStep's limits.
+        Called when user changes max_contracts in GUI.
+        
+        Args:
+            account_balance: Current account balance
+            logger: Optional logger for warnings
+            
+        Returns:
+            True if valid, False if exceeds TopStep limits
+        """
+        topstep_max = self.get_topstep_max_contracts(account_balance)
+        
+        if self.max_contracts > topstep_max:
+            if logger:
+                logger.warning("=" * 80)
+                logger.warning(f"[TOPSTEP LIMIT EXCEEDED]")
+                logger.warning(f"Account Balance: ${account_balance:,.2f}")
+                logger.warning(f"Your Setting: {self.max_contracts} contracts")
+                logger.warning(f"TopStep Max: {topstep_max} contracts")
+                logger.warning("")
+                logger.warning("TopStep Rules:")
+                logger.warning("  $150K+ account → Max 15 contracts")
+                logger.warning("  $100K account → Max 10 contracts")
+                logger.warning("  $50K account → Max 5 contracts")
+                logger.warning("  Under $50K → Max 3 contracts")
+                logger.warning("")
+                logger.warning(f"[ACTION REQUIRED] Reduce max_contracts to {topstep_max} or below")
+                logger.warning("=" * 80)
+            return False
+        
+        return True
+    
+    # ATR-Based Dynamic Risk Management - Neural network baseline values
+    use_atr_stops: bool = False  # ATR stops disabled - exit neural network manages stops
+    atr_period: int = 14  # ATR calculation period (feature for neural networks)
+    stop_loss_atr_multiplier: float = 3.6  # Baseline - exit neural network adjusts dynamically
+    profit_target_atr_multiplier: float = 4.75  # Baseline - exit neural network learns optimal targets
     
     # Instrument Specifications
     tick_size: float = 0.25
@@ -288,31 +372,31 @@ class BotConfiguration:
     adaptive_regime_detection: bool = True  # Adjust for trending vs choppy markets
     adaptive_performance_based: bool = True  # Adapt based on trade performance
     
-    # Breakeven Protection - ITERATION 3 (PROVEN WINNER!)
-    breakeven_enabled: bool = True  # ENABLED - Adaptive system will adjust dynamically
-    breakeven_profit_threshold_ticks: int = 9  # Iteration 3 - proven optimal
-    breakeven_stop_offset_ticks: int = 1  # Baseline (adaptive adjusts)
+    # Breakeven Protection - Neural network baseline values
+    breakeven_enabled: bool = True  # ENABLED - Exit neural network adjusts dynamically
+    breakeven_profit_threshold_ticks: int = 9  # Baseline - exit neural network learns optimal value
+    breakeven_stop_offset_ticks: int = 1  # Baseline - exit neural network adjusts per trade
     
-    # Partial Exits (baseline - adaptive system adjusts R-multiples)
+    # Partial Exits (baseline - exit neural network adjusts R-multiples dynamically)
     partial_exits_enabled: bool = True  # ENABLED - Scale out at targets
     partial_exit_1_percentage: float = 0.50  # 50% exit at first level
-    partial_exit_1_r_multiple: float = 2.0  # Exit at 2.0R (adaptive: 1.4-3.0)
+    partial_exit_1_r_multiple: float = 2.0  # Baseline 2.0R (neural network adjusts: 1.4-3.0)
     partial_exit_2_percentage: float = 0.30  # 30% exit at second level
-    partial_exit_2_r_multiple: float = 3.0  # Exit at 3.0R (adaptive: 2.1-4.5)
+    partial_exit_2_r_multiple: float = 3.0  # Baseline 3.0R (neural network adjusts: 2.1-4.5)
     partial_exit_3_percentage: float = 0.20  # 20% exit at third level
-    partial_exit_3_r_multiple: float = 5.0  # Exit at 5.0R
+    partial_exit_3_r_multiple: float = 5.0  # Baseline 5.0R (neural network adjusts dynamically)
     
     # Reinforcement Learning Parameters
     # RL ENABLED - Learning which signals to trust from experience
     rl_enabled: bool = True  # ENABLED - RL layer learns signal quality
-    rl_exploration_rate: float = 0.30  # 30% exploration (random decisions)
-    rl_min_exploration_rate: float = 0.05  # Minimum exploration after decay
+    rl_exploration_rate: float = 0.0  # NO exploration in live trading (use learned params only)
+    rl_min_exploration_rate: float = 0.0  # No minimum exploration in production
     rl_exploration_decay: float = 0.995  # Decay rate per signal
     rl_confidence_threshold: float = 0.5  # Minimum confidence to take signal (USER CONFIGURABLE via GUI)
     rl_min_contracts: int = 1  # Minimum contracts (low confidence)
     rl_medium_contracts: int = 2  # Medium contracts (moderate confidence)
     rl_max_contracts: int = 3  # Maximum contracts (high confidence)
-    rl_experience_file: str = "data/signal_experience.json"  # Where to save learning
+    rl_experience_file: str = "data/local_experiences/signal_experiences_v2.json"  # Where to save learning
     rl_save_frequency: int = 5  # Save experiences every N trades
     
     # Dynamic AI Features (USER CONFIGURABLE via GUI)
@@ -334,9 +418,6 @@ class BotConfiguration:
         warnings = []
         
         # Validate risk parameters
-        if not 0 < self.risk_per_trade <= 1:
-            errors.append(f"risk_per_trade must be between 0 and 1, got {self.risk_per_trade}")
-        
         if self.max_contracts <= 0:
             errors.append(f"max_contracts must be positive, got {self.max_contracts}")
         
@@ -409,8 +490,8 @@ class BotConfiguration:
         return {
             "broker": self.broker,
             "instrument": self.instrument,
+            "instruments": self.instruments,  # Multi-symbol support
             "timezone": self.timezone,
-            "risk_per_trade": self.risk_per_trade,
             "max_contracts": self.max_contracts,
             "max_trades_per_day": self.max_trades_per_day,
             "risk_reward_ratio": self.risk_reward_ratio,
@@ -441,6 +522,7 @@ class BotConfiguration:
             "forced_flatten_time": self.forced_flatten_time,
             "shutdown_time": self.shutdown_time,
             "vwap_reset_time": self.vwap_reset_time,
+            "daily_entry_cutoff": self.daily_entry_cutoff,
             "friday_entry_cutoff": self.friday_entry_cutoff,
             "friday_close_target": self.friday_close_target,
             "daily_loss_limit": self.daily_loss_limit,
@@ -503,9 +585,7 @@ def load_from_env() -> BotConfiguration:
     if os.getenv("BOT_TIMEZONE"):
         config.timezone = os.getenv("BOT_TIMEZONE")
     
-    if os.getenv("BOT_RISK_PER_TRADE"):
-        config.risk_per_trade = float(os.getenv("BOT_RISK_PER_TRADE"))
-    
+    # Environment variable overrides (removed risk_per_trade)
     if os.getenv("BOT_MAX_CONTRACTS"):
         config.max_contracts = int(os.getenv("BOT_MAX_CONTRACTS"))
     
@@ -628,6 +708,10 @@ def get_development_config() -> BotConfiguration:
         import json
         with open(config_file, 'r') as f:
             json_config = json.load(f)
+            # Map "symbols" to "instruments" for multi-symbol support
+            if "symbols" in json_config and json_config["symbols"]:
+                config.instruments = json_config["symbols"]
+                config.instrument = config.instruments[0]  # First symbol is primary
             # Update config with JSON values
             for key, value in json_config.items():
                 if hasattr(config, key):
@@ -648,6 +732,10 @@ def get_staging_config() -> BotConfiguration:
         import json
         with open(config_file, 'r') as f:
             json_config = json.load(f)
+            # Map "symbols" to "instruments" for multi-symbol support
+            if "symbols" in json_config and json_config["symbols"]:
+                config.instruments = json_config["symbols"]
+                config.instrument = config.instruments[0]  # First symbol is primary
             # Update config with JSON values
             for key, value in json_config.items():
                 if hasattr(config, key):
@@ -668,6 +756,10 @@ def get_production_config() -> BotConfiguration:
         import json
         with open(config_file, 'r') as f:
             json_config = json.load(f)
+            # Map "symbols" to "instruments" for multi-symbol support
+            if "symbols" in json_config and json_config["symbols"]:
+                config.instruments = json_config["symbols"]
+                config.instrument = config.instruments[0]  # First symbol is primary
             # Update config with JSON values
             for key, value in json_config.items():
                 if hasattr(config, key):
@@ -681,9 +773,14 @@ def load_config(environment: Optional[str] = None, backtest_mode: bool = False) 
     """
     Load configuration based on environment.
     
-    Priority:
+    Priority (for live bot):
+    1. config.json (GUI user settings) - HIGHEST
+    2. .env (broker credentials only) - For API tokens, URLs, etc.
+    3. config.py (default values) - LOWEST
+    
+    Priority (for backtest):
     1. Environment variables (highest)
-    2. Environment-specific config
+    2. config.json
     3. Default config (lowest)
     
     Args:
@@ -701,7 +798,7 @@ def load_config(environment: Optional[str] = None, backtest_mode: bool = False) 
     if environment is None:
         environment = os.getenv("BOT_ENVIRONMENT", "development")
     
-    # Load base config for environment
+    # Load base config for environment (includes config.json)
     if environment == "production":
         config = get_production_config()
     elif environment == "staging":
@@ -712,71 +809,43 @@ def load_config(environment: Optional[str] = None, backtest_mode: bool = False) 
     # Set backtest mode
     config.backtest_mode = backtest_mode
     
-    # Override with environment variables
-    env_config = load_from_env()
+    # Override ONLY CREDENTIALS from environment variables
+    # Live bot uses GUI settings (config.json), NOT .env for trading parameters
     
-    # Merge configurations (env vars take precedence)
-    # We need to check which env vars were actually set, not just compare to defaults
-    # Load environment variables again to check which ones are set
-    env_vars_set = set()
-    
-    # Check which environment variables are actually set
-    if os.getenv("BOT_INSTRUMENTS") or os.getenv("BOT_INSTRUMENT"):
-        env_vars_set.add("instruments")
-        env_vars_set.add("instrument")
-    if os.getenv("BOT_TIMEZONE"):
-        env_vars_set.add("timezone")
-    if os.getenv("BOT_RISK_PER_TRADE"):
-        env_vars_set.add("risk_per_trade")
-    if os.getenv("BOT_MAX_CONTRACTS"):
-        env_vars_set.add("max_contracts")
-    if os.getenv("BOT_MAX_TRADES_PER_DAY"):
-        env_vars_set.add("max_trades_per_day")
-    if os.getenv("BOT_MIN_RISK_REWARD") or os.getenv("BOT_RISK_REWARD_RATIO"):
-        env_vars_set.add("risk_reward_ratio")
-    if os.getenv("BOT_DAILY_LOSS_LIMIT"):
-        env_vars_set.add("daily_loss_limit")
-    if os.getenv("BOT_DAILY_LOSS_PERCENT"):
-        env_vars_set.add("daily_loss_percent")
-    if os.getenv("BOT_AUTO_CALCULATE_LIMITS") or os.getenv("BOT_USE_TOPSTEP_RULES"):
-        env_vars_set.add("auto_calculate_limits")
-    if os.getenv("BOT_RECOVERY_MODE"):
-        env_vars_set.add("recovery_mode")
-    if os.getenv("ACCOUNT_SIZE"):
-        env_vars_set.add("account_size")
-    if os.getenv("BOT_CONFIDENCE_THRESHOLD"):
-        env_vars_set.add("rl_confidence_threshold")
-    # Dynamic Risk Management combines both features
-    if os.getenv("BOT_DYNAMIC_RISK"):
-        env_vars_set.add("dynamic_confidence")
-        env_vars_set.add("dynamic_contracts")
-    # Legacy support for separate settings
-    if os.getenv("BOT_DYNAMIC_CONFIDENCE"):
-        env_vars_set.add("dynamic_confidence")
-    if os.getenv("BOT_DYNAMIC_CONTRACTS"):
-        env_vars_set.add("dynamic_contracts")
-    if os.getenv("BOT_TICK_SIZE"):
-        env_vars_set.add("tick_size")
-    if os.getenv("BOT_TICK_VALUE"):
-        env_vars_set.add("tick_value")
-    if os.getenv("BOT_DRY_RUN"):
-        env_vars_set.add("dry_run")
-    if os.getenv("BOT_SHADOW_MODE"):
-        env_vars_set.add("shadow_mode")
-    if os.getenv("BOT_ENVIRONMENT"):
-        env_vars_set.add("environment")
-    if os.getenv("BOT_BROKER") or os.getenv("BROKER"):
-        env_vars_set.add("broker")
+    # CREDENTIALS ONLY (from .env)
     if os.getenv("BOT_API_TOKEN") or os.getenv("TOPSTEPX_API_TOKEN") or os.getenv("TOPSTEP_API_TOKEN") or os.getenv("BROKER_API_TOKEN"):
-        env_vars_set.add("api_token")
-    if os.getenv("BOT_USERNAME") or os.getenv("TOPSTEPX_USERNAME") or os.getenv("TOPSTEP_USERNAME") or os.getenv("BROKER_USERNAME"):
-        env_vars_set.add("username")
+        if os.getenv("BOT_API_TOKEN"):
+            config.api_token = os.getenv("BOT_API_TOKEN")
+        elif os.getenv("BROKER_API_TOKEN"):
+            config.api_token = os.getenv("BROKER_API_TOKEN")
+        elif os.getenv("TOPSTEPX_API_TOKEN"):
+            config.api_token = os.getenv("TOPSTEPX_API_TOKEN")
+        elif os.getenv("TOPSTEP_API_TOKEN"):
+            config.api_token = os.getenv("TOPSTEP_API_TOKEN")
     
-    # Apply env vars that were actually set
-    for key in config.__dataclass_fields__.keys():
-        if key in env_vars_set:
-            env_value = getattr(env_config, key)
-            setattr(config, key, env_value)
+    if os.getenv("BOT_USERNAME") or os.getenv("TOPSTEPX_USERNAME") or os.getenv("TOPSTEP_USERNAME") or os.getenv("BROKER_USERNAME"):
+        if os.getenv("BOT_USERNAME"):
+            config.username = os.getenv("BOT_USERNAME")
+        elif os.getenv("BROKER_USERNAME"):
+            config.username = os.getenv("BROKER_USERNAME")
+        elif os.getenv("TOPSTEPX_USERNAME"):
+            config.username = os.getenv("TOPSTEPX_USERNAME")
+        elif os.getenv("TOPSTEP_USERNAME"):
+            config.username = os.getenv("TOPSTEP_USERNAME")
+    
+    # ENVIRONMENT ONLY (from .env)
+    if os.getenv("BOT_ENVIRONMENT"):
+        config.environment = os.getenv("BOT_ENVIRONMENT")
+    
+    if os.getenv("BOT_DRY_RUN"):
+        config.dry_run = os.getenv("BOT_DRY_RUN").lower() in ("true", "1", "yes")
+    
+    if os.getenv("BOT_SHADOW_MODE"):
+        config.shadow_mode = os.getenv("BOT_SHADOW_MODE").lower() in ("true", "1", "yes")
+    
+    # BROKER RULES (from .env - for backward compatibility only)
+    # NOTE: Users should set daily_loss_limit in GUI, not here
+    # This is kept for legacy support but not recommended
     
     # Validate configuration
     config.validate()
@@ -803,16 +872,15 @@ def log_config(config: BotConfiguration, logger) -> None:
     
     logger.info(f"Instrument: {config.instrument}")
     logger.info(f"Timezone: {config.timezone}")
-    logger.info(f"Risk per Trade: {config.risk_per_trade * 100:.1f}%")
     logger.info(f"Max Contracts: {config.max_contracts}")
     logger.info(f"Max Trades per Day: {config.max_trades_per_day}")
-    logger.info(f"Risk/Reward Ratio: {config.risk_reward_ratio}:1")
+    logger.info(f"RL Confidence Threshold: {config.rl_confidence_threshold * 100:.0f}%")
     logger.info(f"Daily Loss Limit: ${config.daily_loss_limit:.2f}")
     
     # Time windows
-    logger.info(f"Entry Window: {config.entry_start_time} - {config.entry_end_time} ET")
-    logger.info(f"Flatten Time: {config.flatten_time} ET")
-    logger.info(f"Forced Flatten: {config.forced_flatten_time} ET")
+    logger.info(f"Entry Window: {config.entry_start_time} - {config.entry_end_time} UTC")
+    logger.info(f"Flatten Time: {config.flatten_time} UTC")
+    logger.info(f"Forced Flatten: {config.forced_flatten_time} UTC")
     
     # API token info (only relevant for live trading)
     if config.backtest_mode:
@@ -1109,7 +1177,7 @@ Retry sequence with 5 attempts:
 Total time: 10 seconds before giving up and alerting for manual intervention.
 
 Why 5 attempts?
-- Market closes at 4:45 PM ET (forced flatten time)
+- Market closes at 8:45 PM UTC (forced flatten time)
 - Need aggressive retries but can't wait forever
 - 5 attempts with 10s total is maximum safe retry window
 - More attempts = risk missing market close entirely

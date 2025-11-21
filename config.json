@@ -5,17 +5,16 @@
   "broker_token": "0lqxI8Gt4JRDhbuP9wOoHmdxJE49fIQCxIU+mSbPqGs=",
   "broker_username": "alvarezjose4201@gmail.com",
   "symbols": [
-    "ES",
-    "YM"
+    "MES",
+    "MNQ"
   ],
   "account_size": 50000.0,
   "max_contracts": 3,
   "max_trades_per_day": 9999,
-  "risk_per_trade": 0.012,
   "daily_loss_limit": 1000.0,
   "auto_calculate_limits": true,
-  "rl_confidence_threshold": 0.65,
-  "rl_exploration_rate": 0.05,
+  "rl_confidence_threshold": 0.7,
+  "rl_exploration_rate": 0.30,
   "rl_min_exploration_rate": 0.05,
   "rl_exploration_decay": 0.995,
   "username": "hi",
@@ -57,7 +56,7 @@
   "remember_credentials": true,
   "dynamic_confidence": true,
   "topstep_starting_balance": 50000.0,
-  "confidence_trading": false,
+  "confidence_trading": true,
   "smtp_provider": "gmail",
   "alert_email": "",
   "alert_email_password": "",
@@ -69,12 +68,9 @@
   "alert_carrier": "verizon",
   "theme": "dark",
   "selected_account_id": "50KTC-V2-398684-33989413",
-  "avoid_news_days": false,
   "alerts_enabled": false,
   "topstep_starting_balances": {
     "13897180": 50000.0
   },
-  "fomc_block_enabled": false,
-  "fomc_force_close": false,
   "cloud_api_url": "https://quotrading-signals.icymeadow-86b2969e.eastus.azurecontainerapps.io"
 }

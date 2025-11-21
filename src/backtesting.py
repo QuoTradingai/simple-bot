@@ -382,7 +382,7 @@ class PerformanceMetrics:
         self.tick_value = tick_value
         self.commission_per_contract = commission_per_contract
         self.trades: List[Trade] = []
-        self.equity_curve: List[Tuple[datetime, float]] = [(datetime.now(), initial_equity)]
+        self.equity_curve: List[Tuple[datetime, float]] = [(datetime.now(pytz.UTC), initial_equity)]
         
     def add_trade(self, trade: Trade) -> None:
         """Add a completed trade to the metrics"""

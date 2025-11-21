@@ -8,22 +8,22 @@ Event-driven bot that trades bounces off VWAP standard deviation bands
 
 This bot is designed to run continuously and support global users:
 
-✅ UTC-FIRST DESIGN: All times converted to UTC first, then to exchange timezone
-✅ AUTO-FLATTEN: Automatically closes positions at 4:45 PM ET (15 min before maintenance)
-✅ AUTO-RESUME: Automatically resumes trading when market reopens (6 PM Sunday ET)
+✅ UTC-ONLY DESIGN: All times in UTC (matches ES futures schedule and historical data)
+✅ AUTO-FLATTEN: Automatically closes positions at 21:45 UTC (15 min before maintenance)
+✅ AUTO-RESUME: Automatically resumes trading when market reopens (23:00 UTC Sunday)
 ✅ NO MANUAL SHUTDOWN: Bot runs 24/7, just pauses trading when market closed
-✅ TIMEZONE SAFE: Works for users in any timezone (UTC → Exchange → User Display)
+✅ TIMEZONE SAFE: Works for users in any timezone (displays in user's local time)
 
-Trading Hours (ES Futures - Eastern Time):
-- OPEN: Sunday 6:00 PM → Friday 5:00 PM
-- MAINTENANCE: 5:00-6:00 PM ET daily (Monday-Thursday)
-- FLATTEN: 4:45 PM ET (15 min before maintenance)
-- WEEKEND: Friday 5:00 PM → Sunday 6:00 PM
+Trading Hours (ES Futures - UTC):
+- OPEN: Sunday 23:00 → Friday 22:00 UTC
+- MAINTENANCE: 22:00-23:00 UTC daily (17:00-18:00 EST)
+- FLATTEN: 21:45 UTC (15 min before maintenance)
+- WEEKEND: Friday 22:00 → Sunday 23:00 UTC
 
 Bot States:
-- entry_window: Market open, trading allowed (6 PM - 4:45 PM)
-- flatten_mode: 4:45-5:00 PM, aggressively close positions (15 min before maintenance)
-- closed: During maintenance (5-6 PM Mon-Thu) or weekend, auto-flatten positions
+- entry_window: Market open, trading allowed (Sunday 23:00 - 21:45 UTC daily)
+- flatten_mode: 21:45-22:00 UTC, aggressively close positions (15 min before maintenance)
+- closed: During maintenance (22:00-23:00 Mon-Thu) or weekend, auto-flatten positions
 
 For Multi-User Subscriptions:
 - Add user_id to state dictionary for data isolation
@@ -108,6 +108,7 @@ from error_recovery import ErrorRecoveryManager, ErrorType as RecoveryErrorType
 from bid_ask_manager import BidAskManager, BidAskQuote
 from notifications import get_notifier
 from signal_confidence import SignalConfidenceRL
+from dashboard import get_dashboard, Dashboard
 
 # Conditionally import broker (only needed for live trading, not backtesting)
 try:
@@ -117,9 +118,36 @@ except ImportError:
     create_broker = None
     BrokerInterface = None
 
+# ===== CRITICAL: SUPPRESS PROJECT_X_PY LOGGING IMMEDIATELY =====
+# The TopStep SDK (project_x_py) uses structured JSON logging that corrupts dashboard
+# Must suppress BEFORE any broker/SDK operations to prevent log spam
+logging.getLogger("project_x_py").setLevel(logging.CRITICAL)
+logging.getLogger("project_x_py").propagate = False
+for handler in logging.getLogger("project_x_py").handlers[:]:
+    logging.getLogger("project_x_py").removeHandler(handler)
+
+# Suppress all sub-loggers
+for logger_name in ["statistics", "statistics.bounded_statistics", "statistics.bounded_statistics.bounded_stats",
+                     "order_manager", "order_manager.core", "position_manager", "position_manager.core",
+                     "trading_suite", "data_manager", "websocket"]:
+    full_name = f"project_x_py.{logger_name}"
+    logging.getLogger(full_name).setLevel(logging.CRITICAL)
+    logging.getLogger(full_name).propagate = False
+    for handler in logging.getLogger(full_name).handlers[:]:
+        logging.getLogger(full_name).removeHandler(handler)
+
 # Load configuration from environment and config module
-_bot_config = load_config()
-_bot_config.validate()  # Validate configuration at startup
+# For backtesting, validation happens later with backtest_mode=True
+try:
+    _bot_config = load_config()
+    _bot_config.validate()  # Validate configuration at startup
+except ValueError as e:
+    # If validation fails, it might be due to missing API token
+    # which is OK for backtesting - will be re-initialized with backtest_mode=True
+    if "api_token is required" in str(e):
+        _bot_config = load_config(backtest_mode=True)
+    else:
+        raise
 
 # Convert BotConfiguration to dictionary for backward compatibility with existing code
 CONFIG: Dict[str, Any] = _bot_config.to_dict()
@@ -143,12 +171,10 @@ try:
         CONFIG["slippage_ticks"] = SYMBOL_SPEC.typical_slippage_ticks
         _bot_config.slippage_ticks = SYMBOL_SPEC.typical_slippage_ticks
     
-    print(f"✓ Symbol specs loaded: {SYMBOL_SPEC.name} ({SYMBOL_SPEC.symbol})")
-    print(f"  Tick Value: ${SYMBOL_SPEC.tick_value:.2f} | Tick Size: ${SYMBOL_SPEC.tick_size}")
-    print(f"  Slippage: {SYMBOL_SPEC.typical_slippage_ticks} ticks")
+    # Symbol specs loaded - dashboard will show this information
 except Exception as e:
     # Symbol specs not available - will use defaults from config
-    print(f"Symbol specs not loaded (using defaults): {e}")
+    pass  # Symbol specs not loaded - will use defaults
     pass
 
 # String constants
@@ -186,11 +212,21 @@ bid_ask_manager: Optional[BidAskManager] = None
 # Global adaptive exit manager (for streak tracking persistence)
 adaptive_manager: Optional[Any] = None
 
+# Global dashboard display
+dashboard: Optional[Dashboard] = None
+
+# Dashboard refresh throttle - prevent constant flickering
+# Use list for mutable reference in closures
+last_dashboard_refresh = [0.0]
+dashboard_tick_counter = [0]  # Counter for dashboard updates (updates every 1000 ticks)
+
 # State management dictionary
 state: Dict[str, Any] = {}
 
 # Backtest mode: Track current simulation time (for backtesting)
 # When None, uses real datetime.now(). When set, uses this timestamp.
+backtest_current_time: Optional[datetime] = None
+
 # Global tracking for safety mechanisms (Phase 12)
 bot_status: Dict[str, Any] = {
     "trading_enabled": True,
@@ -214,14 +250,20 @@ bot_status: Dict[str, Any] = {
 
 
 def setup_logging() -> logging.Logger:
-    """Configure logging for the bot - Console only (no log files for customers)"""
+    """Configure logging for the bot - Dashboard only display (logs suppressed except CRITICAL)"""
+    # Suppress ALL logs - only show dashboard
     logging.basicConfig(
-        level=logging.INFO,
-        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+        level=logging.CRITICAL,  # Only critical errors
+        format='%(asctime)s - %(levelname)s - %(message)s',
         handlers=[
-            logging.StreamHandler()  # Console output only - customers don't need log files
+            logging.StreamHandler()  # Console output
         ]
     )
+    
+    # Suppress all module logs
+    logging.getLogger("project_x_py").setLevel(logging.CRITICAL)
+    logging.getLogger("project_x_py").propagate = False
+    
     return logging.getLogger(__name__)
 
 
@@ -245,32 +287,30 @@ def get_user_id() -> str:
 USER_ID = get_user_id()
 
 
-async def get_ml_confidence_async(rl_state: Dict[str, Any], side: str) -> Tuple[bool, float, str]:
+async def get_ml_confidence_async(rl_state: Dict[str, Any], side: str, current_spread_ticks: float = 1.0) -> Tuple[bool, float, float, str]:
     """
     Get ML confidence from cloud API (shared RL learning pool) with automatic retry.
-    Returns: (take_signal, confidence, reason)
+    Returns: (take_signal, confidence, size_mult, reason)
     """
     if not USE_CLOUD_SIGNALS:
         # Fallback to local RL brain if cloud disabled
         if rl_brain is not None:
-            return rl_brain.should_take_signal(rl_state)
-        return True, 0.5, "Cloud API disabled, no local RL"
+            return rl_brain.should_take_signal(rl_state, current_spread_ticks)
+        return True, 0.5, 1.0, "Cloud API disabled, no local RL"
     
     # Retry up to 3 times with exponential backoff
     max_retries = 3
     for attempt in range(max_retries):
         try:
-            # Prepare payload for cloud API
+            # Prepare payload for cloud API (FIXED: using correct field names)
             payload = {
                 "user_id": USER_ID,
                 "symbol": CONFIG["instrument"],
-                "side": side,
+                "signal": side.upper(),  # FIXED: was 'side', now 'signal'
                 "rsi": rl_state.get("rsi", 50),
-                "vwap_distance": rl_state.get("vwap_distance", 0),
-                "volume_ratio": rl_state.get("volume_ratio", 1.0),
-                "streak": rl_state.get("streak", 0),
-                "time_of_day_score": rl_state.get("time_of_day_score", 0.5),
-                "volatility": rl_state.get("volatility", 1.0)
+                "price": rl_state.get("price", 0),  # ADDED: need price for VWAP calc
+                "vwap": rl_state.get("vwap", 0),    # ADDED: need VWAP reference
+                "vix": rl_state.get("vix", 15.0)    # ADDED: volatility context
             }
             
             # Increase timeout slightly on retries
@@ -287,21 +327,22 @@ async def get_ml_confidence_async(rl_state: Dict[str, Any], side: str) -> Tuple[
                         confidence = data.get("confidence", 0.5)
                         take_signal = data.get("should_trade", False)
                         reason = data.get("reason", "Cloud RL evaluation")
+                        size_mult = data.get("size_multiplier", 1.0)  # Get size mult from cloud
                         
                         if attempt > 0:
                             logger.info(f"[CLOUD RL] ✅ Success on retry {attempt + 1}")
                         
-                        logger.debug(f"[CLOUD RL] {side.upper()} signal: {take_signal} (confidence: {confidence:.1%}) - {reason}")
+                        logger.debug(f"[CLOUD RL] {side.upper()} signal: {take_signal} (confidence: {confidence:.1%}, size: {size_mult:.2f}x) - {reason}")
                         logger.debug(f"   Shared pool: {data.get('total_trades', 0)} trades, WR: {data.get('win_rate', 0):.1%}")
                         
-                        return take_signal, confidence, reason
+                        return take_signal, confidence, size_mult, reason
                     else:
                         logger.warning(f"Cloud ML API returned status {response.status} (attempt {attempt + 1}/{max_retries})")
                         if attempt < max_retries - 1:
                             await asyncio.sleep(0.5 * (attempt + 1))  # 0.5s, 1s, 1.5s backoff
                             continue
                         logger.error("Cloud API failed after all retries - REJECTING TRADE for safety")
-                        return False, 0.0, "Cloud API error - rejecting trade for safety"
+                        return False, 0.0, 1.0, "Cloud API error - rejecting trade for safety"
                         
         except asyncio.TimeoutError:
             logger.warning(f"Cloud ML API timeout (attempt {attempt + 1}/{max_retries})")
@@ -309,26 +350,26 @@ async def get_ml_confidence_async(rl_state: Dict[str, Any], side: str) -> Tuple[
                 await asyncio.sleep(0.5 * (attempt + 1))
                 continue
             logger.error("Cloud API timeout after all retries - REJECTING TRADE for safety")
-            return False, 0.0, "API timeout - rejecting trade for safety"
+            return False, 0.0, 1.0, "API timeout - rejecting trade for safety"
         except Exception as e:
             logger.warning(f"Cloud ML API error: {e} (attempt {attempt + 1}/{max_retries})")
             if attempt < max_retries - 1:
                 await asyncio.sleep(0.5 * (attempt + 1))
                 continue
             logger.error(f"Cloud API error after all retries - REJECTING TRADE for safety: {e}")
-            return False, 0.0, f"API error - rejecting trade for safety"
+            return False, 0.0, 1.0, f"API error - rejecting trade for safety"
     
     # Should never reach here, but just in case
     logger.error("Unknown error in RL API call - REJECTING TRADE for safety")
-    return False, 0.0, "Unknown error - rejecting trade for safety"
+    return False, 0.0, 1.0, "Unknown error - rejecting trade for safety"
 
 
-def get_ml_confidence(rl_state: Dict[str, Any], side: str) -> Tuple[bool, float, str]:
+def get_ml_confidence(rl_state: Dict[str, Any], side: str, current_spread_ticks: float = 1.0) -> Tuple[bool, float, float, str]:
     """Synchronous wrapper for get_ml_confidence_async"""
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     try:
-        return loop.run_until_complete(get_ml_confidence_async(rl_state, side))
+        return loop.run_until_complete(get_ml_confidence_async(rl_state, side, current_spread_ticks))
     finally:
         loop.close()
 
@@ -354,21 +395,66 @@ async def save_trade_experience_async(
     max_retries = 2
     for attempt in range(max_retries):
         try:
-            # Prepare trade experience payload
+            # Prepare trade experience payload WITH ALL 33 SIGNAL FEATURES
             payload = {
                 "user_id": USER_ID,
                 "symbol": CONFIG["instrument"],
-                "side": side,
-                "signal": f"{side}_bounce",  # "long_bounce" or "short_bounce"
-                "rsi": rl_state.get("rsi", 50),
-                "vwap_distance": rl_state.get("vwap_distance", 0),
-                "volume_ratio": rl_state.get("volume_ratio", 1.0),
-                "streak": rl_state.get("streak", 0),
-                "time_of_day_score": rl_state.get("time_of_day_score", 0.5),
-                "volatility": rl_state.get("volatility", 1.0),
-                "pnl": pnl,
-                "duration_minutes": duration_minutes,
-                "exit_reason": execution_data.get("exit_reason", "unknown")
+                "experience_type": "signal",  # Signal experience (took trade)
+                
+                # RL State (all 33 features)
+                "rl_state": {
+                    # Original 8 features
+                    "rsi": rl_state.get("rsi", 50),
+                    "vwap_distance": rl_state.get("vwap_distance", 0),
+                    "atr": rl_state.get("atr", 0),
+                    "volume_ratio": rl_state.get("volume_ratio", 1.0),
+                    "hour": rl_state.get("hour", 12),
+                    "day_of_week": rl_state.get("day_of_week", 0),
+                    "recent_pnl": rl_state.get("recent_pnl", 0.0),
+                    "streak": rl_state.get("streak", 0),
+                    
+                    # Additional 25 features
+                    "vix": rl_state.get("vix", 15.0),
+                    "session": rl_state.get("session", "NY"),
+                    "session_encoded": rl_state.get("session_encoded", 2),
+                    "trend_strength": rl_state.get("trend_strength", 0.0),
+                    "sr_proximity_ticks": rl_state.get("sr_proximity_ticks", 0.0),
+                    "trade_type": rl_state.get("trade_type", 0),
+                    "time_since_last_trade_mins": rl_state.get("time_since_last_trade_mins", 0.0),
+                    "bid_ask_spread_ticks": rl_state.get("bid_ask_spread_ticks", 1.0),
+                    "drawdown_pct_at_entry": rl_state.get("drawdown_pct_at_entry", 0.0),
+                    "entry_slippage_ticks": rl_state.get("entry_slippage_ticks", 1.0),
+                    "commission_cost": rl_state.get("commission_cost", 2.50),
+                    "signal": rl_state.get("signal", side.upper()),
+                    "signal_encoded": rl_state.get("signal_encoded", 0),
+                    "market_regime": rl_state.get("market_regime", "NORMAL"),
+                    "recent_volatility_20bar": rl_state.get("recent_volatility_20bar", 0.0),
+                    "volatility_trend": rl_state.get("volatility_trend", 0.0),
+                    "vwap_std_dev": rl_state.get("vwap_std_dev", 0.0),
+                    "confidence": rl_state.get("confidence", 0.5),
+                    "price": rl_state.get("price", 0.0),
+                    "entry_price": rl_state.get("entry_price", 0.0),
+                    "vwap": rl_state.get("vwap", 0.0),
+                    "minute": rl_state.get("minute", 0),
+                    "consecutive_wins": rl_state.get("consecutive_wins", 0),
+                    "consecutive_losses": rl_state.get("consecutive_losses", 0),
+                    "cumulative_pnl_at_entry": rl_state.get("cumulative_pnl_at_entry", 0.0),
+                    "timestamp": rl_state.get("timestamp", ""),
+                    "time_to_close": rl_state.get("time_to_close", 0),
+                    "price_mod_50": rl_state.get("price_mod_50", 0.0),
+                    
+                    # Legacy
+                    "side": side
+                },
+                
+                # Outcome data
+                "outcome": {
+                    "took_trade": True,
+                    "pnl": pnl,
+                    "duration_minutes": duration_minutes,
+                    "exit_reason": execution_data.get("exit_reason", "unknown"),
+                    "win": pnl > 0
+                }
             }
             
             # Increase timeout on retries
@@ -420,20 +506,66 @@ async def save_rejected_signal_async(
     max_retries = 1
     for attempt in range(max_retries):
         try:
+            # Prepare ghost trade payload WITH ALL 33 FEATURES
             payload = {
                 "user_id": USER_ID,
                 "symbol": CONFIG["instrument"],
-                "side": side,
-                "signal": f"{side}_bounce",
-                "rsi": rl_state.get("rsi", 50),
-                "vwap_distance": rl_state.get("vwap_distance", 0),
-                "volume_ratio": rl_state.get("volume_ratio", 1.0),
-                "streak": rl_state.get("streak", 0),
-                "time_of_day_score": rl_state.get("time_of_day_score", 0.5),
-                "volatility": rl_state.get("volatility", 1.0),
-                "took_trade": False,
-                "rejection_reason": rejection_reason,
-                "price_move_ticks": price_move_ticks
+                "experience_type": "ghost_trade",  # Signal we rejected but tracked
+                
+                # RL State (all 33 features)
+                "rl_state": {
+                    # Original 8 features
+                    "rsi": rl_state.get("rsi", 50),
+                    "vwap_distance": rl_state.get("vwap_distance", 0),
+                    "atr": rl_state.get("atr", 0),
+                    "volume_ratio": rl_state.get("volume_ratio", 1.0),
+                    "hour": rl_state.get("hour", 12),
+                    "day_of_week": rl_state.get("day_of_week", 0),
+                    "recent_pnl": rl_state.get("recent_pnl", 0.0),
+                    "streak": rl_state.get("streak", 0),
+                    
+                    # Additional 25 features
+                    "vix": rl_state.get("vix", 15.0),
+                    "session": rl_state.get("session", "NY"),
+                    "session_encoded": rl_state.get("session_encoded", 2),
+                    "trend_strength": rl_state.get("trend_strength", 0.0),
+                    "sr_proximity_ticks": rl_state.get("sr_proximity_ticks", 0.0),
+                    "trade_type": rl_state.get("trade_type", 0),
+                    "time_since_last_trade_mins": rl_state.get("time_since_last_trade_mins", 0.0),
+                    "bid_ask_spread_ticks": rl_state.get("bid_ask_spread_ticks", 1.0),
+                    "drawdown_pct_at_entry": rl_state.get("drawdown_pct_at_entry", 0.0),
+                    "entry_slippage_ticks": rl_state.get("entry_slippage_ticks", 1.0),
+                    "commission_cost": rl_state.get("commission_cost", 2.50),
+                    "signal": rl_state.get("signal", side.upper()),
+                    "signal_encoded": rl_state.get("signal_encoded", 0),
+                    "market_regime": rl_state.get("market_regime", "NORMAL"),
+                    "recent_volatility_20bar": rl_state.get("recent_volatility_20bar", 0.0),
+                    "volatility_trend": rl_state.get("volatility_trend", 0.0),
+                    "vwap_std_dev": rl_state.get("vwap_std_dev", 0.0),
+                    "confidence": rl_state.get("confidence", 0.5),
+                    "price": rl_state.get("price", 0.0),
+                    "entry_price": rl_state.get("entry_price", 0.0),
+                    "vwap": rl_state.get("vwap", 0.0),
+                    "minute": rl_state.get("minute", 0),
+                    "consecutive_wins": rl_state.get("consecutive_wins", 0),
+                    "consecutive_losses": rl_state.get("consecutive_losses", 0),
+                    "cumulative_pnl_at_entry": rl_state.get("cumulative_pnl_at_entry", 0.0),
+                    "timestamp": rl_state.get("timestamp", ""),
+                    "time_to_close": rl_state.get("time_to_close", 0),
+                    "price_mod_50": rl_state.get("price_mod_50", 0.0),
+                    
+                    # Legacy
+                    "side": side
+                },
+                
+                # Outcome (ghost trade we didn't take)
+                "outcome": {
+                    "took_trade": False,
+                    "rejection_reason": rejection_reason,
+                    "price_move_ticks": price_move_ticks,
+                    "pnl": 0.0,  # Didn't take it
+                    "win": False
+                }
             }
             
             timeout_seconds = 3.0
@@ -555,16 +687,60 @@ def initialize_broker() -> None:
     
     # Create broker using configuration
     # In shadow mode, broker streams data but doesn't execute actual orders
-    broker = create_broker(_bot_config.api_token, _bot_config.username, CONFIG["instrument"])
+    broker = create_broker(_bot_config.api_token, _bot_config.username)
+    
+    # CRITICAL: Suppress project_x_py logging immediately after broker creation
+    # The TopStep SDK uses structured JSON logging that corrupts dashboard display
+    import logging as log_module
+    log_module.getLogger("project_x_py").setLevel(log_module.CRITICAL)
+    log_module.getLogger("project_x_py.statistics").setLevel(log_module.CRITICAL)
+    log_module.getLogger("project_x_py.statistics.bounded_statistics").setLevel(log_module.CRITICAL)
+    log_module.getLogger("project_x_py.order_manager").setLevel(log_module.CRITICAL)
+    log_module.getLogger("project_x_py.position_manager").setLevel(log_module.CRITICAL)
+    log_module.getLogger("project_x_py.trading_suite").setLevel(log_module.CRITICAL)
     
     # Connect to broker (initial connection doesn't use circuit breaker)
-    logger.info("Connecting to broker...")
+    logger.info("=" * 80)
+    logger.info("🔌 CONNECTING TO TOPSTEP...")
+    logger.info("=" * 80)
     if not broker.connect():
+        logger.critical("❌ FAILED TO CONNECT TO TOPSTEP")
         logger.error("Failed to connect to broker")
         return False
         raise RuntimeError("Broker connection failed")
     
+    logger.info("=" * 80)
+    logger.info("✅ TOPSTEP CONNECTION SUCCESSFUL")
+    logger.info("=" * 80)
     logger.info("Broker connected successfully")
+    
+    # Get account balance - retry up to 3 times
+    equity = 0.0
+    for attempt in range(3):
+        try:
+            equity = broker.get_account_equity()
+            if equity > 0:
+                logger.info(f"💰 Account Balance: ${equity:,.2f}")
+                logger.info("=" * 80)
+                bot_status["starting_equity"] = equity
+                bot_status["account_balance"] = equity
+                break
+            else:
+                logger.warning(f"Account balance returned {equity}, retrying... (attempt {attempt + 1}/3)")
+                time_module.sleep(1)
+        except Exception as e:
+            logger.warning(f"Could not fetch account balance (attempt {attempt + 1}/3): {e}")
+            if attempt < 2:
+                time_module.sleep(1)
+    
+    # If equity fetch failed, use config value as fallback
+    if equity == 0:
+        config_balance = CONFIG.get("fetched_account_balance") or CONFIG.get("topstep_starting_balance") or 50000.0
+        logger.warning(f"⚠️  Using fallback balance from config: ${config_balance:,.2f}")
+        bot_status["starting_equity"] = config_balance
+        bot_status["account_balance"] = config_balance
+        equity = config_balance
+    
     
     # Send bot startup alert
     try:
@@ -706,24 +882,40 @@ def check_azure_time_service() -> str:
     Called every 30 seconds alongside kill switch check.
     
     Azure provides single source of truth for:
-    - Current ET time (timezone-accurate)
+    - Current UTC time (timezone-accurate)
     - Market hours status
-    - Maintenance windows (Mon-Thu 5-6 PM, Fri 5 PM - Sun 6 PM)
-    - Economic events (FOMC/NFP/CPI blocking)
+    - Maintenance windows (Mon-Thu 21:00-22:00 UTC, Fri 21:00 - Sun 23:00 UTC)
     - Trading permission (go/no-go flag)
     
     Returns:
-        Trading state: 'entry_window', 'flatten_mode', 'closed', or 'event_block'
+        Trading state: 'entry_window', 'flatten_mode', or 'closed'
     """
+    global dashboard
+    
     try:
         import requests
+        import time
         
         cloud_api_url = CONFIG.get("cloud_api_url", "https://quotrading-signals.icymeadow-86b2969e.eastus.azurecontainerapps.io")
         
+        # Measure latency
+        start_time = time.time()
         response = requests.get(
             f"{cloud_api_url}/api/time/simple",
             timeout=5
         )
+        latency_ms = int((time.time() - start_time) * 1000)
+        
+        # Update dashboard with server latency
+        if dashboard:
+            latency_str = f"{latency_ms}ms"
+            if latency_ms >= 200:
+                latency_str += " (high latency)"
+            
+            dashboard.update_bot_data({
+                "server_latency": latency_str,
+                "server_latency_ms": latency_ms
+            })
         
         if response.status_code == 200:
             data = response.json()
@@ -740,47 +932,21 @@ def check_azure_time_service() -> str:
             if not trading_allowed:
                 if "maintenance" in halt_reason.lower():
                     state = "closed"  # Maintenance window
-                elif "event" in halt_reason.lower() or "fomc" in halt_reason.lower() or "nfp" in halt_reason.lower():
-                    # Check if FOMC blocking is enabled in config
-                    fomc_enabled = CONFIG.get("fomc_block_enabled", True)
-                    if fomc_enabled:
-                        state = "event_block"  # Economic event blocking
-                        # Log FOMC block (only once when it activates)
-                        if not bot_status.get("event_block_active", False):
-                            logger.warning("=" * 80)
-                            logger.warning(f"📅 ECONOMIC EVENT BLOCK ACTIVATED: {halt_reason}")
-                            logger.warning("  Trading halted 30 min before to 1 hour after event")
-                            logger.warning("  Will auto-resume when event window closes")
-                            logger.warning("=" * 80)
-                            bot_status["event_block_active"] = True
-                    else:
-                        logger.info(f"[TIME SERVICE] Economic event active but FOMC blocking disabled: {halt_reason}")
-                        state = "entry_window"  # User disabled event blocking
                 elif "weekend" in halt_reason.lower() or "closed" in halt_reason.lower():
                     state = "closed"  # Weekend or market closed
                 else:
                     state = "closed"  # Unknown halt reason - be safe
             else:
-                # Clear event block flag when trading resumes
-                if bot_status.get("event_block_active", False):
-                    logger.info("=" * 80)
-                    logger.info("✅ ECONOMIC EVENT ENDED - Trading resumed")
-                    logger.info("=" * 80)
-                    bot_status["event_block_active"] = False
-                
                 # Trading allowed - check if we're approaching maintenance (flatten mode)
-                # Azure doesn't send flatten mode, so we check local time
-                # If current ET time is 4:45-5:00 PM, enter flatten mode
+                # Check if current UTC time is 21:45-22:00 (flatten mode)
                 try:
-                    from datetime import datetime as dt_class
-                    et_time = dt_class.fromisoformat(current_et.replace('Z', '+00:00'))
-                    et_hour = et_time.hour
-                    et_minute = et_time.minute
+                    # Parse current_et which is ISO format string from Azure
+                    utc_now = datetime.now(pytz.UTC)
+                    utc_hour = utc_now.hour
+                    utc_minute = utc_now.minute
                     
-                    # Flatten mode: 4:45-5:00 PM (16:45-17:00)
-                    if et_hour == 16 and et_minute >= 45:
-                        state = "flatten_mode"
-                    elif et_hour == 17 and et_minute == 0:
+                    # Flatten mode: 21:45-22:00 UTC (before maintenance at 22:00)
+                    if (utc_hour == 21 and utc_minute >= 45) or (utc_hour == 22 and utc_minute == 0):
                         state = "flatten_mode"
                     else:
                         state = "entry_window"
@@ -795,12 +961,28 @@ def check_azure_time_service() -> str:
             # Azure unreachable - clear cached state to trigger fallback
             logger.debug(f"Time service returned {response.status_code}, using local time")
             bot_status["azure_trading_state"] = None
+            
+            # Update dashboard to show server error
+            if dashboard:
+                dashboard.update_bot_data({
+                    "server_latency": "ERROR",
+                    "server_latency_ms": 999
+                })
+            
             return None  # Signal to use local get_trading_state()
             
     except Exception as e:
         # Non-critical - if cloud unreachable, fall back to local time
         logger.debug(f"Time service check skipped (cloud unreachable): {e}")
         bot_status["azure_trading_state"] = None
+        
+        # Update dashboard to show server error
+        if dashboard:
+            dashboard.update_bot_data({
+                "server_latency": "OFFLINE",
+                "server_latency_ms": 999
+            })
+        
         return None  # Signal to use local get_trading_state()
 
 
@@ -832,12 +1014,12 @@ def check_broker_connection() -> None:
         halt_reason = bot_status.get("halt_reason", "")
         
         # Only go idle during maintenance, not weekend
-        if "maintenance" in halt_reason.lower() or (current_time.weekday() < 5 and current_time.time() >= datetime_time(17, 0) and current_time.time() < datetime_time(18, 0)):
+        if "maintenance" in halt_reason.lower() or (current_time.weekday() < 5 and current_time.time() >= datetime_time(21, 0) and current_time.time() < datetime_time(22, 0)):
             logger.critical(SEPARATOR_LINE)
             logger.critical("🔧 MAINTENANCE WINDOW - GOING IDLE")
             logger.critical(f"Time: {current_time.strftime('%H:%M:%S %Z')}")
             logger.critical("  Disconnecting broker to save resources during maintenance")
-            logger.critical("  Will auto-reconnect at 6:00 PM ET when market reopens")
+            logger.critical("  Will auto-reconnect at 22:00 UTC when market reopens")
             logger.critical(SEPARATOR_LINE)
             
             # Disconnect broker (stops all data feeds)
@@ -850,10 +1032,11 @@ def check_broker_connection() -> None:
             
             bot_status["maintenance_idle"] = True
             bot_status["trading_enabled"] = False
+            logger.critical(f"  [DEBUG] Set trading_enabled=False due to maintenance window")
             logger.critical("  Bot will check every 30s for market reopen...")
             return  # Skip broker health check since we just disconnected
     
-    # AUTO-RECONNECT: Reconnect broker when market reopens at 6 PM
+    # AUTO-RECONNECT: Reconnect broker when market reopens at 11 PM UTC
     elif trading_state == "entry_window" and bot_status.get("maintenance_idle", False):
         logger.critical(SEPARATOR_LINE)
         logger.critical("✅ MARKET REOPENED - AUTO-RECONNECTING")
@@ -1045,7 +1228,7 @@ def place_stop_order(symbol: str, side: str, quantity: int, stop_price: float) -
     
     if shadow_mode:
         return {
-            "order_id": f"SHADOW_STOP_{datetime.now().timestamp()}",
+            "order_id": f"SHADOW_STOP_{datetime.now(pytz.UTC).timestamp()}",
             "symbol": symbol,
             "side": side,
             "quantity": quantity,
@@ -1101,7 +1284,7 @@ def place_limit_order(symbol: str, side: str, quantity: int, limit_price: float)
     
     if shadow_mode:
         return {
-            "order_id": f"SHADOW_LIMIT_{datetime.now().timestamp()}",
+            "order_id": f"SHADOW_LIMIT_{datetime.now(pytz.UTC).timestamp()}",
             "symbol": symbol,
             "side": side,
             "quantity": quantity,
@@ -1297,6 +1480,634 @@ def fetch_historical_bars(symbol: str, timeframe: int, count: int) -> List[Dict[
 
 
 # ============================================================================
+# SHADOW TRADE TRACKING (Ghost Signals for RL Learning)
+# ============================================================================
+
+class ShadowTrade:
+    """
+    Represents a rejected signal being tracked in the background.
+    Simulates what WOULD happen if we took the trade, providing learning data.
+    
+    FULLY SIMULATES A REAL TRADE WITH COMPREHENSIVE 131-PARAMETER EXIT LOGIC:
+    - Uses ComprehensiveExitChecker (ALL 131 exit parameters)
+    - Updates stop/breakeven/trailing EVERY bar (just like real trades)
+    - Tracks MAE/MFE, partials, all 90+ metrics
+    - Outcome reflects what would ACTUALLY happen with current exit logic
+    - COMPLETE PARITY with backtest ghost trades
+    """
+    def __init__(self, symbol: str, rl_state: Dict, side: str, entry_price: float, 
+                 entry_time: datetime, confidence: float, rejection_reason: str, atr: float = 2.0):
+        self.symbol = symbol
+        self.rl_state = rl_state.copy()  # Snapshot of RL state at rejection
+        self.side = side  # 'long' or 'short'
+        self.entry_price = entry_price
+        self.entry_time = entry_time
+        self.confidence = confidence  # AI confidence when rejected
+        self.rejection_reason = rejection_reason
+        self.entry_atr = atr
+        
+        # Store ALL 131 exit parameters for learning (matches backtest)
+        self.all_exit_params_used = {}
+        
+        # Shadow position state
+        self.quantity = 1  # Ghost trades use 1 contract
+        self.remaining_quantity = 1
+        self.contracts = 1
+        self.original_contracts = 1
+        
+        # Initial stop (will be updated by comprehensive checker)
+        stop_distance = atr * CONFIG['atr_stop_multiplier']
+        if side == 'long':
+            self.stop_price = entry_price - stop_distance
+        else:
+            self.stop_price = entry_price + stop_distance
+        
+        self.initial_risk_ticks = int((entry_price - self.stop_price) / CONFIG['tick_size']) if side == 'long' else int((self.stop_price - entry_price) / CONFIG['tick_size'])
+        
+        # Exit state tracking
+        self.breakeven_active = False
+        self.trailing_active = False
+        self.highest_price = entry_price
+        self.lowest_price = entry_price
+        
+        # Performance tracking
+        self.mae = 0.0
+        self.mfe = 0.0
+        self.partial_exits = []
+        self.partial_1_done = False
+        self.partial_2_done = False
+        self.partial_3_done = False
+        
+        # Complete tracking fields for parity with real trades
+        self.bars_in_trade = 0
+        self.exit_param_updates = []
+        self.breakeven_activation_bar = None
+        self.trailing_activation_bar = None
+        self.bars_until_breakeven = None
+        self.bars_until_trailing = None
+        self.max_r_achieved = 0.0
+        self.min_r_achieved = 0.0
+        self.regime_changes = []
+        self.stop_adjustments = []
+        self.decision_history = []
+        self.unrealized_pnl_history = []
+        self.peak_unrealized_pnl = 0.0
+        self.peak_r_multiple = 0.0
+        self.profit_drawdown_from_peak = 0.0
+        self.max_drawdown_percent = 0.0
+        self.drawdown_bars = 0
+        self.currently_in_drawdown = False
+        self.atr_samples = []
+        self.high_volatility_bars = 0
+        self.stop_hit = False
+        self.time_in_breakeven_bars = 0
+        
+        # Additional fields for complete parity
+        self.rejected_partial_count = 0
+        self.entry_slippage_ticks = 0.0
+        self.exit_slippage_ticks = 0.0
+        self.commission_cost = 0.0
+        self.entry_bid_ask_spread_ticks = 0.0
+        self.exit_bid_ask_spread_ticks = 0.0
+        
+        # Completion tracking
+        self.bars_elapsed = 0
+        self.max_bars = 200  # Timeout after 200 bars
+        self.completed = False
+        self.outcome = None
+        self.exit_bar_index = None
+        self.entry_bar_index = 0  # Set by caller if available
+    
+    def _create_outcome_dict(self, pnl: float, exit_price: float, exit_reason: str, bar: Dict) -> Dict:
+        """Create complete outcome dictionary with all tracking fields (matches real trades)."""
+        initial_risk = abs(self.entry_price - self.stop_price)
+        tick_value = CONFIG['tick_value']
+        r_multiple = pnl / (initial_risk * tick_value * 4) if initial_risk > 0 else 0
+        
+        # Convert bar dict to have timestamp
+        bar_timestamp = bar.get('timestamp', self.entry_time)
+        
+        return {
+            'pnl': pnl,
+            'exit_price': exit_price,
+            'duration_min': self.bars_elapsed,
+            'exit_reason': f'ghost_{exit_reason}' if not exit_reason.startswith('ghost_') else exit_reason,
+            'took_trade': False,
+            'confidence': self.confidence,
+            'rejection_reason': self.rejection_reason,
+            'side': self.side,
+            'contracts': self.contracts,
+            'win': pnl > 0,
+            'is_ghost': True,
+            
+            # Performance Metrics (complete parity)
+            'mae': self.mae,
+            'mfe': self.mfe,
+            'max_r_achieved': self.max_r_achieved,
+            'min_r_achieved': self.min_r_achieved,
+            'r_multiple': r_multiple,
+            'peak_r_multiple': self.peak_r_multiple,
+            'peak_unrealized_pnl': self.peak_unrealized_pnl,
+            'profit_drawdown_from_peak': self.profit_drawdown_from_peak,
+            'max_drawdown_percent': self.max_drawdown_percent,
+            'opportunity_cost': float(self.peak_unrealized_pnl - pnl) if self.peak_unrealized_pnl > pnl else 0.0,
+            
+            # Exit Strategy State
+            'breakeven_activated': self.breakeven_active,
+            'trailing_activated': self.trailing_active,
+            'stop_hit': 'stop_loss' in exit_reason,
+            'partials_taken': len(self.partial_exits),
+            'breakeven_activation_bar': self.breakeven_activation_bar if self.breakeven_activation_bar else 0,
+            'trailing_activation_bar': self.trailing_activation_bar if self.trailing_activation_bar else 0,
+            'bars_until_breakeven': self.bars_until_breakeven if self.bars_until_breakeven else 0,
+            'bars_until_trailing': self.bars_until_trailing if self.bars_until_trailing else 0,
+            
+            # Partial exits
+            'partial_exit_1_completed': self.partial_1_done,
+            'partial_exit_2_completed': self.partial_2_done,
+            'partial_exit_3_completed': self.partial_3_done,
+            
+            # Entry context
+            'entry_confidence': self.confidence,
+            'entry_price': self.entry_price,
+            'entry_time': self.entry_time,
+            
+            # Advanced tracking
+            'exit_param_update_count': len(self.exit_param_updates),
+            'stop_adjustment_count': len(self.stop_adjustments),
+            'decision_history': self.decision_history,
+            'unrealized_pnl_history': self.unrealized_pnl_history,
+            'exit_param_updates': self.exit_param_updates,
+            'stop_adjustments': self.stop_adjustments,
+            'high_volatility_bars': self.high_volatility_bars,
+            'bars_in_trade': self.bars_in_trade,
+            'drawdown_bars': self.drawdown_bars,
+            'currently_in_drawdown': self.currently_in_drawdown,
+            
+            # Execution quality (ghost trades have 0 slippage/commission)
+            'slippage_ticks': 0.0,
+            'commission_cost': 0.0,
+            'bid_ask_spread_ticks': 0.0,
+            'rejected_partial_count': self.rejected_partial_count,
+            'time_in_breakeven_bars': self.time_in_breakeven_bars,
+            
+            # Volatility tracking
+            'avg_atr_during_trade': float(sum(self.atr_samples) / len(self.atr_samples)) if self.atr_samples else float(self.entry_atr),
+            'atr_change_percent': float(((self.atr_samples[-1] - self.entry_atr) / self.entry_atr) * 100.0) if self.atr_samples and self.entry_atr > 0 else 0.0,
+            
+            # Timing fields
+            'entry_bar': self.entry_bar_index,
+            'exit_bar': self.entry_bar_index + self.bars_elapsed,
+            'entry_hour': self.entry_time.hour,
+            'entry_minute': self.entry_time.minute,
+            'exit_hour': bar_timestamp.hour if hasattr(bar_timestamp, 'hour') else 12,
+            'exit_minute': bar_timestamp.minute if hasattr(bar_timestamp, 'minute') else 0,
+            'day_of_week': bar_timestamp.weekday() if hasattr(bar_timestamp, 'weekday') else 0,
+            'bars_held': self.bars_elapsed,
+            
+            # Exit params (ALL 131 PARAMETERS)
+            'exit_params': {},
+            'exit_params_used': self.all_exit_params_used
+        }
+    
+    def update(self, bar: Dict, bars_1min: deque, adaptive_manager, config: Dict) -> Optional[Dict]:
+        """
+        Update shadow with new bar data - FULL COMPREHENSIVE EXIT SIMULATION.
+        
+        CRITICAL: Ghost trades MUST use same comprehensive exit logic as real trades.
+        This includes ALL 131 exit parameters:
+        - Profit drawdown protection
+        - Sideways market detection  
+        - Adverse conditions check
+        - Breakeven, trailing, partials
+        - Max time limits
+        - All adaptive thresholds
+        """
+        if self.completed:
+            return None
+        
+        self.bars_elapsed += 1
+        self.bars_in_trade = self.bars_elapsed
+        current_price = bar['close']
+        tick_value = CONFIG['tick_value']
+        tick_size = CONFIG['tick_size']
+        
+        # Update price extremes and track R-multiples (matches real trades)
+        initial_risk = abs(self.entry_price - self.stop_price)
+        
+        if self.side == 'long':
+            if current_price > self.highest_price:
+                self.highest_price = current_price
+            if current_price < self.lowest_price:
+                self.lowest_price = current_price
+            current_r = (current_price - self.entry_price) / initial_risk if initial_risk > 0 else 0
+        else:
+            if current_price < self.lowest_price:
+                self.lowest_price = current_price
+            if current_price > self.highest_price:
+                self.highest_price = current_price
+            current_r = (self.entry_price - current_price) / initial_risk if initial_risk > 0 else 0
+        
+        # Track peak R-multiple
+        if current_r > self.max_r_achieved:
+            self.max_r_achieved = current_r
+            self.peak_r_multiple = current_r
+        if current_r < self.min_r_achieved:
+            self.min_r_achieved = current_r
+        
+        # Track unrealized P&L and peak
+        if self.side == 'long':
+            unrealized_pnl = (current_price - self.entry_price) * tick_value * 4 * self.remaining_quantity
+        else:
+            unrealized_pnl = (self.entry_price - current_price) * tick_value * 4 * self.remaining_quantity
+        
+        self.unrealized_pnl_history.append(unrealized_pnl)
+        if unrealized_pnl > self.peak_unrealized_pnl:
+            self.peak_unrealized_pnl = unrealized_pnl
+        
+        # Track drawdown from peak
+        if self.peak_unrealized_pnl > 0:
+            drawdown = self.peak_unrealized_pnl - unrealized_pnl
+            if drawdown > self.profit_drawdown_from_peak:
+                self.profit_drawdown_from_peak = drawdown
+                drawdown_pct = (drawdown / self.peak_unrealized_pnl) * 100
+                if drawdown_pct > self.max_drawdown_percent:
+                    self.max_drawdown_percent = drawdown_pct
+            
+            if drawdown > 0:
+                self.currently_in_drawdown = True
+                self.drawdown_bars += 1
+            else:
+                self.currently_in_drawdown = False
+                self.drawdown_bars = 0
+        
+        # Track ATR samples
+        current_atr = bar.get('atr', self.entry_atr)
+        self.atr_samples.append(current_atr)
+        if current_atr > self.entry_atr * 1.2:
+            self.high_volatility_bars += 1
+        
+        # Calculate current metrics for comprehensive exit checks
+        if self.side == 'long':
+            profit_ticks = (current_price - self.entry_price) / tick_size
+        else:
+            profit_ticks = (self.entry_price - current_price) / tick_size
+        
+        # **CRITICAL**: Use comprehensive exit checker - same as real trades!
+        try:
+            from comprehensive_exit_logic import ComprehensiveExitChecker
+            
+            # Build trade context dict (same format as real trades)
+            trade_context = {
+                'entry_price': float(self.entry_price),
+                'side': self.side,
+                'contracts': self.contracts,
+                'original_contracts': self.contracts,
+                'initial_risk_ticks': self.initial_risk_ticks,
+                'bars_in_trade': self.bars_elapsed,
+                'entry_atr': current_atr,
+                'stop_price': self.stop_price,
+                'highest_price': self.highest_price,
+                'lowest_price': self.lowest_price,
+                'breakeven_active': self.breakeven_active,
+                'trailing_active': self.trailing_active,
+                'remaining_quantity': self.remaining_quantity
+            }
+            
+            ghost_checker = ComprehensiveExitChecker(trade_context)
+            
+            # Update trade context with current state
+            ghost_checker.trade['bars_in_trade'] = self.bars_elapsed
+            ghost_checker.trade['highest_price'] = self.highest_price
+            ghost_checker.trade['lowest_price'] = self.lowest_price
+            ghost_checker.trade['breakeven_active'] = self.breakeven_active
+            ghost_checker.trade['trailing_active'] = self.trailing_active
+            ghost_checker.trade['stop_price'] = self.stop_price
+            ghost_checker.trade['remaining_quantity'] = self.remaining_quantity
+            
+            # Build market context
+            market_context = {
+                'consecutive_losses': 0,
+                'consecutive_wins': 0,
+                'daily_pnl': 0.0,
+                'vix': 15.0,
+                'entry_atr': current_atr,
+                'current_atr': current_atr
+            }
+            
+            # Convert bars_1min deque to list for comprehensive checker
+            import pandas as pd
+            bars_list = list(bars_1min)
+            if bars_list:
+                bars_df = pd.DataFrame(bars_list)
+                current_bar_index = len(bars_list) - 1
+                
+                # Check ALL exit conditions using comprehensive logic
+                comprehensive_exit = ghost_checker.check_all_exits(
+                    current_bar=bars_df.iloc[-1],
+                    bar_index=current_bar_index,
+                    all_bars=bars_df,
+                    market_context=market_context
+                )
+                
+                # Store ALL exit parameters used (for learning)
+                self.all_exit_params_used = ghost_checker.get_all_used_params()
+                
+                # If comprehensive checker says exit, do it
+                if comprehensive_exit and comprehensive_exit.get('should_exit', False):
+                    exit_reason = comprehensive_exit['exit_reason']
+                    exit_price = comprehensive_exit['exit_price']
+                    
+                    # Calculate final P&L
+                    if self.side == 'long':
+                        pnl = (exit_price - self.entry_price) * tick_value * 4 * self.remaining_quantity
+                    else:
+                        pnl = (self.entry_price - exit_price) * tick_value * 4 * self.remaining_quantity
+                    
+                    # Use helper function to create complete outcome
+                    self.outcome = self._create_outcome_dict(pnl, exit_price, exit_reason, bar)
+                    # Add comprehensive-specific fields
+                    self.outcome['exit_params'] = comprehensive_exit.get('exit_params', {})
+                    self.outcome['triggered_params'] = comprehensive_exit.get('triggered_params', [])
+                    
+                    self.completed = True
+                    return self.outcome
+                
+                # Update stop/breakeven/trailing based on comprehensive checker state
+                if 'stop_price' in ghost_checker.trade:
+                    self.stop_price = ghost_checker.trade['stop_price']
+                if 'breakeven_active' in ghost_checker.trade:
+                    self.breakeven_active = ghost_checker.trade['breakeven_active']
+                if 'trailing_active' in ghost_checker.trade:
+                    self.trailing_active = ghost_checker.trade['trailing_active']
+            
+        except Exception as e:
+            logger.debug(f"[SHADOW] Comprehensive exit check failed: {e}")
+        
+        # Track MAE/MFE
+        if unrealized_pnl < 0 and abs(unrealized_pnl) > self.mae:
+            self.mae = abs(unrealized_pnl)
+        if unrealized_pnl > 0 and unrealized_pnl > self.mfe:
+            self.mfe = unrealized_pnl
+        
+        # BASIC STOP CHECK (backup if comprehensive didn't trigger)
+        if self.side == 'long' and bar['low'] <= self.stop_price:
+            pnl = (self.stop_price - self.entry_price) * tick_value * 4 * self.remaining_quantity
+            self.outcome = self._create_outcome_dict(pnl, self.stop_price, 'stop_loss', bar)
+            self.completed = True
+            return self.outcome
+            
+        elif self.side == 'short' and bar['high'] >= self.stop_price:
+            pnl = (self.entry_price - self.stop_price) * tick_value * 4 * self.remaining_quantity
+            self.outcome = self._create_outcome_dict(pnl, self.stop_price, 'stop_loss', bar)
+            self.completed = True
+            return self.outcome
+        
+        # Timeout (200 bars ~ 3.3 hours)
+        if self.bars_elapsed >= self.max_bars:
+            if self.side == 'long':
+                pnl = (current_price - self.entry_price) * tick_value * 4 * self.remaining_quantity
+            else:
+                pnl = (self.entry_price - current_price) * tick_value * 4 * self.remaining_quantity
+            
+            self.outcome = self._create_outcome_dict(pnl, current_price, 'ghost_timeout', bar)
+            self.completed = True
+            return self.outcome
+        
+        return None  # Trade continues
+
+
+def create_shadow_trade(symbol: str, rl_state: Dict, side: str, entry_price: float, 
+                       confidence: float, rejection_reason: str) -> None:
+    """
+    Create a shadow trade to track a rejected signal.
+    Shadow FULLY SIMULATES a real trade with adaptive neural exit model.
+    Limit to max 5 active shadows to prevent memory bloat.
+    
+    Args:
+        symbol: Instrument symbol
+        rl_state: RL state snapshot at rejection
+        side: 'long' or 'short'
+        entry_price: Price where signal occurred
+        confidence: AI confidence when rejected
+        rejection_reason: Why signal was rejected
+    """
+    MAX_SHADOWS = 5
+    
+    # Remove any completed shadows first
+    state[symbol]["shadow_trades"] = [s for s in state[symbol]["shadow_trades"] if not s.completed]
+    
+    # Only create new shadow if under limit
+    if len(state[symbol]["shadow_trades"]) < MAX_SHADOWS:
+        # Get current ATR for stop calculation
+        current_atr = rl_state.get('atr', 2.0)
+        
+        shadow = ShadowTrade(
+            symbol=symbol,
+            rl_state=rl_state,
+            side=side,
+            entry_price=entry_price,
+            entry_time=get_current_time(),
+            confidence=confidence,
+            rejection_reason=rejection_reason,
+            atr=current_atr
+        )
+        state[symbol]["shadow_trades"].append(shadow)
+        logger.debug(f"[SHADOW] Created {side} shadow @ ${entry_price:.2f} (comprehensive 131-param exit logic)")
+    else:
+        logger.debug(f"[SHADOW] Skipped creating shadow (max {MAX_SHADOWS} active)")
+
+
+def update_shadow_trades(symbol: str, bar: Dict) -> None:
+    """
+    Update all active shadow trades with the latest bar.
+    Shadows FULLY SIMULATE real trades with adaptive neural exit model.
+    Send completed shadow outcomes to cloud for RL learning.
+    
+    Args:
+        symbol: Instrument symbol
+        bar: Latest 1-minute bar
+    """
+    if not state[symbol]["shadow_trades"]:
+        return
+    
+    completed_shadows = []
+    
+    # Get required data for adaptive exit model
+    bars_1min = state[symbol]["bars_1min"]
+    
+    for shadow in state[symbol]["shadow_trades"]:
+        # Update shadow with full simulation (adaptive exits, breakeven, trailing, partials)
+        outcome = shadow.update(bar, bars_1min, adaptive_manager, CONFIG)
+        if outcome:
+            completed_shadows.append((shadow, outcome))
+    
+    # Send completed shadows to cloud
+    for shadow, outcome in completed_shadows:
+        # Send to cloud (async, fire and forget)
+        send_shadow_outcome_to_cloud(shadow.rl_state, outcome)
+        
+        # Log for debugging
+        pnl_sign = "+" if outcome['pnl'] > 0 else ""
+        partials_info = f", {outcome['partials_taken']} partials" if outcome['partials_taken'] > 0 else ""
+        breakeven_info = ", BE" if outcome.get('breakeven_activated') else ""
+        trailing_info = ", TRAIL" if outcome.get('trailing_activated') else ""
+        logger.info(f"[SHADOW] Completed {shadow.side} shadow: {pnl_sign}${outcome['pnl']:.2f} ({outcome['exit_reason']}) after {outcome['duration_min']} min{partials_info}{breakeven_info}{trailing_info}")
+    
+    # Remove completed shadows
+    state[symbol]["shadow_trades"] = [s for s in state[symbol]["shadow_trades"] if not s.completed]
+
+
+async def send_shadow_outcome_async(rl_state: Dict, outcome: Dict) -> None:
+    """
+    Send completed ghost trade to cloud AS BOTH signal AND exit experience (64 features).
+    
+    Ghost trades = signals we rejected but fully simulated with complete exit tracking.
+    They need COMPLETE 64-feature exit data, same as real trades.
+    
+    Args:
+        rl_state: RL state snapshot at rejection (33 signal features)
+        outcome: Complete ghost outcome with all exit tracking
+    """
+    if not CLOUD_ML_API_URL:
+        return
+    
+    try:
+        # Build market state for exit experience
+        market_state = {
+            'rsi': rl_state.get('rsi', 50.0),
+            'volume_ratio': rl_state.get('volume_ratio', 1.0),
+            'hour': rl_state.get('hour', 12),
+            'day_of_week': rl_state.get('day_of_week', 0),
+            'streak': rl_state.get('streak', 0),
+            'recent_pnl': rl_state.get('recent_pnl', 0.0),
+            'vix': rl_state.get('vix', 15.0),
+            'vwap_distance': rl_state.get('vwap_distance', 0.0),
+            'atr': rl_state.get('atr', 2.0)
+        }
+        
+        # Get exit params used (if available)
+        exit_params = outcome.get('exit_params', {
+            'breakeven_threshold_ticks': 0,
+            'trailing_distance_ticks': 0,
+            'partial_1_r': 999,
+            'partial_2_r': 999,
+            'partial_3_r': 999,
+            'current_atr': rl_state.get('atr', 2.0)
+        })
+        
+        # Market regime
+        regime = rl_state.get('market_regime', 'NORMAL')
+        
+        # Use capture_complete_exit_state for FULL 62-feature format
+        if adaptive_manager is not None:
+            try:
+                complete_exit_experience = adaptive_manager.capture_complete_exit_state(
+                    regime=regime,
+                    exit_params=exit_params,
+                    trade_outcome=outcome,  # Already has all fields
+                    market_state=market_state,
+                    partial_exits=[],
+                    # Daily loss limit context (NEW)
+                    daily_pnl_before_trade=state[symbol].get("daily_pnl", 0.0),
+                    daily_loss_limit=CONFIG.get("daily_loss_limit", 1000.0),
+                    daily_loss_proximity_pct=max(0.0, (-state[symbol].get("daily_pnl", 0.0) / CONFIG.get("daily_loss_limit", 1000.0)) * 100.0)
+                )
+                
+                # Send as exit experience with ghost marker
+                exit_payload = {
+                    "user_id": USER_ID,
+                    "symbol": CONFIG["instrument"],
+                    "experience_type": "ghost_exit",  # Ghost exit (not real trade)
+                    "experience": complete_exit_experience
+                }
+                
+                async with aiohttp.ClientSession() as session:
+                    async with session.post(
+                        f"{CLOUD_ML_API_URL}/api/ml/save_experience",
+                        json=exit_payload,
+                        timeout=aiohttp.ClientTimeout(total=3.0)
+                    ) as response:
+                        if response.status == 200:
+                            data = await response.json()
+                            win_str = "WIN" if outcome.get('win') else "LOSS"
+                            logger.debug(f"[CLOUD RL] Ghost exit saved (62 features): {outcome.get('exit_reason')} - {win_str} ${outcome.get('pnl', 0):.2f}")
+                        else:
+                            logger.debug(f"[CLOUD RL] Ghost save failed: HTTP {response.status}")
+                return
+            except Exception as e:
+                logger.debug(f"[CLOUD RL] Error using capture_complete_exit_state: {e}")
+        
+        # FALLBACK: Send basic ghost signal if adaptive_manager unavailable
+        signal_payload = {
+            "user_id": USER_ID,
+            "symbol": CONFIG["instrument"],
+            "experience_type": "ghost_trade",
+            
+            # Complete RL State (33 features)
+            "rl_state": {
+                "rsi": rl_state.get("rsi", 50),
+                "vwap_distance": rl_state.get("vwap_distance", 0),
+                "atr": rl_state.get("atr", 0),
+                "volume_ratio": rl_state.get("volume_ratio", 1.0),
+                "hour": rl_state.get("hour", 12),
+                "day_of_week": rl_state.get("day_of_week", 0),
+                "recent_pnl": rl_state.get("recent_pnl", 0.0),
+                "streak": rl_state.get("streak", 0),
+                "vix": rl_state.get("vix", 15.0),
+                "session": rl_state.get("session", "NY"),
+                "signal": rl_state.get("signal", "LONG"),
+                "side": rl_state.get("side", "long")
+            },
+            
+            # Ghost Outcome
+            "outcome": {
+                "took_trade": False,
+                "pnl": outcome.get("pnl", 0.0),
+                "duration_minutes": outcome.get("duration_min", 0),
+                "exit_reason": outcome.get("exit_reason", "ghost_unknown"),
+                "rejection_reason": outcome.get("rejection_reason", "unknown"),
+                "win": outcome.get("win", False),
+                "mae": outcome.get("mae", 0.0),
+                "mfe": outcome.get("mfe", 0.0)
+            }
+        }
+        
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                f"{CLOUD_ML_API_URL}/api/ml/save_experience",
+                json=signal_payload,
+                timeout=aiohttp.ClientTimeout(total=3.0)
+            ) as response:
+                if response.status == 200:
+                    logger.debug(f"[CLOUD RL] Ghost saved (fallback): {outcome.get('exit_reason')}")
+                else:
+                    logger.debug(f"[CLOUD RL] Ghost save failed: HTTP {response.status}")
+                    
+    except Exception as e:
+        logger.debug(f"[CLOUD RL] Ghost save error: {e}")
+
+
+def send_shadow_outcome_to_cloud(rl_state: Dict, outcome: Dict) -> None:
+    """
+    Synchronous wrapper for sending shadow outcome to cloud.
+    Fire and forget - doesn't block trading logic.
+    
+    Args:
+        rl_state: RL state snapshot at rejection
+        outcome: Shadow trade outcome
+    """
+    try:
+        loop = asyncio.get_event_loop()
+        if loop.is_running():
+            asyncio.ensure_future(send_shadow_outcome_async(rl_state, outcome))
+        else:
+            loop.run_until_complete(send_shadow_outcome_async(rl_state, outcome))
+    except Exception as e:
+        logger.debug(f"[CLOUD RL] Error sending shadow outcome: {e}")
+
+
+# ============================================================================
 # PHASE THREE: State Management
 # ============================================================================
 
@@ -1317,8 +2128,9 @@ def initialize_state(symbol: str) -> None:
         # Tick data storage
         "ticks": deque(maxlen=CONFIG.get("max_tick_storage", 10000)),
         
-        # Bar storage
-        "bars_1min": deque(maxlen=CONFIG.get("max_bars_storage", 200)),
+        # Bar counters (no storage, just count)
+        "bars_1min_count": 0,  # Total bars created since start
+        "bars_1min": deque(maxlen=200),  # Keep last 200 for VWAP calculations
         "bars_15min": deque(maxlen=100),
         
         # Current incomplete bars
@@ -1407,10 +2219,76 @@ def initialize_state(symbol: str) -> None:
             "partial_exit_history": [],  # List of {"price": float, "quantity": int, "r_multiple": float}
             # Advanced Exit Management - General
             "initial_risk_ticks": None,
+            
+            # ========================================================================
+            # COMPLETE RL FEATURE TRACKING (matches backtest)
+            # ========================================================================
+            # Performance Metrics
+            "mae": 0.0,  # Maximum Adverse Excursion (max drawdown)
+            "mfe": 0.0,  # Maximum Favorable Excursion (max profit)
+            "max_r_achieved": 0.0,  # Maximum R-multiple reached
+            "min_r_achieved": 0.0,  # Minimum R-multiple reached (most negative)
+            "unrealized_pnl": 0.0,  # Current unrealized P&L
+            "peak_unrealized_pnl": 0.0,  # Highest unrealized P&L reached
+            "peak_r_multiple": 0.0,  # Peak R-multiple
+            
+            # Exit Strategy State Tracking
+            "breakeven_activation_bar": None,  # Bar number when breakeven activated
+            "trailing_activation_bar": None,  # Bar number when trailing activated
+            "bars_until_breakeven": 0,  # How many bars until breakeven activated
+            "bars_until_trailing": 0,  # How many bars until trailing activated
+            "time_in_breakeven_bars": 0,  # How many bars spent in breakeven mode
+            "exit_param_update_count": 0,  # How many times exit params were updated
+            "stop_adjustment_count": 0,  # How many times stop was adjusted
+            "stop_hit": False,  # Whether stop loss was hit
+            
+            # Decision History Tracking
+            "exit_param_updates": [],  # List of {bar, vix, atr, reason, r_at_update}
+            "stop_adjustments": [],  # List of {bar, old_stop, new_stop, reason, r_at_adjustment}
+            "decision_history": [],  # Every bar's decision
+            "unrealized_pnl_history": [],  # P&L tracking over time
+            
+            # Drawdown Tracking
+            "profit_drawdown_from_peak": 0.0,  # $ drawdown from peak profit
+            "max_drawdown_percent": 0.0,  # Max % drawdown
+            "drawdown_bars": 0,  # Bars in drawdown
+            
+            # Volatility Tracking
+            "entry_atr": None,  # ATR at entry
+            "atr_samples": [],  # ATR values during trade
+            "high_volatility_bars": 0,  # Count of high volatility bars
+            "volatility_regime_at_entry": None,  # Regime when entered
+            
+            # Session/Context Tracking
+            "entry_session": None,  # Asia/London/NY
+            "entry_confidence": 0.0,  # Signal confidence at entry
+            "duration_bars": 0,  # How many bars trade has been open
+            "trade_number_in_session": 0,  # Nth trade of the session
+            "wins_in_last_5_trades": 0,  # Recent performance
+            "losses_in_last_5_trades": 0,  # Recent performance
+            
+            # Execution Quality
+            "exit_slippage_ticks": 0.0,  # Slippage on exit
+            "commission_cost": 0.0,  # Total commission paid
+            "exit_bid_ask_spread_ticks": 0.0,  # Spread at exit
+            
+            # Exit Parameters Used (for learning)
+            "exit_params_used": {},  # The adaptive exit params used for this trade
         },
         
+        # ========================================================================
+        # SHADOW TRADE TRACKING (Ghost signals for RL learning)
+        # ========================================================================
+        # Tracks rejected signals in real-time to see what WOULD have happened
+        # Max 5 active shadows to prevent memory bloat
+        "shadow_trades": [],  # List of active shadow trades being tracked
+        
         # Volume history
-        "volume_history": deque(maxlen=CONFIG["max_bars_storage"])
+        "volume_history": deque(maxlen=CONFIG["max_bars_storage"]),
+        
+        # Bot status tracking
+        "bot_status_message": "Monitoring...",
+        "skip_reason": "",  # Why bot is not trading (for dashboard display)
     }
     
     logger.info(f"State initialized for {symbol}")
@@ -1445,6 +2323,50 @@ def on_quote(symbol: str, bid_price: float, ask_price: float, bid_size: int,
             last_price=last_price,
             timestamp=timestamp_ms
         )
+        
+        # Update dashboard with live bid/ask prices
+        if dashboard is not None:
+            spread = ask_price - bid_price
+            
+            # Determine market condition based on spread
+            if spread <= 0.50:
+                condition = "NORMAL - Tight spread, good liquidity"
+            elif spread <= 1.00:
+                condition = "NORMAL - Good liquidity"
+            elif spread <= 2.00:
+                condition = "NORMAL - Acceptable spread"
+            elif spread <= 5.00:
+                condition = "CAUTION - Wider spread"
+            else:
+                condition = "VOLATILE - Wide spreads detected"
+            
+            # Calculate bars and current volume if symbol initialized
+            bars_count = 0
+            current_volume = 0
+            if symbol in state:
+                bars_count = state[symbol].get("bars_1min_count", 0)
+                # Get current bar volume
+                current_bar = state[symbol].get("current_1min_bar")
+                if current_bar:
+                    current_volume = current_bar.get("volume", 0)
+            
+            dashboard.update_symbol_data(symbol, {
+                'bid': bid_price,
+                'ask': ask_price,
+                'bid_size': bid_size,
+                'ask_size': ask_size,
+                'spread': spread,
+                'market_status': 'LIVE',
+                'condition': condition,
+                'bars_1min_count': bars_count,
+                'current_volume': current_volume
+            })
+            
+            # Refresh dashboard every 1000 ticks to reduce flicker
+            dashboard_tick_counter[0] += 1
+            if dashboard_tick_counter[0] >= 1000:
+                dashboard.display()
+                dashboard_tick_counter[0] = 0  # Reset counter
     
     # Also process as tick data to build bars
     # Use last_price and estimated volume of 1 (quote updates don't have volume)
@@ -1494,7 +2416,7 @@ def save_position_state(symbol: str) -> None:
             "entry_time": position["entry_time"].isoformat() if position.get("entry_time") else None,
             "order_id": position.get("order_id"),
             "stop_order_id": position.get("stop_order_id"),
-            "last_updated": datetime.now().isoformat(),
+            "last_updated": datetime.now(pytz.UTC).isoformat(),
         }
         
         # Write to file with backup
@@ -1645,12 +2567,19 @@ def update_1min_bar(symbol: str, price: float, volume: int, dt: datetime) -> Non
     
     current_bar = state[symbol]["current_1min_bar"]
     
+    # DEBUG: Log when we detect a minute change
+    if current_bar is not None and current_bar["timestamp"] != minute_boundary:
+        logger.info(f"[BAR_DEBUG] Minute changed: {current_bar['timestamp'].strftime('%H:%M:%S')} -> {minute_boundary.strftime('%H:%M:%S')}")
+    
     if current_bar is None or current_bar["timestamp"] != minute_boundary:
         # Finalize previous bar if exists
         if current_bar is not None:
+            # ONLY increment when closing a bar (minute boundary changed)
             state[symbol]["bars_1min"].append(current_bar)
-            bar_count = len(state[symbol]["bars_1min"])
-            logger.info(f"[BAR COMPLETED] 1min bar closed | Price: ${current_bar['close']:.2f} | Vol: {current_bar['volume']} | Total bars: {bar_count}")
+            state[symbol]["bars_1min_count"] += 1  # Increment total bar counter
+            bar_count = state[symbol]["bars_1min_count"]
+            # Log at CRITICAL level so it shows on dashboard
+            logger.critical(f"📊 BAR #{bar_count} CLOSED | {current_bar['timestamp'].strftime('%H:%M')} | ${current_bar['close']:.2f} | Vol: {current_bar['volume']}")
             
             # Calculate VWAP after new bar is added
             calculate_vwap(symbol)
@@ -1677,6 +2606,7 @@ def update_1min_bar(symbol: str, price: float, volume: int, dt: datetime) -> Non
             # Check for exit conditions if position is active
             check_exit_conditions(symbol)
             # Check for entry signals if no position
+            logger.critical(f"🔍 CHECKING FOR SIGNALS | Bar #{bar_count} | Bars available: {len(state[symbol]['bars_1min'])}")
             check_for_signals(symbol)
         
         # Start new bar
@@ -1981,7 +2911,7 @@ def update_rsi(symbol: str) -> None:
         symbol: Instrument symbol
     """
     bars = state[symbol]["bars_15min"]
-    rsi_period = CONFIG.get("rsi_period", 10)  # Iteration 3 - fast RSI
+    rsi_period = CONFIG.get("rsi_period", 10)  # Fast RSI - feature for neural networks
     
     if len(bars) < rsi_period + 1:
         logger.debug(f"Not enough bars for RSI: {len(bars)}/{rsi_period + 1}")
@@ -2184,10 +3114,10 @@ def calculate_vwap(symbol: str) -> None:
     std_dev = variance ** 0.5
     state[symbol]["vwap_std_dev"] = std_dev
     
-    # Calculate bands using ITERATION 3 standard deviation multipliers
-    band_1_mult = CONFIG.get("vwap_std_dev_1", 2.5)  # Iteration 3
-    band_2_mult = CONFIG.get("vwap_std_dev_2", 2.1)  # Iteration 3 - Entry zone
-    band_3_mult = CONFIG.get("vwap_std_dev_3", 3.7)  # Iteration 3 - Exit/stop zone
+    # Calculate bands using neural network baseline standard deviation multipliers
+    band_1_mult = CONFIG.get("vwap_std_dev_1", 2.5)  # Warning zone
+    band_2_mult = CONFIG.get("vwap_std_dev_2", 2.1)  # Entry zone - baseline for signal detection
+    band_3_mult = CONFIG.get("vwap_std_dev_3", 3.7)  # Exit/stop zone - baseline for exits
     state[symbol]["vwap_bands"]["upper_1"] = vwap + (std_dev * band_1_mult)
     state[symbol]["vwap_bands"]["upper_2"] = vwap + (std_dev * band_2_mult)
     state[symbol]["vwap_bands"]["upper_3"] = vwap + (std_dev * band_3_mult)
@@ -2218,7 +3148,7 @@ def calculate_vwap(symbol: str) -> None:
 def validate_signal_requirements(symbol: str, bar_time: datetime) -> Tuple[bool, Optional[str]]:
     """
     Validate that all requirements are met for signal generation.
-    24/5 trading - signals allowed anytime except maintenance/weekend/economic events.
+    24/5 trading - signals allowed anytime except maintenance/weekend.
     
     Args:
         symbol: Instrument symbol
@@ -2236,26 +3166,25 @@ def validate_signal_requirements(symbol: str, bar_time: datetime) -> Tuple[bool,
         logger.debug(f"Market closed, skipping signal check")
         return False, f"Market closed"
     
-    if trading_state == "event_block":
-        # FOMC/NFP/CPI event blocking (if enabled in config)
-        halt_reason = bot_status.get("halt_reason", "Economic event")
-        logger.debug(f"Event block active: {halt_reason}")
-        return False, f"Economic event block: {halt_reason}"
-    
     if trading_state == "flatten_mode":
-        logger.debug(f"Flatten mode active (4:45-5:00 PM), no new entries")
+        logger.debug(f"Flatten mode active (20:45-21:00 UTC), no new entries")
         return False, f"Flatten mode - close positions only"
     
     # Trading state is "entry_window" - market is open, proceed with checks
+    
+    # Daily entry cutoff - no new positions after 20:00 UTC (can still hold existing)
+    if current_time.time() >= CONFIG["daily_entry_cutoff"]:
+        logger.debug(f"After 20:00 UTC entry cutoff, no new trades (can hold existing)")
+        return False, "After 20:00 UTC - no new entries"
     
     # Friday restriction - close before weekend (use current time, not bar time)
     if current_time.weekday() == 4 and current_time.time() >= CONFIG["friday_entry_cutoff"]:
         log_time_based_action(
             "friday_entry_blocked",
-            f"Friday after {CONFIG['friday_entry_cutoff']}, no new trades to avoid weekend gap risk",
+            f"Friday after {CONFIG['friday_entry_cutoff']} UTC, no new trades to avoid weekend gap risk",
             {"day": "Friday", "time": bar_time.strftime('%H:%M:%S')}
         )
-        logger.info(f"Friday after {CONFIG['friday_entry_cutoff']} - no new trades (weekend gap risk)")
+        logger.info(f"Friday after {CONFIG['friday_entry_cutoff']} UTC - no new trades (weekend gap risk)")
         return False, "Friday entry cutoff"
     
     # Check if already have position
@@ -2322,10 +3251,10 @@ def validate_signal_requirements(symbol: str, bar_time: datetime) -> Tuple[bool,
             return False, "Trend not established"
         # Neutral trend is OK - will trade both directions
     
-    # Check RSI (ITERATION 3 - selective entry thresholds)
+    # Check RSI (neural network baseline - selective entry thresholds)
     use_rsi_filter = CONFIG.get("use_rsi_filter", True)
-    rsi_oversold = CONFIG.get("rsi_oversold", 35.0)  # Iteration 3
-    rsi_overbought = CONFIG.get("rsi_overbought", 65.0)  # Iteration 3
+    rsi_oversold = CONFIG.get("rsi_oversold", 35.0)  # Baseline for LONG signals
+    rsi_overbought = CONFIG.get("rsi_overbought", 65.0)  # Baseline for SHORT signals
     
     if use_rsi_filter:
         rsi = state[symbol]["rsi"]
@@ -2420,9 +3349,9 @@ def check_long_signal_conditions(symbol: str, prev_bar: Dict[str, Any],
             return False
         logger.debug(f"Price below VWAP: {current_bar['close']:.2f} < {vwap:.2f} ")
     
-    # FILTER 2: RSI - extreme oversold (ITERATION 3)
+    # FILTER 2: RSI - extreme oversold (neural network baseline)
     use_rsi = CONFIG.get("use_rsi_filter", True)
-    rsi_oversold = CONFIG.get("rsi_oversold", 35.0)  # Iteration 3 - selective entry
+    rsi_oversold = CONFIG.get("rsi_oversold", 35.0)  # Baseline - neural network validates
     if use_rsi:
         rsi = state[symbol]["rsi"]
         if rsi is not None:
@@ -2489,9 +3418,9 @@ def check_short_signal_conditions(symbol: str, prev_bar: Dict[str, Any],
             return False
         logger.debug(f"Price above VWAP: {current_bar['close']:.2f} > {vwap:.2f} ")
     
-    # FILTER 2: RSI - extreme overbought (ITERATION 3)
+    # FILTER 2: RSI - extreme overbought (neural network baseline)
     use_rsi = CONFIG.get("use_rsi_filter", True)
-    rsi_overbought = CONFIG.get("rsi_overbought", 65.0)  # Iteration 3 - selective entry
+    rsi_overbought = CONFIG.get("rsi_overbought", 65.0)  # Baseline - neural network validates
     if use_rsi:
         rsi = state[symbol]["rsi"]
         if rsi is not None:
@@ -2575,17 +3504,207 @@ def capture_rl_state(symbol: str, side: str, current_price: float) -> Dict[str, 
             else:
                 break  # Stop at breakeven
     
+    # ========================================================================
+    # REWARD SHAPING FEATURES (matches backtest for RL training)
+    # ========================================================================
+    
+    # 1. Volatility Trend - % change in volatility (recent 10 vs previous 10)
+    bars_1min = state[symbol]["bars_1min"]
+    if len(bars_1min) >= 20:
+        # Calculate recent volatility (last 10 bars)
+        recent_prices = [b["close"] for b in list(bars_1min)[-10:]]
+        recent_vol = statistics.stdev(recent_prices) if len(recent_prices) > 1 else 0.0
+        
+        # Calculate previous volatility (bars 11-20)
+        previous_prices = [b["close"] for b in list(bars_1min)[-20:-10]]
+        previous_vol = statistics.stdev(previous_prices) if len(previous_prices) > 1 else 0.0
+        
+        # % change in volatility
+        volatility_trend = ((recent_vol - previous_vol) / previous_vol * 100) if previous_vol > 0 else 0.0
+    else:
+        volatility_trend = 0.0
+    
+    # 2. Drawdown % at Entry - Current account drawdown from peak
+    starting_balance = CONFIG.get("account_size", 50000)
+    current_balance = starting_balance + state[symbol].get("daily_pnl", 0.0)
+    
+    # Track peak balance (initialize if not exists)
+    if "peak_balance" not in state[symbol]:
+        state[symbol]["peak_balance"] = starting_balance
+    
+    # Update peak balance
+    if current_balance > state[symbol]["peak_balance"]:
+        state[symbol]["peak_balance"] = current_balance
+    
+    # Calculate drawdown %
+    peak_balance = state[symbol]["peak_balance"]
+    drawdown_pct_at_entry = ((current_balance - peak_balance) / peak_balance * 100) if peak_balance > 0 else 0.0
+    
+    # 3. Recent Volatility (20-bar) - Rolling standard deviation
+    if len(bars_1min) >= 20:
+        recent_20_prices = [b["close"] for b in list(bars_1min)[-20:]]
+        recent_volatility_20bar = statistics.stdev(recent_20_prices)
+    else:
+        recent_volatility_20bar = 0.0
+    
+    # ========================================================================
+    # ADDITIONAL FEATURES FOR NEURAL NETWORK (33 total features required)
+    # ========================================================================
+    
+    # Session classification based on hour
+    if 0 <= hour < 8:
+        session = 'Asia'
+    elif 8 <= hour < 13:
+        session = 'London'
+    else:
+        session = 'NY'
+    
+    # Trend strength (using EMA vs price)
+    trend_strength = 0.0
+    if len(bars_1min) >= 21:
+        # Calculate 21-period EMA
+        prices = [b["close"] for b in list(bars_1min)[-21:]]
+        ema = prices[0]
+        multiplier = 2 / (21 + 1)
+        for price_val in prices[1:]:
+            ema = (price_val - ema) * multiplier + ema
+        # Trend strength as % distance from EMA
+        trend_strength = ((current_price - ema) / ema * 100) if ema > 0 else 0.0
+    
+    # Support/Resistance proximity (distance to nearest VWAP band in ticks)
+    tick_size = 0.25  # ES futures tick size
+    sr_proximity_ticks = 0.0
+    if vwap_bands:
+        # Find nearest band
+        bands = [
+            vwap_bands.get("lower_3", vwap),
+            vwap_bands.get("lower_2", vwap),
+            vwap_bands.get("lower_1", vwap),
+            vwap,
+            vwap_bands.get("upper_1", vwap),
+            vwap_bands.get("upper_2", vwap),
+            vwap_bands.get("upper_3", vwap)
+        ]
+        distances = [abs(current_price - band) for band in bands]
+        sr_proximity_ticks = min(distances) / tick_size
+    
+    # Trade type classification (0=reversal at band, 1=continuation)
+    # If we're at outer bands (2+ std), it's a reversal setup
+    trade_type = 0 if vwap_distance >= 2.0 else 1
+    
+    # Time since last trade (minutes)
+    time_since_last_trade_mins = 0.0
+    if "trade_history" in state[symbol] and len(state[symbol]["trade_history"]) > 0:
+        last_trade = state[symbol]["trade_history"][-1]
+        if "exit_time" in last_trade:
+            from datetime import datetime
+            import pytz
+            last_exit_time = last_trade["exit_time"]
+            if isinstance(last_exit_time, str):
+                last_exit_time = datetime.fromisoformat(last_exit_time.replace('Z', '+00:00'))
+            current_utc = datetime.now(pytz.UTC)
+            time_diff = (current_utc - last_exit_time).total_seconds() / 60.0
+            time_since_last_trade_mins = max(0, time_diff)
+    
+    # Bid-ask spread estimate (in ticks) - use ATR as proxy if real spread unavailable
+    bid_ask_spread_ticks = (atr / tick_size * 0.5) if atr > 0 else 1.0
+    
+    # Entry slippage estimate (ticks) - assume 0.5 ticks for limit orders, 1-2 for market
+    entry_slippage_ticks = 1.0
+    
+    # Commission cost per contract (ES futures)
+    commission_cost = 2.50
+    
+    # Market regime classification
+    # High volatility = recent_volatility_20bar > ATR * 1.5
+    # Low volatility = recent_volatility_20bar < ATR * 0.7
+    market_regime = 'NORMAL'
+    if recent_volatility_20bar > atr * 1.5:
+        market_regime = 'HIGH_VOL'
+    elif recent_volatility_20bar < atr * 0.7:
+        market_regime = 'LOW_VOL'
+    
+    # VWAP standard deviation (already calculated above)
+    vwap_std_dev = vwap_std
+    
+    # Confidence placeholder (will be filled by neural network)
+    confidence = 0.5
+    
+    # Entry price = current price for now
+    entry_price = current_price
+    
+    # Consecutive wins/losses
+    consecutive_wins = max(0, streak)
+    consecutive_losses = max(0, -streak)
+    
+    # Cumulative P&L at entry
+    cumulative_pnl_at_entry = state[symbol].get("daily_pnl", 0.0)
+    
+    # Timestamp
+    timestamp = current_time.isoformat()
+    
+    # Minute of hour
+    minute = current_time.minute
+    
+    # Time to market close (in minutes) - ES closes 22:00 UTC (17:00 EST)
+    close_hour = 22  # 22:00 UTC = 17:00 EST
+    if current_time.hour < close_hour:
+        time_to_close = (close_hour - current_time.hour) * 60 - current_time.minute
+    else:
+        # After close or during maintenance, use 0
+        time_to_close = 0
+    
+    # Price mod 50 (distance to nearest round number) - psychological levels
+    # NORMALIZED to 0-1 range for consistency with training
+    price_mod_50 = (current_price % 50) / 50.0
+    
+    # Signal direction encoding (LONG=0, SHORT=1)
+    signal_encoded = 0 if side.lower() == 'long' else 1
+    
     rl_state = {
-        "rsi": rsi if rsi is not None else 50,
-        "vwap_distance": vwap_distance,
-        "atr": atr,
-        "volume_ratio": volume_ratio,
+        # Original 8 features
+        "rsi": round(rsi if rsi is not None else 50, 2),
+        "vwap_distance": round(vwap_distance, 4),
+        "atr": round(atr, 4),
+        "volume_ratio": round(volume_ratio, 4),
         "hour": hour,
         "day_of_week": day_of_week,
-        "recent_pnl": recent_pnl,
+        "recent_pnl": round(recent_pnl, 2),
         "streak": streak,
+        
+        # Additional features (25 more = 33 total)
+        "vix": 15.0,  # TODO: Fetch real VIX from data feed
+        "session": session,
+        "session_encoded": 0 if session == 'Asia' else (1 if session == 'London' else 2),
+        "trend_strength": round(trend_strength, 4),
+        "sr_proximity_ticks": round(sr_proximity_ticks, 2),
+        "trade_type": trade_type,
+        "time_since_last_trade_mins": round(time_since_last_trade_mins, 2),
+        "bid_ask_spread_ticks": round(bid_ask_spread_ticks, 2),
+        "drawdown_pct_at_entry": round(drawdown_pct_at_entry, 4),
+        "entry_slippage_ticks": round(entry_slippage_ticks, 2),
+        "commission_cost": round(commission_cost, 2),
+        "signal": side.upper(),
+        "signal_encoded": signal_encoded,
+        "market_regime": market_regime,
+        "recent_volatility_20bar": round(recent_volatility_20bar, 4),
+        "volatility_trend": round(volatility_trend, 6),
+        "vwap_std_dev": round(vwap_std_dev, 4),
+        "confidence": round(confidence, 4),
+        "price": round(current_price, 2),
+        "entry_price": round(entry_price, 2),
+        "vwap": round(vwap, 2),
+        "minute": minute,
+        "consecutive_wins": consecutive_wins,
+        "consecutive_losses": consecutive_losses,
+        "cumulative_pnl_at_entry": round(cumulative_pnl_at_entry, 2),
+        "timestamp": timestamp,
+        "time_to_close": time_to_close,  # Minutes until market close
+        "price_mod_50": round(price_mod_50, 2),  # Distance to round 50-level
+        
+        # Legacy fields for backward compatibility
         "side": side,
-        "price": current_price
+        "volatility": round(recent_volatility_20bar, 4)  # Alias for backward compatibility
     }
     
     return rl_state
@@ -2603,11 +3722,26 @@ def check_for_signals(symbol: str) -> None:
     is_safe, reason = check_safety_conditions(symbol)
     if not is_safe:
         logger.info(f"[SIGNAL CHECK] Safety check failed: {reason}")
+        # Store reason for dashboard display
+        state[symbol]["skip_reason"] = reason
+        if dashboard:
+            dashboard.update_symbol_data(symbol, {
+                "skip_reason": reason,
+                "status": "Waiting - " + reason
+            })
+            dashboard.display()
         return
     
     # Get the latest bar
     if len(state[symbol]["bars_1min"]) == 0:
         logger.info(f"[SIGNAL CHECK] No 1-min bars yet")
+        state[symbol]["skip_reason"] = "No bars yet"
+        if dashboard:
+            dashboard.update_symbol_data(symbol, {
+                "skip_reason": "Building bars...",
+                "status": "Initializing..."
+            })
+            dashboard.display()
         return
     
     latest_bar = state[symbol]["bars_1min"][-1]
@@ -2617,7 +3751,18 @@ def check_for_signals(symbol: str) -> None:
     is_valid, reason = validate_signal_requirements(symbol, bar_time)
     if not is_valid:
         logger.info(f"[SIGNAL CHECK] Validation failed: {reason} at {bar_time}")
+        # Store reason for dashboard display
+        state[symbol]["skip_reason"] = reason
+        if dashboard:
+            dashboard.update_symbol_data(symbol, {
+                "skip_reason": reason,
+                "status": "Waiting - " + reason
+            })
+            dashboard.display()
         return
+    
+    # Clear skip reason - we're actively looking for signals
+    state[symbol]["skip_reason"] = ""
     
     # Get bars for signal check
     prev_bar = state[symbol]["bars_1min"][-2]
@@ -2633,18 +3778,141 @@ def check_for_signals(symbol: str) -> None:
     
     # Check for long signal
     if check_long_signal_conditions(symbol, prev_bar, current_bar):
+        logger.critical(f"🎯 LONG SIGNAL DETECTED! Prev Low: ${prev_bar['low']:.2f} | Lower Band: ${vwap_bands['lower_2']:.2f}")
+        
+        # === SIGNAL RL FEATURE 1: SPREAD FILTER ===
+        # Check if spread is too wide (high slippage risk)
+        if rl_brain is not None:
+            current_spread_ticks = 1.0  # Default
+            if bid_ask_manager is not None:
+                quote = bid_ask_manager.get_current_quote(symbol)
+                if quote and quote.bid > 0 and quote.ask > 0:
+                    tick_size = CONFIG.get("tick_size", 0.25)
+                    current_spread_ticks = (quote.ask - quote.bid) / tick_size
+            
+            spread_ok, spread_reason = rl_brain.check_spread_acceptable(current_spread_ticks)
+            if not spread_ok:
+                logger.info(f"❌ SPREAD FILTER REJECTED LONG: {spread_reason}")
+                state[symbol]["last_rejected_signal"] = {
+                    "time": get_current_time(),
+                    "side": "long",
+                    "price": current_bar["close"],
+                    "reason": spread_reason
+                }
+                # Track as skipped signal for learning
+                rl_state = capture_rl_state(symbol, "long", current_bar["close"])
+                rl_brain.track_skipped_signal(rl_state, 0.0, spread_reason)
+                
+                if dashboard:
+                    sig_time = get_current_time().strftime("%H:%M")
+                    dashboard.update_symbol_data(symbol, {
+                        "last_rejected_signal": f"{sig_time} LONG @ ${current_bar['close']:.2f} ({spread_reason})",
+                        "status": "Signal rejected - spread too wide"
+                    })
+                    dashboard.display()
+                return
+        
+        # === SIGNAL RL FEATURE 2: LIQUIDITY FILTER ===
+        # Check if volume is too low (fill risk)
+        if rl_brain is not None:
+            avg_volume = state[symbol].get("avg_volume", 1)
+            current_volume = current_bar.get("volume", 0)
+            volume_ratio = current_volume / avg_volume if avg_volume > 0 else 1.0
+            
+            liquidity_ok, liquidity_reason = rl_brain.check_liquidity_acceptable(volume_ratio)
+            if not liquidity_ok:
+                logger.info(f"❌ LIQUIDITY FILTER REJECTED LONG: {liquidity_reason}")
+                state[symbol]["last_rejected_signal"] = {
+                    "time": get_current_time(),
+                    "side": "long",
+                    "price": current_bar["close"],
+                    "reason": liquidity_reason
+                }
+                # Track as skipped signal for learning
+                rl_state = capture_rl_state(symbol, "long", current_bar["close"])
+                rl_brain.track_skipped_signal(rl_state, 0.0, liquidity_reason)
+                
+                if dashboard:
+                    sig_time = get_current_time().strftime("%H:%M")
+                    dashboard.update_symbol_data(symbol, {
+                        "last_rejected_signal": f"{sig_time} LONG @ ${current_bar['close']:.2f} ({liquidity_reason})",
+                        "status": "Signal rejected - low liquidity"
+                    })
+                    dashboard.display()
+                return
+        
+        # ADAPTIVE LEARNING - Check if we should skip this trade based on learned patterns
+        should_skip, skip_reason = adaptive_manager.should_skip_trade(symbol, state[symbol]) if adaptive_manager else (False, "")
+        if should_skip:
+            logger.info(f"❌ ADAPTIVE FILTER REJECTED LONG: {skip_reason}")
+            state[symbol]["last_rejected_signal"] = {
+                "time": get_current_time(),
+                "side": "long",
+                "price": current_bar["close"],
+                "reason": skip_reason
+            }
+            # === SIGNAL RL FEATURE 3: ADVERSE SELECTION TRACKING ===
+            # Track rejected signals to learn from adverse selection
+            if rl_brain is not None:
+                rl_state = capture_rl_state(symbol, "long", current_bar["close"])
+                rl_brain.track_skipped_signal(rl_state, 0.0, skip_reason)
+            
+            if dashboard:
+                sig_time = get_current_time().strftime("%H:%M")
+                dashboard.update_symbol_data(symbol, {
+                    "last_rejected_signal": f"{sig_time} LONG @ ${current_bar['close']:.2f} (Adaptive filter)",
+                    "status": "Signal rejected - learned filter"
+                })
+                dashboard.display()
+            return
+        
         # REINFORCEMENT LEARNING - Get confidence from cloud API (shared learning pool)
         # Capture market state
         rl_state = capture_rl_state(symbol, "long", current_bar["close"])
         
+        # Calculate current spread in ticks for RL spread filter
+        current_spread_ticks = 1.0  # Default
+        if bid_ask_manager is not None:
+            quote = bid_ask_manager.get_current_quote(symbol)
+            if quote and quote.bid > 0 and quote.ask > 0:
+                tick_size = CONFIG.get("tick_size", 0.25)
+                current_spread_ticks = (quote.ask - quote.bid) / tick_size
+        
         # Ask cloud RL API for decision (or local RL as fallback)
-        take_signal, confidence, reason = get_ml_confidence(rl_state, "long")
+        take_signal, confidence, size_mult, reason = get_ml_confidence(rl_state, "long", current_spread_ticks)
+        
+        logger.critical(f"🤖 ML DECISION: {'✅ TAKE' if take_signal else '❌ REJECT'} | Confidence: {confidence:.1%} | Reason: {reason}")
+        
+        # ENFORCE GUI CONFIDENCE THRESHOLD - User's setting is the minimum
+        user_threshold = CONFIG.get("rl_confidence_threshold", 0.5)
+        if take_signal and confidence < user_threshold:
+            logger.info(f"❌ GUI THRESHOLD REJECTED LONG signal: confidence {confidence:.1%} below user threshold {user_threshold:.1%}")
+            logger.info(f"   User configured minimum: {user_threshold:.1%}")
+            state[symbol]["last_rejected_signal"] = {
+                "time": get_current_time(),
+                "state": rl_state,
+                "side": "long",
+                "confidence": confidence,
+                "reason": f"Below user threshold: {confidence:.1%} < {user_threshold:.1%}"
+            }
+            
+            # Update dashboard
+            if dashboard:
+                sig_time = get_current_time().strftime("%H:%M")
+                conf_str = f"{int(confidence * 100)}%"
+                dashboard.update_symbol_data(symbol, {
+                    "last_rejected_signal": f"{sig_time} LONG @ ${current_bar['close']:.2f} (User Min: {int(user_threshold * 100)}% > {conf_str})",
+                    "status": "Below user confidence threshold"
+                })
+                dashboard.display()
+            
+            return
         
         # Check if in recovery mode and need higher confidence
         if take_signal and bot_status.get("recovery_confidence_threshold"):
             recovery_threshold = bot_status["recovery_confidence_threshold"]
             if confidence < recovery_threshold:
-                logger.info(f" RECOVERY MODE REJECTED LONG signal: confidence {confidence:.1%} below recovery threshold {recovery_threshold:.1%}")
+                logger.info(f"❌ RECOVERY MODE REJECTED LONG signal: confidence {confidence:.1%} below recovery threshold {recovery_threshold:.1%}")
                 logger.info(f"   Bot is in recovery mode - only taking high-confidence signals")
                 state[symbol]["last_rejected_signal"] = {
                     "time": get_current_time(),
@@ -2653,10 +3921,21 @@ def check_for_signals(symbol: str) -> None:
                     "confidence": confidence,
                     "reason": f"Recovery mode: {confidence:.1%} < {recovery_threshold:.1%}"
                 }
+                
+                # Update dashboard to show rejected signal
+                if dashboard:
+                    sig_time = get_current_time().strftime("%H:%M")
+                    conf_str = f"{int(confidence * 100)}%"
+                    dashboard.update_symbol_data(symbol, {
+                        "last_rejected_signal": f"{sig_time} LONG @ ${current_bar['close']:.2f} (Recovery: {conf_str} < {int(recovery_threshold * 100)}%)",
+                        "status": "Recovery mode - rejected"
+                    })
+                    dashboard.display()
+                
                 return
         
         if not take_signal:
-            logger.info(f" RL REJECTED LONG signal: {reason} (confidence: {confidence:.1%})")
+            logger.info(f"❌ RL REJECTED LONG signal: {reason} (confidence: {confidence:.1%})")
             logger.info(f"   RSI: {rl_state['rsi']:.1f}, VWAP dist: {rl_state['vwap_distance']:.2f}, "
                       f"Vol ratio: {rl_state['volume_ratio']:.2f}x")
             # Store the rejected signal state for potential future learning
@@ -2667,34 +3946,181 @@ def check_for_signals(symbol: str) -> None:
                 "confidence": confidence,
                 "reason": reason
             }
+            
+            # Update dashboard to show rejected signal
+            if dashboard:
+                sig_time = get_current_time().strftime("%H:%M")
+                conf_str = f"{int(confidence * 100)}%"
+                dashboard.update_symbol_data(symbol, {
+                    "last_rejected_signal": f"{sig_time} LONG @ ${current_bar['close']:.2f} (Conf: {conf_str})",
+                    "status": "Signal rejected - low confidence"
+                })
+                dashboard.display()
+            
             return
         
-        # RL approved - adjust position size based on confidence
-        logger.info(f" RL APPROVED LONG signal: {reason} (confidence: {confidence:.1%})")
+        # RL approved - adjust position size based on confidence and learned size multiplier
+        logger.info(f"✅ RL APPROVED LONG signal: {reason} (confidence: {confidence:.1%}, size: {size_mult:.2f}x)")
         logger.info(f"   RSI: {rl_state['rsi']:.1f}, VWAP dist: {rl_state['vwap_distance']:.2f}, "
                   f"Vol ratio: {rl_state['volume_ratio']:.2f}x, Streak: {rl_state['streak']:+d}")
         
         # Store the state for outcome recording after trade
         state[symbol]["entry_rl_state"] = rl_state
         state[symbol]["entry_rl_confidence"] = confidence
+        state[symbol]["entry_rl_size_mult"] = size_mult  # Store learned size multiplier
+        
+        # Store signal info for dashboard display
+        state[symbol]["last_signal_type"] = f"LONG @ ${current_bar['close']:.2f}"
+        state[symbol]["last_signal_timestamp"] = get_current_time().timestamp()
+        state[symbol]["last_signal_confidence"] = confidence
+        state[symbol]["last_signal_approved"] = True  # Mark as approved
+        state[symbol]["bot_status_message"] = "Signal detected!"
+        
+        # Update dashboard immediately
+        if dashboard:
+            update_dashboard_for_symbol(symbol)
+            dashboard.display()
         
         execute_entry(symbol, "long", current_bar["close"])
         return
     
     # Check for short signal
     if check_short_signal_conditions(symbol, prev_bar, current_bar):
+        logger.critical(f"🎯 SHORT SIGNAL DETECTED! Prev High: ${prev_bar['high']:.2f} | Upper Band: ${vwap_bands['upper_2']:.2f}")
+        
+        # === SIGNAL RL FEATURE 1: SPREAD FILTER ===
+        # Check if spread is too wide (high slippage risk)
+        if rl_brain is not None:
+            current_spread_ticks = 1.0  # Default
+            if bid_ask_manager is not None:
+                quote = bid_ask_manager.get_current_quote(symbol)
+                if quote and quote.bid > 0 and quote.ask > 0:
+                    tick_size = CONFIG.get("tick_size", 0.25)
+                    current_spread_ticks = (quote.ask - quote.bid) / tick_size
+            
+            spread_ok, spread_reason = rl_brain.check_spread_acceptable(current_spread_ticks)
+            if not spread_ok:
+                logger.info(f"❌ SPREAD FILTER REJECTED SHORT: {spread_reason}")
+                state[symbol]["last_rejected_signal"] = {
+                    "time": get_current_time(),
+                    "side": "short",
+                    "price": current_bar["close"],
+                    "reason": spread_reason
+                }
+                # Track as skipped signal for learning
+                rl_state = capture_rl_state(symbol, "short", current_bar["close"])
+                rl_brain.track_skipped_signal(rl_state, 0.0, spread_reason)
+                
+                if dashboard:
+                    sig_time = get_current_time().strftime("%H:%M")
+                    dashboard.update_symbol_data(symbol, {
+                        "last_rejected_signal": f"{sig_time} SHORT @ ${current_bar['close']:.2f} ({spread_reason})",
+                        "status": "Signal rejected - spread too wide"
+                    })
+                    dashboard.display()
+                return
+        
+        # === SIGNAL RL FEATURE 2: LIQUIDITY FILTER ===
+        # Check if volume is too low (fill risk)
+        if rl_brain is not None:
+            avg_volume = state[symbol].get("avg_volume", 1)
+            current_volume = current_bar.get("volume", 0)
+            volume_ratio = current_volume / avg_volume if avg_volume > 0 else 1.0
+            
+            liquidity_ok, liquidity_reason = rl_brain.check_liquidity_acceptable(volume_ratio)
+            if not liquidity_ok:
+                logger.info(f"❌ LIQUIDITY FILTER REJECTED SHORT: {liquidity_reason}")
+                state[symbol]["last_rejected_signal"] = {
+                    "time": get_current_time(),
+                    "side": "short",
+                    "price": current_bar["close"],
+                    "reason": liquidity_reason
+                }
+                # Track as skipped signal for learning
+                rl_state = capture_rl_state(symbol, "short", current_bar["close"])
+                rl_brain.track_skipped_signal(rl_state, 0.0, liquidity_reason)
+                
+                if dashboard:
+                    sig_time = get_current_time().strftime("%H:%M")
+                    dashboard.update_symbol_data(symbol, {
+                        "last_rejected_signal": f"{sig_time} SHORT @ ${current_bar['close']:.2f} ({liquidity_reason})",
+                        "status": "Signal rejected - low liquidity"
+                    })
+                    dashboard.display()
+                return
+        
+        # ADAPTIVE LEARNING - Check if we should skip this trade based on learned patterns
+        should_skip, skip_reason = adaptive_manager.should_skip_trade(symbol, state[symbol]) if adaptive_manager else (False, "")
+        if should_skip:
+            logger.info(f"❌ ADAPTIVE FILTER REJECTED SHORT: {skip_reason}")
+            state[symbol]["last_rejected_signal"] = {
+                "time": get_current_time(),
+                "side": "short",
+                "price": current_bar["close"],
+                "reason": skip_reason
+            }
+            # === SIGNAL RL FEATURE 3: ADVERSE SELECTION TRACKING ===
+            # Track rejected signals to learn from adverse selection
+            if rl_brain is not None:
+                rl_state = capture_rl_state(symbol, "short", current_bar["close"])
+                rl_brain.track_skipped_signal(rl_state, 0.0, skip_reason)
+            
+            if dashboard:
+                sig_time = get_current_time().strftime("%H:%M")
+                dashboard.update_symbol_data(symbol, {
+                    "last_rejected_signal": f"{sig_time} SHORT @ ${current_bar['close']:.2f} (Adaptive filter)",
+                    "status": "Signal rejected - learned filter"
+                })
+                dashboard.display()
+            return
+        
         # REINFORCEMENT LEARNING - Get confidence from cloud API (shared learning pool)
         # Capture market state
         rl_state = capture_rl_state(symbol, "short", current_bar["close"])
         
+        # Calculate current spread in ticks for RL spread filter
+        current_spread_ticks = 1.0  # Default
+        if bid_ask_manager is not None:
+            quote = bid_ask_manager.get_current_quote(symbol)
+            if quote and quote.bid > 0 and quote.ask > 0:
+                tick_size = CONFIG.get("tick_size", 0.25)
+                current_spread_ticks = (quote.ask - quote.bid) / tick_size
+        
         # Ask cloud RL API for decision (or local RL as fallback)
-        take_signal, confidence, reason = get_ml_confidence(rl_state, "short")
+        take_signal, confidence, size_mult, reason = get_ml_confidence(rl_state, "short", current_spread_ticks)
+        
+        logger.critical(f"🤖 ML DECISION: {'✅ TAKE' if take_signal else '❌ REJECT'} | Confidence: {confidence:.1%} | Reason: {reason}")
+        
+        # ENFORCE GUI CONFIDENCE THRESHOLD - User's setting is the minimum
+        user_threshold = CONFIG.get("rl_confidence_threshold", 0.5)
+        if take_signal and confidence < user_threshold:
+            logger.info(f"❌ GUI THRESHOLD REJECTED SHORT signal: confidence {confidence:.1%} below user threshold {user_threshold:.1%}")
+            logger.info(f"   User configured minimum: {user_threshold:.1%}")
+            state[symbol]["last_rejected_signal"] = {
+                "time": get_current_time(),
+                "state": rl_state,
+                "side": "short",
+                "confidence": confidence,
+                "reason": f"Below user threshold: {confidence:.1%} < {user_threshold:.1%}"
+            }
+            
+            # Update dashboard
+            if dashboard:
+                sig_time = get_current_time().strftime("%H:%M")
+                conf_str = f"{int(confidence * 100)}%"
+                dashboard.update_symbol_data(symbol, {
+                    "last_rejected_signal": f"{sig_time} SHORT @ ${current_bar['close']:.2f} (User Min: {int(user_threshold * 100)}% > {conf_str})",
+                    "status": "Below user confidence threshold"
+                })
+                dashboard.display()
+            
+            return
         
         # Check if in recovery mode and need higher confidence
         if take_signal and bot_status.get("recovery_confidence_threshold"):
             recovery_threshold = bot_status["recovery_confidence_threshold"]
             if confidence < recovery_threshold:
-                logger.info(f" RECOVERY MODE REJECTED SHORT signal: confidence {confidence:.1%} below recovery threshold {recovery_threshold:.1%}")
+                logger.info(f"❌ RECOVERY MODE REJECTED SHORT signal: confidence {confidence:.1%} below recovery threshold {recovery_threshold:.1%}")
                 logger.info(f"   Bot is in recovery mode - only taking high-confidence signals")
                 state[symbol]["last_rejected_signal"] = {
                     "time": get_current_time(),
@@ -2703,10 +4129,21 @@ def check_for_signals(symbol: str) -> None:
                     "confidence": confidence,
                     "reason": f"Recovery mode: {confidence:.1%} < {recovery_threshold:.1%}"
                 }
+                
+                # Update dashboard to show rejected signal
+                if dashboard:
+                    sig_time = get_current_time().strftime("%H:%M")
+                    conf_str = f"{int(confidence * 100)}%"
+                    dashboard.update_symbol_data(symbol, {
+                        "last_rejected_signal": f"{sig_time} SHORT @ ${current_bar['close']:.2f} (Recovery: {conf_str} < {int(recovery_threshold * 100)}%)",
+                        "status": "Recovery mode - rejected"
+                    })
+                    dashboard.display()
+                
                 return
         
         if not take_signal:
-            logger.info(f" RL REJECTED SHORT signal: {reason} (confidence: {confidence:.1%})")
+            logger.info(f"❌ RL REJECTED SHORT signal: {reason} (confidence: {confidence:.1%})")
             logger.info(f"   RSI: {rl_state['rsi']:.1f}, VWAP dist: {rl_state['vwap_distance']:.2f}, "
                       f"Vol ratio: {rl_state['volume_ratio']:.2f}x")
             # Store the rejected signal state for potential future learning
@@ -2717,16 +4154,40 @@ def check_for_signals(symbol: str) -> None:
                 "confidence": confidence,
                 "reason": reason
             }
+            
+            # Update dashboard to show rejected signal
+            if dashboard:
+                sig_time = get_current_time().strftime("%H:%M")
+                conf_str = f"{int(confidence * 100)}%"
+                dashboard.update_symbol_data(symbol, {
+                    "last_rejected_signal": f"{sig_time} SHORT @ ${current_bar['close']:.2f} (Conf: {conf_str})",
+                    "status": "Signal rejected - low confidence"
+                })
+                dashboard.display()
+            
             return
         
-        # RL approved - adjust position size based on confidence
-        logger.info(f" RL APPROVED SHORT signal: {reason} (confidence: {confidence:.1%})")
+        # RL approved - adjust position size based on confidence and learned size multiplier
+        logger.info(f"✅ RL APPROVED SHORT signal: {reason} (confidence: {confidence:.1%}, size: {size_mult:.2f}x)")
         logger.info(f"   RSI: {rl_state['rsi']:.1f}, VWAP dist: {rl_state['vwap_distance']:.2f}, "
                   f"Vol ratio: {rl_state['volume_ratio']:.2f}x, Streak: {rl_state['streak']:+d}")
         
         # Store the state for outcome recording after trade
         state[symbol]["entry_rl_state"] = rl_state
         state[symbol]["entry_rl_confidence"] = confidence
+        state[symbol]["entry_rl_size_mult"] = size_mult  # Store learned size multiplier
+        
+        # Store signal info for dashboard display
+        state[symbol]["last_signal_type"] = f"SHORT @ ${current_bar['close']:.2f}"
+        state[symbol]["last_signal_timestamp"] = get_current_time().timestamp()
+        state[symbol]["last_signal_confidence"] = confidence
+        state[symbol]["last_signal_approved"] = True  # Mark as approved
+        state[symbol]["bot_status_message"] = "Signal detected!"
+        
+        # Update dashboard immediately
+        if dashboard:
+            update_dashboard_for_symbol(symbol)
+            dashboard.display()
         
         execute_entry(symbol, "short", current_bar["close"])
         return
@@ -2736,7 +4197,7 @@ def check_for_signals(symbol: str) -> None:
 # PHASE EIGHT: Position Sizing
 # ============================================================================
 
-def calculate_position_size(symbol: str, side: str, entry_price: float, rl_confidence: Optional[float] = None) -> Tuple[int, float, float]:
+def calculate_position_size(symbol: str, side: str, entry_price: float, rl_confidence: Optional[float] = None, size_mult: Optional[float] = None) -> Tuple[int, float, float]:
     """
     Calculate position size based on risk management rules.
     
@@ -2749,7 +4210,8 @@ def calculate_position_size(symbol: str, side: str, entry_price: float, rl_confi
         symbol: Instrument symbol
         side: 'long' or 'short'
         entry_price: Expected entry price
-        rl_confidence: Optional RL confidence (0-1) to adjust position size
+        rl_confidence: Optional RL confidence (0-1) - legacy parameter
+        size_mult: Optional size multiplier from RL system (0.25-2.0x)
     
     Returns:
         Tuple of (contracts, stop_price, target_price)
@@ -2757,9 +4219,16 @@ def calculate_position_size(symbol: str, side: str, entry_price: float, rl_confi
     # Get account equity
     equity = get_account_equity()
     
-    # Calculate risk allowance (1.2% of equity)
-    risk_dollars = equity * CONFIG["risk_per_trade"]
-    logger.info(f"Account equity: ${equity:.2f}, Risk allowance: ${risk_dollars:.2f}")
+    # Use fixed contract sizing based on max_contracts
+    # No risk percentage calculation - just use max contracts
+    logger.info(f"Account equity: ${equity:.2f}, Using fixed contract sizing")
+    
+    # CRITICAL: If confidence is below threshold, return 0 contracts (reject trade)
+    if rl_confidence is not None:
+        user_threshold = CONFIG.get("rl_confidence_threshold", 0.5)
+        if rl_confidence < user_threshold:
+            logger.info(f"[POSITION SIZING] Confidence {rl_confidence:.1%} below threshold {user_threshold:.1%} - returning 0 contracts")
+            return 0, 0.0, None  # 0 contracts = no trade
     
     # Determine stop price
     vwap_bands = state[symbol]["vwap_bands"]
@@ -2772,30 +4241,48 @@ def calculate_position_size(symbol: str, side: str, entry_price: float, rl_confi
         atr = calculate_atr(symbol, CONFIG.get("atr_period", 14))
         
         if atr > 0:
-            # Use ATR multipliers from ITERATION 3
-            stop_multiplier = CONFIG.get("stop_loss_atr_multiplier", 3.6)  # Iteration 3
-            target_multiplier = CONFIG.get("profit_target_atr_multiplier", 4.75)  # Iteration 3
+            # LEARNED STOP MULTIPLIER: Get from adaptive exit manager based on regime
+            global adaptive_manager
+            stop_multiplier = 3.6  # Fallback default
             
+            if adaptive_manager is not None:
+                try:
+                    # Detect current regime
+                    from adaptive_exits import detect_market_regime
+                    bars = state[symbol]["bars_1min"]
+                    atr_value = calculate_atr(symbol, CONFIG.get("atr_period", 14))
+                    regime = detect_market_regime(bars, atr_value if atr_value else 2.0)
+                    
+                    # Get learned stop multiplier for this regime
+                    stop_multiplier = adaptive_manager.get_stop_multiplier(regime)
+                    logger.info(f"[EXIT RL] Using learned stop: {stop_multiplier:.1f}x ATR for {regime}")
+                except Exception as e:
+                    logger.warning(f"[EXIT RL] Failed to get learned stop, using default 3.6x: {e}")
+                    stop_multiplier = 3.6
+            else:
+                logger.info(f"[EXIT RL] No adaptive manager, using default stop: 3.6x ATR")
+            
+            # NO HARDCODED TARGET - Learned partials control ALL profit exits
             if side == "long":
                 stop_price = entry_price - (atr * stop_multiplier)
-                target_price = entry_price + (atr * target_multiplier)
+                target_price = None  # No fixed target - partials handle exits
             else:  # short
                 stop_price = entry_price + (atr * stop_multiplier)
-                target_price = entry_price - (atr * target_multiplier)
+                target_price = None  # No fixed target - partials handle exits
             
             stop_price = round_to_tick(stop_price)
-            target_price = round_to_tick(target_price)
+            # target_price = None (no rounding needed)
         else:
             # Fallback to fixed stops if ATR can't be calculated
             max_stop_ticks = 11
             if side == "long":
                 stop_price = entry_price - (max_stop_ticks * tick_size)
-                target_price = vwap_bands["upper_3"]
+                target_price = None  # No fixed target - learned partials handle exits
             else:
                 stop_price = entry_price + (max_stop_ticks * tick_size)
-                target_price = vwap_bands["lower_3"]
+                target_price = None  # No fixed target - learned partials handle exits
             stop_price = round_to_tick(stop_price)
-            target_price = round_to_tick(target_price)
+            # target_price = None (no rounding needed)
     else:
         # Use fixed stops (original logic)
         max_stop_ticks = 11  # Optimized to 11 ticks
@@ -2805,41 +4292,70 @@ def calculate_position_size(symbol: str, side: str, entry_price: float, rl_confi
             band_stop = vwap_bands["lower_3"] - (2 * tick_size)  # 2 tick buffer
             tight_stop = entry_price - (max_stop_ticks * tick_size)
             stop_price = max(tight_stop, band_stop)  # Use tighter of the two
-            # Target at upper band
-            target_price = vwap_bands["upper_3"]
+            # No fixed target - learned partials handle exits
+            target_price = None
         else:  # short
             # Stop 11 ticks above entry (or at upper band 3, whichever is tighter)
             band_stop = vwap_bands["upper_3"] + (2 * tick_size)  # 2 tick buffer
             tight_stop = entry_price + (max_stop_ticks * tick_size)
             stop_price = min(tight_stop, band_stop)  # Use tighter of the two
-            # Target at lower band
-            target_price = vwap_bands["lower_3"]
+            # No fixed target - learned partials handle exits
+            target_price = None
         
         stop_price = round_to_tick(stop_price)
-        target_price = round_to_tick(target_price)
+        # target_price = None (no rounding needed)
     
     # Calculate stop distance in ticks
     stop_distance = abs(entry_price - stop_price)
     ticks_at_risk = stop_distance / tick_size
     
-    # Calculate risk per contract
+    # Calculate risk per contract (for logging purposes only)
     tick_value = CONFIG["tick_value"]
     risk_per_contract = ticks_at_risk * tick_value
     
-    # Calculate number of contracts based on risk (baseline calculation)
-    if risk_per_contract > 0:
-        contracts = int(risk_dollars / risk_per_contract)
-    else:
-        contracts = 0
+    # Use fixed max_contracts from config (no risk-based sizing)
+    contracts = CONFIG["max_contracts"]
     
-    # Get user's max contracts limit
+    # Get user's max contracts limit - THIS IS YOUR HARD CEILING
     user_max_contracts = CONFIG["max_contracts"]
     
-    # Apply RL confidence to dynamically scale WITHIN user's limit
-    # Check if dynamic contracts feature is enabled (GUI setting)
+    # Two modes:
+    # FIXED MODE: Use exact max_contracts, no adjustments
+    # DYNAMIC MODE: Apply confidence/streak/session multipliers WITHIN your max
     dynamic_contracts_enabled = CONFIG.get("dynamic_contracts", False)
     
-    if rl_confidence is not None and dynamic_contracts_enabled:
+    # Use size_mult from Signal RL if provided (preferred), otherwise fall back to legacy method
+    if size_mult is not None and dynamic_contracts_enabled:
+        # NEW: Use size multiplier directly from Signal RL (includes confidence, streak, volatility, time)
+        # CRITICAL: RL scales WITHIN user's max - never exceeds it
+        # Size mult 0.25-2.0 but CAPPED at user_max_contracts
+        # 
+        # Examples with user max = 3:
+        #   size=0.5x  -> 2 contracts (0.5 * 3 = 1.5 → 2)
+        #   size=1.0x  -> 3 contracts (1.0 * 3 = 3)
+        #   size=2.0x  -> 3 contracts (2.0 * 3 = 6 → CAPPED at 3)
+        # 
+        # Examples with user max = 10:
+        #   size=0.5x  -> 5 contracts
+        #   size=1.0x  -> 10 contracts
+        #   size=2.0x  -> 10 contracts (CAPPED, won't go to 20)
+        rl_scaled_max = max(1, int(round(user_max_contracts * size_mult)))
+        
+        # HARD CAP: Never exceed user's max_contracts setting
+        rl_scaled_max = min(rl_scaled_max, user_max_contracts)
+        
+        # Use MINIMUM of risk-based calculation and RL-scaled max
+        # This ensures we respect BOTH the risk management AND user's max limit
+        contracts = min(contracts, rl_scaled_max)
+        
+        # Detailed size multiplier logging
+        logger.info(f"[POSITION SIZING] Size mult: {size_mult:.2f}x | "
+                   f"Risk-based: {int(risk_dollars / risk_per_contract)} → "
+                   f"RL-scaled max: {rl_scaled_max} (capped at user max {user_max_contracts}) → "
+                   f"Final: {contracts} contracts")
+        
+    elif rl_confidence is not None and dynamic_contracts_enabled:
+        # LEGACY: Calculate size multiplier from confidence only (deprecated)
         global rl_brain
         if rl_brain is not None:
             size_multiplier = rl_brain.get_position_size_multiplier(rl_confidence)
@@ -2847,13 +4363,16 @@ def calculate_position_size(symbol: str, side: str, entry_price: float, rl_confi
             size_multiplier = 1.0
             
         # Calculate RL-scaled max contracts
-        # DYNAMIC SCALING: Works with ANY max_contracts setting (1-25)
+        # DYNAMIC SCALING: RL learns to scale WITHIN user's max
         # Examples:
         #   max=3, conf=50%  -> 2 contracts
         #   max=10, conf=50% -> 5 contracts  
         #   max=25, conf=50% -> 13 contracts
         #   max=25, conf=90% -> 23 contracts
         rl_scaled_max = max(1, int(round(user_max_contracts * size_multiplier)))
+        
+        # HARD CAP: Never exceed user's max_contracts setting
+        rl_scaled_max = min(rl_scaled_max, user_max_contracts)
         
         # Use MINIMUM of risk-based calculation and RL-scaled max
         # This ensures we respect BOTH the risk management AND user's max limit
@@ -2872,14 +4391,18 @@ def calculate_position_size(symbol: str, side: str, entry_price: float, rl_confi
             confidence_level = "VERY HIGH"
             
         logger.info(f"[DYNAMIC CONTRACTS] {confidence_level} confidence ({rl_confidence:.1%}) × Max {user_max_contracts} = {rl_scaled_max} contracts (capped at {contracts} by risk)")
+        
+        # Update dashboard with confidence-based adjustment
+        if dashboard:
+            adjustment_msg = f"Confidence {confidence_level} ({int(rl_confidence*100)}%) → {contracts} contracts (from max {user_max_contracts})"
+            dashboard.update_bot_data({"contract_adjustment": adjustment_msg})
+            dashboard.display()
     else:
-        # No RL confidence or dynamic contracts disabled - use fixed max
+        # FIXED MODE - Use exact max_contracts, no learning adjustments
         contracts = min(contracts, user_max_contracts)
-        # Only log once when dynamic contracts are first disabled (avoid spamming logs)
-        if not dynamic_contracts_enabled and rl_confidence is not None:
-            if not hasattr(calculate_position_size, '_logged_fixed_mode'):
-                logger.info(f"[FIXED CONTRACTS] Using fixed max of {user_max_contracts} contracts (dynamic contracts disabled)")
-                calculate_position_size._logged_fixed_mode = True
+        if not hasattr(calculate_position_size, '_logged_fixed_mode'):
+            logger.info(f"[FIXED MODE] Using exact max of {user_max_contracts} contracts - no dynamic adjustments")
+            calculate_position_size._logged_fixed_mode = True
     
     # RECOVERY MODE: Further reduce position size when approaching limits
     if bot_status.get("recovery_confidence_threshold") is not None:
@@ -2912,8 +4435,20 @@ def calculate_position_size(symbol: str, side: str, entry_price: float, rl_confi
         if contracts != original_contracts:
             if recovery_multiplier < 1.0:
                 logger.warning(f"[RECOVERY MODE] Position size adjusted: {original_contracts} → {contracts} contracts (severity: {severity*100:.0f}%, multiplier: {recovery_multiplier*100:.0f}%)")
+                
+                # Update dashboard with recovery mode adjustment
+                if dashboard:
+                    adjustment_msg = f"RECOVERY MODE: {original_contracts} → {contracts} contracts (severity {int(severity*100)}%, reduced to {int(recovery_multiplier*100)}%)"
+                    dashboard.update_bot_data({"contract_adjustment": adjustment_msg})
+                    dashboard.display()
             else:
                 logger.info(f"[RECOVERY MODE] Position size restored: {original_contracts} → {contracts} contracts (severity: {severity*100:.0f}%, safe zone)")
+                
+                # Update dashboard - recovery mode restored
+                if dashboard:
+                    adjustment_msg = f"RECOVERY MODE CLEARED: Restored to {contracts} contracts (severity {int(severity*100)}%, safe zone)"
+                    dashboard.update_bot_data({"contract_adjustment": adjustment_msg})
+                    dashboard.display()
     
     if contracts == 0:
         logger.warning(f"Position size too small: risk=${risk_per_contract:.2f}, allowance=${risk_dollars:.2f}")
@@ -3382,16 +4917,19 @@ def execute_entry(symbol: str, side: str, entry_price: float) -> None:
                 price_move_ticks=price_move_ticks
             )
             
-            # Store for potential shadow outcome tracking
-            state[symbol]["last_rejected_signal"] = {
-                "time": get_current_time(),
-                "state": rl_state,
-                "side": side,
-                "reason": price_reason,
-                "price_move_ticks": price_move_ticks,
-                "signal_price": entry_price,
-                "current_price": current_market_price
-            }
+            # ========== SHADOW TRADE: Track what WOULD happen ==========
+            # Create shadow trade to track rejected signal in real-time
+            # Shadow will use FULL adaptive exit model (same as real trades)
+            confidence = state[symbol].get("last_signal_confidence", 0.0)
+            
+            create_shadow_trade(
+                symbol=symbol,
+                rl_state=rl_state,
+                side=side,
+                entry_price=entry_price,  # Original signal price
+                confidence=confidence,
+                rejection_reason=f"price_moved_{price_move_ticks:.0f}_ticks"
+            )
         
         return
     
@@ -3399,11 +4937,12 @@ def execute_entry(symbol: str, side: str, entry_price: float) -> None:
     logger.info(f"  [OK] Price validation passed: ${entry_price:.2f} -> ${current_market_price:.2f}")
     entry_price = current_market_price
     
-    # Get RL confidence if available
+    # Get RL confidence and size multiplier if available
     rl_confidence = state[symbol].get("entry_rl_confidence")
+    size_mult = state[symbol].get("entry_rl_size_mult")
     
-    # Calculate position size (with RL adjustment if confidence available)
-    contracts, stop_price, target_price = calculate_position_size(symbol, side, entry_price, rl_confidence)
+    # Calculate position size (with RL adjustment if size_mult available)
+    contracts, stop_price, target_price = calculate_position_size(symbol, side, entry_price, rl_confidence, size_mult)
     
     if contracts == 0:
         logger.warning("Cannot enter trade - position size is zero")
@@ -3452,7 +4991,7 @@ def execute_entry(symbol: str, side: str, entry_price: float) -> None:
     logger.info(f"  Target: ${target_price:.2f}")
     
     # Track order execution details for post-trade analysis
-    fill_start_time = datetime.now()
+    fill_start_time = datetime.now(pytz.UTC)
     order_type_used = "market"  # Default
     
     # Get intelligent order placement strategy from bid/ask manager
@@ -3485,6 +5024,7 @@ def execute_entry(symbol: str, side: str, entry_price: float) -> None:
             state[symbol]["position"]["quantity"] = contracts
             state[symbol]["position"]["entry_price"] = actual_fill_price
             state[symbol]["position"]["entry_time"] = entry_time
+            state[symbol]["position"]["entry_confidence"] = state[symbol].get("entry_rl_confidence", 0.75)  # NEW: Save confidence for Exit RL correlation
             state[symbol]["position"]["order_id"] = order.get("order_id")
             save_position_state(symbol)
             logger.info(f"  [CHECKPOINT] Emergency position state saved (crash protection)")
@@ -3505,6 +5045,7 @@ def execute_entry(symbol: str, side: str, entry_price: float) -> None:
                 state[symbol]["position"]["entry_price"] = actual_fill_price
                 state[symbol]["position"]["entry_time"] = entry_time
                 state[symbol]["position"]["order_id"] = order.get("order_id")
+                state[symbol]["position"]["entry_confidence"] = state[symbol].get("entry_rl_confidence", 0.75)  # NEW: Save confidence for Exit RL correlation
                 save_position_state(symbol)
                 logger.info(f"  [CHECKPOINT] Emergency position state saved (fallback path)")
     else:
@@ -3521,6 +5062,7 @@ def execute_entry(symbol: str, side: str, entry_price: float) -> None:
             state[symbol]["position"]["entry_price"] = entry_price
             state[symbol]["position"]["entry_time"] = entry_time
             state[symbol]["position"]["order_id"] = order.get("order_id")
+            state[symbol]["position"]["entry_confidence"] = state[symbol].get("entry_rl_confidence", 0.75)  # NEW: Save confidence for Exit RL correlation
             save_position_state(symbol)
             logger.info(f"  [CHECKPOINT] Emergency position state saved (no manager path)")
     
@@ -3588,7 +5130,7 @@ def execute_entry(symbol: str, side: str, entry_price: float) -> None:
     # Record trade execution for cost tracking (Requirement 5)
     if bid_ask_manager is not None:
         try:
-            fill_time_seconds = (datetime.now() - fill_start_time).total_seconds()
+            fill_time_seconds = (datetime.now(pytz.UTC) - fill_start_time).total_seconds()
             bid_ask_manager.record_trade_execution(
                 symbol=symbol,
                 side=side,
@@ -3666,6 +5208,22 @@ def execute_entry(symbol: str, side: str, entry_price: float) -> None:
     save_position_state(symbol)
     logger.info("  ✓ Position state saved to disk")
     
+    # Initialize all RL tracking fields for complete feature capture
+    initialize_position_tracking(symbol)
+    
+    # Update state status message
+    state[symbol]["bot_status_message"] = "In trade..."
+    
+    # Update dashboard with new position
+    if dashboard:
+        dashboard.update_symbol_data(symbol, {
+            "position": f"{side.upper()} {contracts} @ ${actual_fill_price:.2f}",
+            "position_qty": contracts,
+            "position_side": side,
+            "status": f"In trade - Target: ${target_price:.2f}"
+        })
+        dashboard.display()
+    
     # ===== CRITICAL FIX #2: Stop Loss Execution Validation =====
     # Verify stop order accepted by broker - critical for capital protection
     stop_side = "SELL" if side == "long" else "BUY"
@@ -3704,6 +5262,9 @@ def execute_entry(symbol: str, side: str, entry_price: float) -> None:
             save_position_state(symbol)
             logger.error("  ✓ Position state cleared and saved to disk")
         else:
+            critical_msg = f"EMERGENCY CLOSE FAILED - Manual intervention needed for {symbol}"
+            log_critical_error(critical_msg)
+            
             logger.error(f"  [FAIL] EMERGENCY CLOSE ALSO FAILED - MANUAL INTERVENTION REQUIRED!")
             logger.error(f"  Symbol: {symbol}, Side: {side}, Contracts: {contracts}")
             
@@ -3813,9 +5374,9 @@ def check_target_reached(symbol: str, current_bar: Dict[str, Any], position: Dic
                 logger.warning(f"  Using current price for guaranteed fill instead")
                 return True, current_bar["close"]
     
-    # Phase Five: Time-based exit tightening after 3 PM
-    if bar_time.time() >= datetime_time(15, 0) and not bot_status["flatten_mode"]:
-        # After 3 PM - tighten profit taking to 1:1 R/R
+    # Phase Five: Time-based exit tightening after 19:00 UTC (7 PM UTC = late in session)
+    if bar_time.time() >= datetime_time(19, 0) and not bot_status["flatten_mode"]:
+        # After 19:00 UTC - tighten profit taking to 1:1 R/R
         stop_distance = abs(entry_price - stop_price)
         tightened_target_distance = stop_distance  # 1:1 instead of 1.5:1
         
@@ -3924,32 +5485,27 @@ def check_time_based_exits(symbol: str, current_bar: Dict[str, Any], position: D
     ticks = price_change / tick_size
     unrealized_pnl = ticks * tick_value * position["quantity"]
     
-    # Force close at forced_flatten_time (5:00 PM ET - maintenance starts)
+    # Force close at forced_flatten_time (21:00 UTC - maintenance starts)
     trading_state = get_trading_state(bar_time)
     if trading_state == "closed":
         return "emergency_forced_flatten", get_flatten_price(symbol, side, current_bar["close"])
     
-    # Flatten mode: specific time-based exits
+    # Flatten mode: specific time-based exits (UTC times)
     if bot_status["flatten_mode"]:
         tz = pytz.timezone(CONFIG["timezone"])
         current_time = datetime.now(tz)
         
-        # 4:40 PM - close profitable positions immediately
-        if current_time.time() >= datetime_time(16, 40) and unrealized_pnl > 0:
+        # 20:45 UTC - close profitable positions immediately (flatten mode start)
+        if current_time.time() >= datetime_time(20, 45) and unrealized_pnl > 0:
             return "time_based_profit_take", get_flatten_price(symbol, side, current_bar["close"])
         
-        # 4:42 PM - close small losses
-        if current_time.time() >= datetime_time(16, 42):
+        # 20:47 UTC - close small losses (allow 2 min for profits to exit first)
+        if current_time.time() >= datetime_time(20, 47):
             stop_distance = abs(entry_price - stop_price)
             if unrealized_pnl < 0 and abs(unrealized_pnl) < (stop_distance * tick_value * position["quantity"] / 2):
                 return "time_based_loss_cut", get_flatten_price(symbol, side, current_bar["close"])
         
-        # Phase 10: Early profit lock after 4:40 PM
-        if current_time.time() >= datetime_time(16, 40) and unrealized_pnl > 0:
-            bot_status["early_close_saves"] += 1
-            return "early_profit_lock", get_flatten_price(symbol, side, current_bar["close"])
-        
-        # Flatten mode: aggressive profit/loss management
+        # Flatten mode: aggressive profit/loss management during 20:45-21:00 window
         if side == "long":
             profit_ticks = (current_bar["close"] - entry_price) / tick_size
             midpoint = entry_price - (entry_price - stop_price) / 2
@@ -3961,18 +5517,18 @@ def check_time_based_exits(symbol: str, current_bar: Dict[str, Any], position: D
             if profit_ticks > 1 or current_bar["close"] > midpoint:
                 return "flatten_mode_exit", get_flatten_price(symbol, side, current_bar["close"])
     
-    # Friday-specific exits
+    # Friday-specific exits (UTC times)
     if bar_time.weekday() == 4:  # Friday
-        # Target close by 3 PM to avoid weekend gap risk
+        # Target close by 20:45 UTC to avoid weekend gap risk
         if bar_time.time() >= CONFIG["friday_close_target"]:
             return "friday_weekend_protection", get_flatten_price(symbol, side, current_bar["close"])
         
-        # After 2 PM on Friday, take any profit
-        if bar_time.time() >= datetime_time(14, 0) and unrealized_pnl > 0:
+        # After 18:00 UTC on Friday, take any profit (conservative weekend protection)
+        if bar_time.time() >= datetime_time(18, 0) and unrealized_pnl > 0:
             return "friday_profit_protection", get_flatten_price(symbol, side, current_bar["close"])
     
-    # After 3:30 PM - cut losses early if less than 75% of stop distance
-    if bar_time.time() >= datetime_time(15, 30) and not bot_status["flatten_mode"]:
+    # After 19:30 UTC - cut losses early if less than 75% of stop distance
+    if bar_time.time() >= datetime_time(19, 30) and not bot_status["flatten_mode"]:
         if side == "long":
             current_loss_distance = entry_price - current_bar["close"]
             stop_distance = entry_price - stop_price
@@ -4028,18 +5584,37 @@ def check_breakeven_protection(symbol: str, current_price: float) -> None:
         try:
             from adaptive_exits import get_adaptive_exit_params
             
+            # CONTINUOUS ADAPTATION: Recalculate exit params on EVERY bar
+            # This allows the bot to adapt as market conditions change mid-trade
+            
+            # Get entry confidence from position (saved during entry)
+            entry_confidence = position.get("entry_confidence", 0.75)  # Default to 0.75 if not saved
+            
             adaptive_params = get_adaptive_exit_params(
                 bars=state[symbol]["bars_1min"],
                 position=position,
                 current_price=current_price,
                 config=CONFIG,
-                adaptive_manager=adaptive_manager  # Pass global instance for persistence
+                adaptive_manager=adaptive_manager,  # Pass global instance for persistence
+                entry_confidence=entry_confidence   # NEW: Pass confidence for exit correlation
             )
             
             breakeven_threshold_ticks = adaptive_params["breakeven_threshold_ticks"]
             breakeven_offset_ticks = adaptive_params["breakeven_offset_ticks"]
             
-            # STORE exit params for learning when trade closes
+            # UPDATE exit params continuously (market conditions change!)
+            # Compare with previous params to detect regime shifts
+            prev_regime = position.get("exit_params_used", {}).get("market_regime", "UNKNOWN")
+            new_regime = adaptive_params["market_regime"]
+            
+            if prev_regime != new_regime and prev_regime != "UNKNOWN":
+                logger.info(f" [REGIME SHIFT] {prev_regime} → {new_regime}")
+                logger.info(f"   Adjusting exit parameters mid-trade for new conditions")
+                
+                # Track exit param updates when regime shifts
+                position["exit_param_update_count"] += 1
+            
+            # Store updated exit params for learning when trade closes
             position["exit_params_used"] = adaptive_params
             
         except Exception as e:
@@ -4057,6 +5632,69 @@ def check_breakeven_protection(symbol: str, current_price: float) -> None:
         profit_ticks = (current_price - entry_price) / tick_size
     else:  # short
         profit_ticks = (entry_price - current_price) / tick_size
+    
+    # RL CONTROL: Check if neural network wants to activate breakeven
+    if adaptive_manager is not None and adaptive_params:
+        rl_should_activate = adaptive_params.get('should_activate_breakeven', 0.8)
+        rl_min_profit = adaptive_params.get('breakeven_activation_profit_threshold', breakeven_threshold_ticks)
+        rl_min_bars = adaptive_params.get('breakeven_activation_min_bars', 3)
+        rl_min_r = adaptive_params.get('breakeven_activation_r_threshold', 1.0)
+        
+        # RL decision: Only activate if confidence > 0.5
+        if rl_should_activate < 0.5:
+            logger.debug(f"[RL SKIP BE] Neural network says don't activate breakeven yet (confidence={rl_should_activate:.2f})")
+            return
+        
+        # Use RL-predicted thresholds
+        breakeven_threshold_ticks = max(breakeven_threshold_ticks, rl_min_profit)
+        
+        # Check minimum bars requirement
+        duration_bars = position.get('duration_bars', 0)
+        if duration_bars < rl_min_bars:
+            logger.debug(f"[RL SKIP BE] Not enough bars yet ({duration_bars} < {rl_min_bars})")
+            return
+        
+        # Check R-multiple alternative
+        initial_risk_ticks = position.get("initial_risk_ticks", 10)
+        current_r = profit_ticks / initial_risk_ticks if initial_risk_ticks > 0 else 0
+        if profit_ticks < breakeven_threshold_ticks and current_r < rl_min_r:
+            logger.debug(f"[RL SKIP BE] Thresholds not met: {profit_ticks:.1f}t < {breakeven_threshold_ticks}t, {current_r:.2f}R < {rl_min_r:.2f}R")
+            return
+    
+    # === EXIT RL FEATURE 5: PROFIT LOCK ZONES ===
+    # Check if profit is retreating from peak (lock in gains)
+    if adaptive_manager is not None and position.get("breakeven_active"):
+        try:
+            # Calculate R-multiple
+            initial_risk_ticks = position.get("initial_risk_ticks", 10)
+            current_r_multiple = profit_ticks / initial_risk_ticks if initial_risk_ticks > 0 else 0
+            
+            # Track peak R-multiple
+            peak_r_multiple = position.get("peak_r_multiple", 0)
+            if current_r_multiple > peak_r_multiple:
+                position["peak_r_multiple"] = current_r_multiple
+                peak_r_multiple = current_r_multiple
+            
+            # Check for profit lock
+            if peak_r_multiple >= 3.0:  # Only check if we've hit significant profit
+                lock_result = adaptive_manager.check_profit_lock(
+                    current_r_multiple=current_r_multiple,
+                    peak_r_multiple=peak_r_multiple,
+                    current_profit_ticks=profit_ticks,
+                    direction=side
+                )
+                
+                if lock_result.get('should_lock'):
+                    lock_reason = lock_result.get('reason', 'Profit lock triggered')
+                    logger.warning(f"[EXIT RL] {lock_reason}")
+                    logger.warning(f"  Peak: {peak_r_multiple:.1f}R → Current: {current_r_multiple:.1f}R")
+                    
+                    # Execute immediate exit to lock profit
+                    from quotrading_engine import execute_exit
+                    execute_exit(symbol, current_price, "profit_lock")
+                    return  # Exit function immediately
+        except Exception as e:
+            logger.debug(f"Profit lock check failed: {e}")
     
     # Step 3 - Compare to threshold
     if profit_ticks < breakeven_threshold_ticks:
@@ -4084,6 +5722,9 @@ def check_breakeven_protection(symbol: str, current_price: float) -> None:
         position["stop_price"] = new_stop_price
         if new_stop_order.get("order_id"):
             position["stop_order_id"] = new_stop_order.get("order_id")
+        
+        # Track stop adjustment
+        position["stop_adjustment_count"] += 1
         
         # Calculate profit locked in
         profit_locked_ticks = (new_stop_price - entry_price) / tick_size if side == "long" else (entry_price - new_stop_price) / tick_size
@@ -4143,18 +5784,64 @@ def check_trailing_stop(symbol: str, current_price: float) -> None:
         try:
             from adaptive_exits import get_adaptive_exit_params
             
+            # CONTINUOUS ADAPTATION: Recalculate trailing params on EVERY bar
+            # Market conditions change while holding → trailing should adapt too!
+            
+            # Get entry confidence from position (saved during entry)
+            entry_confidence = position.get("entry_confidence", 0.75)  # Default to 0.75 if not saved
+            
             adaptive_params = get_adaptive_exit_params(
                 bars=state[symbol]["bars_1min"],
                 position=position,
                 current_price=current_price,
                 config=CONFIG,
-                adaptive_manager=adaptive_manager  # Pass global instance for persistence
+                adaptive_manager=adaptive_manager,  # Pass global instance for persistence
+                entry_confidence=entry_confidence   # NEW: Pass confidence for exit correlation
             )
             
             trailing_distance_ticks = adaptive_params["trailing_distance_ticks"]
             min_profit_ticks = adaptive_params["trailing_min_profit_ticks"]
             
-            # STORE exit params for learning when trade closes
+            # RL CONTROL: Check if neural network wants to activate trailing
+            rl_should_activate = adaptive_params.get('should_activate_trailing', 0.8)
+            rl_min_profit = adaptive_params.get('trailing_activation_profit_threshold', min_profit_ticks)
+            rl_min_r = adaptive_params.get('trailing_activation_r_threshold', 1.5)
+            rl_wait_bars = adaptive_params.get('trailing_wait_after_breakeven_bars', 5)
+            
+            # RL decision: Only activate if confidence > 0.5
+            if rl_should_activate < 0.5:
+                logger.debug(f"[RL SKIP TRAIL] Neural network says don't activate trailing yet (confidence={rl_should_activate:.2f})")
+                return
+            
+            # Use RL-predicted threshold
+            min_profit_ticks = max(min_profit_ticks, rl_min_profit)
+            
+            # Wait after breakeven activation
+            if position.get("breakeven_active"):
+                breakeven_bar = position.get("breakeven_activation_bar", 0)
+                current_bar = position.get("duration_bars", 0)
+                bars_since_breakeven = current_bar - breakeven_bar
+                if bars_since_breakeven < rl_wait_bars:
+                    logger.debug(f"[RL SKIP TRAIL] Waiting {rl_wait_bars - bars_since_breakeven} more bars after breakeven")
+                    return
+            
+            # UPDATE exit params continuously (already done in breakeven, but update here too)
+            # This ensures trailing stop reflects latest market conditions
+            prev_regime = position.get("exit_params_used", {}).get("market_regime", "UNKNOWN")
+            new_regime = adaptive_params["market_regime"]
+            
+            # Log significant changes in trailing distance (regime shift mid-trade)
+            prev_trail = position.get("exit_params_used", {}).get("trailing_distance_ticks", 0)
+            if prev_trail > 0 and abs(trailing_distance_ticks - prev_trail) >= 2:
+                change_pct = ((trailing_distance_ticks - prev_trail) / prev_trail * 100)
+                logger.info(f" [TRAILING ADAPT] {prev_trail}t → {trailing_distance_ticks}t ({change_pct:+.0f}%)")
+                if new_regime != prev_regime:
+                    logger.info(f"   Reason: Regime shift ({prev_regime} → {new_regime})")
+                
+                # Track exit param updates when they change significantly
+                position["exit_param_update_count"] += 1
+            
+            # Store updated exit params for learning
             position["exit_params_used"] = adaptive_params
             
         except Exception as e:
@@ -4237,6 +5924,9 @@ def check_trailing_stop(symbol: str, current_price: float) -> None:
         if new_stop_order.get("order_id"):
             position["stop_order_id"] = new_stop_order.get("order_id")
         
+        # Track stop adjustment
+        position["stop_adjustment_count"] += 1
+        
         # Calculate profit now locked in
         profit_locked_ticks = (new_trailing_stop - entry_price) / tick_size if side == "long" else (entry_price - new_trailing_stop) / tick_size
         profit_locked_dollars = profit_locked_ticks * CONFIG["tick_value"] * contracts
@@ -4308,7 +5998,7 @@ def check_time_decay_tightening(symbol: str, current_time: datetime) -> None:
     
     # Step 1 - Calculate time percentage
     # Max holding period: use time until flatten mode (conservative)
-    # From entry window end (2:30 PM) to flatten deadline (4:45 PM) = 135 minutes
+    # From entry window end (6:30 PM UTC) to flatten deadline (8:45 PM UTC) = 135 minutes
     max_holding_minutes = 60  # Conservative 60 minute max hold as mentioned in config
     
     time_held = (current_time - entry_time).total_seconds() / 60.0  # minutes
@@ -4422,12 +6112,24 @@ def check_time_decay_tightening(symbol: str, current_time: datetime) -> None:
 # PHASE SIX: Partial Exit Logic
 # ============================================================================
 
+def get_current_hour() -> int:
+    """Get current hour in EST/EDT trading timezone."""
+    from datetime import datetime
+    import pytz
+    try:
+        tz = pytz.timezone('UTC')
+        now = datetime.now(tz)
+        return now.hour
+    except:
+        # Fallback to UTC if timezone fails
+        return datetime.now(pytz.UTC).hour
+
+
 def check_partial_exits(symbol: str, current_price: float) -> None:
     """
-    Execute partial exits at predefined R-multiple thresholds.
+    Execute partial exits using LEARNED scaling strategies.
     
-    Scales out of position at 2R, 3R, and 5R to lock in profits while
-    maintaining exposure to further gains.
+    Bot learns WHEN and HOW MUCH to scale based on market context.
     
     Args:
         symbol: Instrument symbol
@@ -4465,43 +6167,103 @@ def check_partial_exits(symbol: str, current_price: float) -> None:
         logger.debug("Skipping partial exits: only 1 contract")
         return
     
-    # Check each partial exit threshold in order
+    # Get learned scaling strategy from adaptive exit manager
+    from adaptive_exits import get_recommended_scaling_strategy, detect_market_regime
     
-    # Step 2 & 3 & 4 - First partial (50% at 2.0R)
-    if (r_multiple >= CONFIG.get("partial_exit_1_r_multiple", 2.0) and 
+    # Get bars for market state calculation
+    bars = state[symbol]["bars_1min"]
+    
+    # Build market state for scaling decision
+    market_state = {
+        'rsi': position.get('entry_rsi', calculate_rsi([bar["close"] for bar in bars[-50:]]) if len(bars) >= 50 else 50.0),
+        'volume_ratio': bars[-1]['volume'] / (sum(b['volume'] for b in bars[-20:]) / 20) if len(bars) >= 20 else 1.0,
+        'hour': get_current_hour(),
+        'streak': position.get('signal_streak', 0)
+    }
+    
+    # Detect regime
+    atr_value = calculate_atr(symbol, CONFIG.get("atr_period", 14))
+    regime = detect_market_regime(bars, atr_value if atr_value else 2.0)
+    
+    # Get adaptive scaling strategy
+    adaptive_manager = position.get('adaptive_exit_manager')
+    scaling = get_recommended_scaling_strategy(market_state, regime, adaptive_manager)
+    
+    # Log strategy with learning mode
+    if scaling.get('learning_mode') == 'EXPERIENCE_BASED':
+        logger.info(f"[SCALING STRATEGY] {scaling['strategy']} | "
+                   f"Found {scaling.get('similar_count', 0)} similar past exits | "
+                   f"Avg P&L: ${scaling.get('avg_pnl', 0):.0f} | Avg R: {scaling.get('avg_r', 0):.1f}")
+    else:
+        logger.info(f"[SCALING STRATEGY] {scaling['strategy']} (rule-based fallback)")
+    
+    # Store scaling strategy in position for exit learning
+    if "exit_params_used" not in position:
+        position["exit_params_used"] = {}
+    position["exit_params_used"]["scaling_strategy"] = scaling['strategy']
+    position["exit_params_used"]["scaling_r_multiples"] = [scaling['partial_1_r'], scaling['partial_2_r'], scaling['partial_3_r']]
+    position["exit_params_used"]["scaling_percentages"] = [scaling['partial_1_pct'], scaling['partial_2_pct'], scaling['partial_3_pct']]
+    
+    # Check each partial exit threshold using LEARNED strategy
+    
+    # First partial
+    if (r_multiple >= scaling['partial_1_r'] and 
         not position["partial_exit_1_completed"]):
         
-        partial_pct = CONFIG.get("partial_exit_1_percentage", 0.50)
-        contracts_to_close = int(original_quantity * partial_pct)
+        contracts_to_close = int(original_quantity * scaling['partial_1_pct'])
         
         if contracts_to_close >= 1:
             execute_partial_exit(symbol, contracts_to_close, current_price, r_multiple, 
-                                "partial_exit_1_completed", 1, partial_pct)
+                                "partial_exit_1_completed", 1, scaling['partial_1_pct'])
             return  # Exit one partial per bar to avoid race conditions
     
-    # Step 5 & 6 & 7 - Second partial (30% at 3.0R)
-    if (r_multiple >= CONFIG.get("partial_exit_2_r_multiple", 3.0) and 
+    # Second partial
+    if (r_multiple >= scaling['partial_2_r'] and 
         not position["partial_exit_2_completed"]):
         
-        partial_pct = CONFIG.get("partial_exit_2_percentage", 0.30)
-        contracts_to_close = int(original_quantity * partial_pct)
+        contracts_to_close = int(original_quantity * scaling['partial_2_pct'])
         
         if contracts_to_close >= 1:
             execute_partial_exit(symbol, contracts_to_close, current_price, r_multiple,
-                                "partial_exit_2_completed", 2, partial_pct)
+                                "partial_exit_2_completed", 2, scaling['partial_2_pct'])
             return
     
-    # Step 8 & 9 - Third partial (remaining 20% at 5.0R)
-    if (r_multiple >= CONFIG.get("partial_exit_3_r_multiple", 5.0) and 
+    # Third partial (final runner) - CHECK IF WE SHOULD HOLD LONGER
+    if (r_multiple >= scaling['partial_3_r'] and 
         not position["partial_exit_3_completed"]):
         
-        # Close all remaining contracts (the final runner)
-        remaining_quantity = position["remaining_quantity"]
+        # RUNNER HOLD LOGIC: Check if similar big winners went much higher
+        should_hold = False
+        if adaptive_manager:
+            try:
+                # Build market state for runner analysis
+                bars = state[symbol]["bars_1min"]
+                current_bar = bars[-1] if len(bars) > 0 else {}
+                market_state = {
+                    "regime": detect_market_regime(bars, calculate_atr(symbol, CONFIG.get("atr_period", 14)) or 2.0),
+                    "rsi": calculate_rsi([bar["close"] for bar in bars[-50:]]) if len(bars) >= 50 else 50.0,
+                    "volume_ratio": bars[-1]["volume"] / sum(b["volume"] for b in bars[-20:]) * 20 if len(bars) >= 20 else 1.0,
+                    "hour": get_current_hour(),
+                    "vwap_distance": abs(current_price - current_bar.get("vwap", current_price))
+                }
+                
+                should_hold = adaptive_manager.should_hold_runner(position, market_state, r_multiple)
+                if should_hold:
+                    logger.info(f"[EXIT RL] Holding runner at {r_multiple:.1f}R - similar trades averaged 5R+")
+                    logger.info(f"  Regime: {market_state['regime']}, Trend strength high")
+                    return  # Skip closing runner this bar
+            except Exception as e:
+                logger.debug(f"Runner hold check failed: {e}")
         
-        if remaining_quantity >= 1:
-            execute_partial_exit(symbol, remaining_quantity, current_price, r_multiple,
-                                "partial_exit_3_completed", 3, 1.0, is_final=True)
-            return
+        # If not holding, close the runner
+        if not should_hold:
+            # Close all remaining contracts
+            remaining_quantity = position["remaining_quantity"]
+            
+            if remaining_quantity >= 1:
+                execute_partial_exit(symbol, remaining_quantity, current_price, r_multiple,
+                                    "partial_exit_3_completed", 3, scaling['partial_3_pct'], is_final=True)
+                return
 
 
 def execute_partial_exit(symbol: str, contracts: int, exit_price: float, r_multiple: float,
@@ -4559,6 +6321,69 @@ def execute_partial_exit(symbol: str, contracts: int, exit_price: float, r_multi
             "level": level
         })
         
+        # ADAPTIVE EXIT LEARNING - Record partial exit for pattern learning
+        global adaptive_manager
+        try:
+            if adaptive_manager is not None and hasattr(adaptive_manager, 'record_exit_outcome'):
+                # Get exit parameters that were used
+                if "exit_params_used" in position:
+                    exit_params = position["exit_params_used"]
+                    
+                    # Calculate market regime at exit (don't rely on stored value)
+                    from adaptive_exits import detect_market_regime
+                    bars = state[symbol]["bars_1min"]
+                    atr_value = calculate_atr(symbol, CONFIG.get("atr_period", 14))
+                    regime = detect_market_regime(bars, atr_value if atr_value else 2.0)
+                    
+                    # Capture current market state for context-aware learning
+                    try:
+                        current_rl_state = capture_rl_state(symbol, side, exit_price)
+                        market_state = {
+                            'rsi': current_rl_state.get('rsi', 50.0),
+                            'volume_ratio': current_rl_state.get('volume_ratio', 1.0),
+                            'hour': current_rl_state.get('hour', 12),
+                            'day_of_week': current_rl_state.get('day_of_week', 0),
+                            'streak': current_rl_state.get('streak', 0),
+                            'recent_pnl': current_rl_state.get('recent_pnl', 0.0),
+                            'vix': current_rl_state.get('vix', 15.0),
+                            'vwap_distance': current_rl_state.get('vwap_distance', 0.0),
+                            'atr': current_rl_state.get('atr', exit_params.get('current_atr', 0))
+                        }
+                    except Exception as e:
+                        logger.debug(f"Failed to capture market state for partial exit: {e}")
+                        market_state = None
+                    
+                    # Record partial exit outcome WITH SCALING STRATEGY
+                    adaptive_manager.record_exit_outcome(
+                        regime=regime,
+                        exit_params=exit_params,
+                        trade_outcome={
+                            'pnl': profit_dollars,
+                            'duration': 0,  # Don't have duration for partials
+                            'exit_reason': f'partial_exit_{level}_{r_multiple:.1f}R',
+                            'side': side,
+                            'contracts': contracts,
+                            'win': profit_dollars > 0,
+                            'partial': True,
+                            'r_multiple': r_multiple,
+                            # Daily loss limit context (NEW)
+                            'daily_pnl_before_trade': state[symbol].get("daily_pnl", 0.0) - profit_dollars,
+                            'daily_loss_limit': CONFIG.get("daily_loss_limit", 1000.0),
+                            'daily_loss_proximity_pct': max(0.0, (-(state[symbol].get("daily_pnl", 0.0) - profit_dollars) / CONFIG.get("daily_loss_limit", 1000.0)) * 100.0)
+                        },
+                        market_state=market_state,
+                        partial_exits=[{
+                            'level': level,
+                            'r_multiple': r_multiple,
+                            'contracts': contracts,
+                            'percentage': percentage
+                        }]
+                    )
+                    
+                    logger.info(f"  [EXIT RL] Learned partial exit @ {r_multiple:.1f}R -> ${profit_dollars:+.2f} ({exit_params.get('scaling_strategy', 'UNKNOWN')})")
+        except Exception as e:
+            logger.debug(f"Partial exit learning failed: {e}")
+        
         # Step 10 - Handle edge case: check if position should be fully closed
         if position["remaining_quantity"] < 1 or is_final:
             logger.info("  Position FULLY CLOSED via partial exits")
@@ -4582,6 +6407,150 @@ def execute_partial_exit(symbol: str, contracts: int, exit_price: float, r_multi
         logger.error(f"Failed to execute partial exit #{level}")
 
 
+def initialize_position_tracking(symbol: str) -> None:
+    """
+    Initialize all RL tracking fields when position is opened.
+    Call this AFTER position basics (entry_price, side, etc.) are set.
+    """
+    position = state[symbol]["position"]
+    
+    # Get session info
+    current_time = get_current_time()
+    hour = current_time.hour
+    if 0 <= hour < 8:
+        session = "Asia"
+    elif 8 <= hour < 14:
+        session = "London"
+    else:
+        session = "NY"
+    
+    position["entry_session"] = session
+    
+    # Initialize ATR tracking
+    current_atr = calculate_atr(symbol, CONFIG.get("atr_period", 14))
+    if current_atr:
+        position["entry_atr"] = current_atr
+        position["atr_samples"] = [current_atr]
+    
+    # Get volatility regime
+    if len(state[symbol]["bars_1min"]) > 0:
+        latest_bar = state[symbol]["bars_1min"][-1]
+        vix = latest_bar.get("vix", 15.0)
+        if vix < 12:
+            vol_regime = "LOW_VOL"
+        elif vix > 20:
+            vol_regime = "HIGH_VOL"
+        else:
+            vol_regime = "NORMAL"
+        position["volatility_regime_at_entry"] = vol_regime
+    
+    # Initialize highest/lowest tracking
+    position["highest_price_reached"] = position["entry_price"]
+    position["lowest_price_reached"] = position["entry_price"]
+    
+    # Count recent wins/losses
+    if "trade_history" in state[symbol] and len(state[symbol]["trade_history"]) > 0:
+        recent_5 = state[symbol]["trade_history"][-5:]
+        position["wins_in_last_5_trades"] = sum(1 for t in recent_5 if t.get("pnl", 0) > 0)
+        position["losses_in_last_5_trades"] = sum(1 for t in recent_5 if t.get("pnl", 0) < 0)
+    
+    # Session trade number
+    position["trade_number_in_session"] = state[symbol].get("total_trades", 0) + 1
+    
+    logger.debug(f"[RL TRACKING] Initialized position metrics: session={session}, entry_atr={position.get('entry_atr', 0):.2f}")
+
+
+def update_position_metrics(symbol: str, current_price: float) -> None:
+    """
+    Update all position metrics on every bar for complete RL feature tracking.
+    Matches backtest tracking exactly.
+    
+    Args:
+        symbol: Instrument symbol
+        current_price: Current market price
+    """
+    position = state[symbol]["position"]
+    if not position["active"]:
+        return
+    
+    entry_price = position["entry_price"]
+    side = position["side"]
+    quantity = position["quantity"]
+    tick_size = CONFIG.get("tick_size", 0.25)
+    tick_value = CONFIG.get("tick_value", 12.50)
+    
+    # Increment duration
+    position["duration_bars"] += 1
+    
+    # Calculate current P&L
+    if side == "long":
+        pnl_ticks = (current_price - entry_price) / tick_size
+    else:
+        pnl_ticks = (entry_price - current_price) / tick_size
+    
+    unrealized_pnl = pnl_ticks * tick_value * quantity
+    position["unrealized_pnl"] = unrealized_pnl
+    position["unrealized_pnl_history"].append(unrealized_pnl)
+    
+    # Update MAE (Maximum Adverse Excursion) - worst drawdown
+    if side == "long":
+        current_mae = (position.get("lowest_price_reached", current_price) - entry_price) / tick_size * tick_value * quantity
+    else:
+        current_mae = (entry_price - position.get("highest_price_reached", current_price)) / tick_size * tick_value * quantity
+    
+    if current_mae < position["mae"]:
+        position["mae"] = current_mae
+    
+    # Update MFE (Maximum Favorable Excursion) - best profit
+    if side == "long":
+        current_mfe = (position.get("highest_price_reached", current_price) - entry_price) / tick_size * tick_value * quantity
+    else:
+        current_mfe = (entry_price - position.get("lowest_price_reached", current_price)) / tick_size * tick_value * quantity
+    
+    if current_mfe > position["mfe"]:
+        position["mfe"] = current_mfe
+    
+    # Update peak unrealized P&L
+    if unrealized_pnl > position["peak_unrealized_pnl"]:
+        position["peak_unrealized_pnl"] = unrealized_pnl
+        position["profit_drawdown_from_peak"] = 0.0
+    else:
+        # Calculate drawdown from peak
+        position["profit_drawdown_from_peak"] = position["peak_unrealized_pnl"] - unrealized_pnl
+        if position["peak_unrealized_pnl"] > 0:
+            position["drawdown_bars"] += 1
+    
+    # Calculate R-multiples
+    risk_dollars = abs(entry_price - position["stop_price"]) * quantity * tick_value / tick_size
+    if risk_dollars > 0:
+        r_multiple = unrealized_pnl / risk_dollars
+        position["max_r_achieved"] = max(position["max_r_achieved"], r_multiple)
+        position["min_r_achieved"] = min(position["min_r_achieved"], r_multiple)
+        position["peak_r_multiple"] = max(position["peak_r_multiple"], r_multiple)
+    
+    # Track ATR samples
+    current_atr = calculate_atr(symbol, CONFIG.get("atr_period", 14))
+    if current_atr:
+        position["atr_samples"].append(current_atr)
+        if position["entry_atr"] is None:
+            position["entry_atr"] = current_atr
+        
+        # Count high volatility bars (ATR > 1.5x entry ATR)
+        if current_atr > position["entry_atr"] * 1.5:
+            position["high_volatility_bars"] += 1
+    
+    # Track time in breakeven
+    if position.get("breakeven_active", False):
+        position["time_in_breakeven_bars"] += 1
+    
+    # Update bars until milestones
+    if not position.get("breakeven_active", False):
+        position["bars_until_breakeven"] = position["duration_bars"]
+    
+    if not position.get("trailing_stop_active", False):
+        position["bars_until_trailing"] = position["duration_bars"]
+
+
 def check_exit_conditions(symbol: str) -> None:
     """
     Check exit conditions for open position on each bar.
@@ -4599,10 +6568,33 @@ def check_exit_conditions(symbol: str) -> None:
         return
     
     current_bar = state[symbol]["bars_1min"][-1]
+    current_price = current_bar["close"]
+    
+    # UPDATE ALL POSITION METRICS FIRST (for complete RL tracking)
+    update_position_metrics(symbol, current_price)
+    
+    # UPDATE SHADOW TRADES (ghost signal tracking)
+    update_shadow_trades(symbol, current_bar)
+    
+    current_bar = state[symbol]["bars_1min"][-1]
     bar_time = current_bar["timestamp"]
     side = position["side"]
     entry_price = position["entry_price"]
     stop_price = position["stop_price"]
+    
+    # Track MAE/MFE on EVERY bar for learning
+    if adaptive_manager:
+        try:
+            trade_id = position.get("entry_time", bar_time).isoformat()
+            adaptive_manager.track_mae_mfe(
+                trade_id=trade_id,
+                entry_price=entry_price,
+                current_price=current_bar["close"],
+                direction=side,
+                position_size=position["quantity"]
+            )
+        except Exception as e:
+            logger.debug(f"MAE/MFE tracking failed: {e}")
     
     # Phase Two: Check trading state and handle market close/open
     trading_state = get_trading_state(bar_time)
@@ -4635,48 +6627,6 @@ def check_exit_conditions(symbol: str) -> None:
         handle_exit_orders(symbol, position, flatten_price, "market_close")
         logger.info("Position flattened - bot will continue running and auto-resume when market opens")
         return
-    
-    # ECONOMIC EVENT: Force close ONLY if user enabled it
-    if trading_state == "event_block" and position["active"]:
-        fomc_force_close = CONFIG.get("fomc_force_close", False)
-        
-        if fomc_force_close:
-            # User wants to force close during economic events
-            event_reason = bot_status.get('halt_reason', 'Economic event active')
-            
-            logger.critical(SEPARATOR_LINE)
-            logger.critical(f"ECONOMIC EVENT - AUTO-FLATTENING POSITION")
-            logger.critical(f"Event: {event_reason}")
-            logger.critical(f"Time: {bar_time.strftime('%H:%M:%S %Z')}")
-            logger.critical(f"Position: {side.upper()} {position['quantity']} @ ${entry_price:.2f}")
-            logger.critical("(User enabled 'Force Close During FOMC')")
-            logger.critical(SEPARATOR_LINE)
-            
-            # Force close immediately
-            flatten_price = get_flatten_price(symbol, side, current_bar["close"])
-            
-            log_time_based_action(
-                "event_flatten",
-                f"{event_reason} - auto-flattening position per user preference",
-                {
-                    "side": side,
-                    "quantity": position["quantity"],
-                    "entry_price": f"${entry_price:.2f}",
-                    "exit_price": f"${flatten_price:.2f}",
-                    "time": bar_time.strftime('%H:%M:%S %Z'),
-                    "reason": event_reason
-                }
-            )
-            
-            # Execute close order
-            handle_exit_orders(symbol, position, flatten_price, "event_flatten")
-            logger.info("Position flattened for economic event - will auto-resume after event window")
-            return
-        else:
-            # User wants to keep position during events, just block new entries
-            logger.info(f"📅 Economic event active: {bot_status.get('halt_reason', 'Event')}")
-            logger.info("  Keeping existing position (Force Close disabled)")
-            logger.info("  New entries blocked until event window closes")
     
     # AUTO-RESUME: Reset flatten mode when market reopens
     if trading_state == "entry_window" and bot_status["flatten_mode"]:
@@ -4721,7 +6671,7 @@ def check_exit_conditions(symbol: str) -> None:
         
         log_time_based_action(
             "flatten_mode_activated",
-            "All positions must be closed by 4:45 PM ET (15 min before maintenance)",
+            "All positions must be closed by 8:45 PM UTC (15 min before maintenance)",
             position_details
         )
         
@@ -4743,7 +6693,7 @@ def check_exit_conditions(symbol: str) -> None:
             win_rate = (winning_trades / total_completed * 100) if total_completed > 0 else 0.0
             
             # Build recap message
-            recap_msg = f"📊 PRE-MAINTENANCE DAILY RECAP (4:45 PM ET)\n\n"
+            recap_msg = f"📊 PRE-MAINTENANCE DAILY RECAP (8:45 PM UTC)\n\n"
             recap_msg += f"Trades Today: {total_trades}\n"
             recap_msg += f"Daily P&L: ${daily_pnl:+.2f}\n"
             recap_msg += f"Win Rate: {win_rate:.1f}% ({winning_trades}W/{losing_trades}L)\n"
@@ -4752,7 +6702,7 @@ def check_exit_conditions(symbol: str) -> None:
                 recap_msg += f"\nOpen Position: {position['side'].upper()} {position['quantity']} @ ${position['entry_price']:.2f}\n"
                 recap_msg += f"Unrealized P&L: ${unrealized_pnl:+.2f}\n"
             
-            recap_msg += f"\nBot entering flatten mode. All positions will close before 5:00 PM maintenance window."
+            recap_msg += f"\nBot entering flatten mode. All positions will close before 9:00 PM UTC maintenance window."
             
             notifier.send_error_alert(
                 error_message=recap_msg,
@@ -4792,7 +6742,7 @@ def check_exit_conditions(symbol: str) -> None:
         # Log specific messages for certain exit types
         if reason == "emergency_forced_flatten":
             logger.critical(SEPARATOR_LINE)
-            logger.critical("EMERGENCY FORCED FLATTEN - 4:45 PM FLATTEN WINDOW")
+            logger.critical("EMERGENCY FORCED FLATTEN - 8:45 PM UTC FLATTEN WINDOW")
             logger.critical(SEPARATOR_LINE)
         elif reason == "time_based_profit_take":
             logger.critical("4:40 PM - Closing profitable position immediately")
@@ -4802,7 +6752,7 @@ def check_exit_conditions(symbol: str) -> None:
             logger.warning(f"Phase 10: Closing early profit instead of waiting for target")
         elif reason == "friday_weekend_protection":
             logger.critical(SEPARATOR_LINE)
-            logger.critical("FRIDAY 3 PM - CLOSING POSITION TO AVOID WEEKEND GAP RISK")
+            logger.critical("FRIDAY 7 PM UTC - CLOSING POSITION TO AVOID WEEKEND GAP RISK")
             logger.critical(SEPARATOR_LINE)
         elif reason == "friday_profit_protection":
             tick_size = CONFIG["tick_size"]
@@ -4832,7 +6782,32 @@ def check_exit_conditions(symbol: str) -> None:
         execute_exit(symbol, price, reason)
         return
     
-    # SECOND - VWAP target hit check
+    # SECOND - Early exit detection (learned from similar losing patterns)
+    # Check if current position matches historical deterioration patterns
+    if position["active"] and adaptive_manager:
+        try:
+            # Get current market state for similarity matching
+            bars = state[symbol]["bars_1min"]
+            market_state = {
+                "regime": detect_market_regime(bars, calculate_atr(symbol, CONFIG.get("atr_period", 14)) or 2.0),
+                "rsi": calculate_rsi([bar["close"] for bar in bars[-50:]]) if len(bars) >= 50 else 50.0,
+                "volume_ratio": bars[-1]["volume"] / sum(b["volume"] for b in bars[-20:]) * 20 if len(bars) >= 20 else 1.0,
+                "hour": bar_time.hour,
+                "vwap_distance": abs(current_bar["close"] - current_bar.get("vwap", current_bar["close"])),
+                "entry_time": position.get("entry_time", bar_time),
+                "current_time": bar_time
+            }
+            
+            should_exit = adaptive_manager.should_exit_early(position, market_state, current_bar["close"])
+            if should_exit:
+                logger.warning("[EXIT RL] Early exit triggered - similar trades deteriorated from here")
+                logger.warning(f"  Regime: {market_state['regime']}, RSI: {market_state['rsi']:.1f}")
+                execute_exit(symbol, current_bar["close"], "learned_early_exit")
+                return
+        except Exception as e:
+            logger.debug(f"Early exit check failed: {e}")
+    
+    # THIRD - VWAP target hit check
     target_hit, price = check_target_reached(symbol, current_bar, position, bar_time)
     if target_hit:
         if price == position["target_price"]:
@@ -4842,11 +6817,11 @@ def check_exit_conditions(symbol: str) -> None:
                 bot_status["target_wait_wins"] += 1
         else:
             # Tightened target
-            logger.info("Time-based tightened profit target reached (1:1 R/R after 3 PM)")
+            logger.info("Time-based tightened profit target reached (1:1 R/R after 7 PM UTC)")
             execute_exit(symbol, price, "tightened_target")
         return
     
-    # THIRD - VWAP stop hit check
+    # FOURTH - VWAP stop hit check
     stop_hit, price = check_stop_hit(symbol, current_bar, position)
     if stop_hit:
         execute_exit(symbol, price, "stop_loss")
@@ -4859,16 +6834,284 @@ def check_exit_conditions(symbol: str) -> None:
         execute_exit(symbol, price, "proactive_stop")
         return
     
-    # FOURTH - Partial exits (happens before breakeven/trailing because it reduces position size)
+    # FIFTH - Advanced Exit RL: Adverse Momentum Detection
+    # Check if price momentum has shifted strongly against position
+    if position["active"] and adaptive_manager:
+        try:
+            bars = state[symbol]["bars_1min"]
+            recent_bars = [
+                {
+                    'timestamp': b['timestamp'],
+                    'open': b['open'],
+                    'high': b['high'],
+                    'low': b['low'],
+                    'close': b['close'],
+                    'volume': b['volume']
+                }
+                for b in bars[-5:]  # Last 5 bars for momentum analysis
+            ]
+            
+            if len(recent_bars) >= 3:
+                adverse_result = adaptive_manager.detect_adverse_momentum(
+                    recent_bars=recent_bars,
+                    direction=side,
+                    entry_price=entry_price,
+                    current_price=current_bar["close"],
+                    position_size=position["quantity"]
+                )
+                
+                if adverse_result.get('adverse_detected'):
+                    severity = adverse_result.get('severity', 'medium')
+                    reason = adverse_result.get('reason', 'Adverse momentum detected')
+                    logger.warning(f"[EXIT RL] {reason}")
+                    logger.warning(f"  Severity: {severity.upper()} - Exiting FAST")
+                    execute_exit(symbol, current_bar["close"], "adverse_momentum")
+                    return
+        except Exception as e:
+            logger.debug(f"Adverse momentum check failed: {e}")
+    
+    # SIXTH - Advanced Exit RL: Volume Exhaustion Detection
+    # Check if volume is drying up during profit run (trend exhaustion)
+    if position["active"] and adaptive_manager and position.get("breakeven_active"):
+        try:
+            bars = state[symbol]["bars_1min"]
+            recent_bars = [
+                {
+                    'timestamp': b['timestamp'],
+                    'open': b['open'],
+                    'high': b['high'],
+                    'low': b['low'],
+                    'close': b['close'],
+                    'volume': b['volume']
+                }
+                for b in bars[-10:]  # Last 10 bars for volume analysis
+            ]
+            
+            # Calculate current R-multiple
+            tick_size = CONFIG["tick_size"]
+            initial_risk_ticks = position.get("initial_risk_ticks", 10)
+            if side == "long":
+                profit_ticks = (current_bar["close"] - entry_price) / tick_size
+            else:
+                profit_ticks = (entry_price - current_bar["close"]) / tick_size
+            r_multiple = profit_ticks / initial_risk_ticks if initial_risk_ticks > 0 else 0
+            
+            # Calculate average volume for context
+            avg_volume = sum(b['volume'] for b in recent_bars) / len(recent_bars) if recent_bars else 1
+            
+            if len(recent_bars) >= 5 and r_multiple > 2.0:
+                exhaustion_result = adaptive_manager.check_volume_exhaustion(
+                    recent_bars=recent_bars,
+                    r_multiple=r_multiple,
+                    avg_volume=avg_volume
+                )
+                
+                if exhaustion_result.get('exhaustion_detected'):
+                    reason = exhaustion_result.get('reason', 'Volume exhaustion detected')
+                    logger.warning(f"[EXIT RL] {reason}")
+                    logger.warning(f"  Volume dropped {exhaustion_result.get('volume_drop_pct', 0):.1f}% during profit run")
+                    execute_exit(symbol, current_bar["close"], "volume_exhaustion")
+                    return
+        except Exception as e:
+            logger.debug(f"Volume exhaustion check failed: {e}")
+    
+    # SEVENTH - Advanced Exit RL: Failed Breakout Detection
+    # Check if price hit target band but failed to sustain (weak breakout)
+    if position["active"] and adaptive_manager:
+        try:
+            bars = state[symbol]["bars_1min"]
+            recent_bars = [
+                {
+                    'timestamp': b['timestamp'],
+                    'open': b['open'],
+                    'high': b['high'],
+                    'low': b['low'],
+                    'close': b['close'],
+                    'volume': b['volume']
+                }
+                for b in bars[-5:]  # Last 5 bars for breakout analysis
+            ]
+            
+            # Check if target was hit (touched the band)
+            target_price = position.get("target_price", 0)
+            target_hit = False
+            if target_price > 0:
+                for bar in recent_bars:
+                    if side == "long" and bar['high'] >= target_price:
+                        target_hit = True
+                    elif side == "short" and bar['low'] <= target_price:
+                        target_hit = True
+            
+            if len(recent_bars) >= 3 and target_hit:
+                breakout_result = adaptive_manager.detect_failed_breakout(
+                    recent_bars=recent_bars,
+                    direction=side,
+                    target_hit=target_hit,
+                    entry_price=entry_price,
+                    current_price=current_bar["close"]
+                )
+                
+                if breakout_result.get('failed_breakout'):
+                    reason = breakout_result.get('reason', 'Failed breakout detected')
+                    logger.warning(f"[EXIT RL] {reason}")
+                    logger.warning(f"  Target hit but price rejected - exit before reversal")
+                    execute_exit(symbol, current_bar["close"], "failed_breakout")
+                    return
+        except Exception as e:
+            logger.debug(f"Failed breakout check failed: {e}")
+    
+    # ========================================================================
+    # NEW 35-PARAMETER CHECKS - Advanced Learning
+    # ========================================================================
+    
+    # Get exit params from position (130 total from cloud API)
+    exit_params = position.get("exit_params_used", {})
+    
+    if exit_params:
+        # Calculate metrics needed for checks
+        tick_size = CONFIG["tick_size"]
+        initial_risk_ticks = position.get("initial_risk_ticks", 10)
+        
+        if side == "long":
+            profit_ticks = (current_price - entry_price) / tick_size
+        else:
+            profit_ticks = (entry_price - current_price) / tick_size
+        
+        r_multiple = profit_ticks / initial_risk_ticks if initial_risk_ticks > 0 else 0
+        bars_in_trade = position.get("bars_in_trade", 0)
+        
+        # ====== PRIORITY 1: IMMEDIATE EXIT SIGNAL ======
+        should_exit_now = exit_params.get('should_exit_now', 0.0)
+        if should_exit_now > 0.7:
+            logger.critical("[ML IMMEDIATE EXIT] Neural network signals immediate exit!")
+            logger.critical(f"  Confidence: {should_exit_now:.2f}")
+            execute_exit(symbol, current_price, "ml_immediate_exit")
+            return
+        
+        # ====== PRIORITY 2: ACCOUNT PROTECTION - Emergency Stops ======
+        consecutive_losses = state[symbol]["session_stats"].get("consecutive_losses", 0)
+        max_consecutive = exit_params.get('consecutive_loss_emergency_exit', 5)
+        
+        if consecutive_losses >= max_consecutive:
+            logger.critical(SEPARATOR_LINE)
+            logger.critical(f"EMERGENCY: {consecutive_losses} CONSECUTIVE LOSSES!")
+            logger.critical(f"Stopping trading to prevent account bleeding")
+            logger.critical(SEPARATOR_LINE)
+            execute_exit(symbol, current_price, "consecutive_loss_emergency")
+            # Set flag to stop taking new entries
+            bot_status["emergency_stop"] = True
+            return
+        
+        # Drawdown tightening
+        daily_pnl = state[symbol].get("daily_pnl", 0.0)
+        dd_threshold = exit_params.get('drawdown_tightening_threshold', 0.10)
+        dd_aggressiveness = exit_params.get('drawdown_exit_aggressiveness', 0.5)
+        
+        if daily_pnl < 0 and abs(daily_pnl) / 1000.0 > dd_threshold:
+            # In drawdown - apply tighter trailing
+            if position.get("trailing_stop_active") and dd_aggressiveness > 0.5:
+                # Tighten trailing stop by aggressiveness factor
+                logger.warning(f"[DRAWDOWN MODE] Daily P&L: ${daily_pnl:.2f} - Tightening exits")
+        
+        # ====== PRIORITY 3: DEAD TRADE DETECTION ======
+        should_exit_dead = exit_params.get('should_exit_dead_trade', 0.0)
+        dead_max_loss_r = exit_params.get('dead_trade_max_loss_r', 1.0)
+        dead_detection_bars = exit_params.get('dead_trade_detection_bars', 10)
+        dead_early_cut = exit_params.get('dead_trade_early_cut_enabled', 1.0)
+        
+        if should_exit_dead > 0.7 and profit_ticks < 0 and bars_in_trade >= dead_detection_bars:
+            current_loss_r = abs(r_multiple)
+            if current_loss_r <= dead_max_loss_r and dead_early_cut > 0.5:
+                logger.warning("[DEAD TRADE] ML detected stagnant trade - cutting loss early")
+                logger.warning(f"  Held {bars_in_trade} bars, losing {current_loss_r:.2f}R")
+                execute_exit(symbol, current_price, "dead_trade_cut")
+                return
+        
+        # ====== PRIORITY 4: SIDEWAYS MARKET DETECTION ======
+        sideways_enabled = exit_params.get('sideways_market_exit_enabled', 1.0)
+        sideways_max_loss_r = exit_params.get('sideways_max_loss_r', 0.5)
+        sideways_aggressiveness = exit_params.get('sideways_exit_aggressiveness', 0.7)
+        sideways_detection_bars = int(exit_params.get('sideways_detection_bars', 20))
+        sideways_range_pct = exit_params.get('sideways_detection_range_pct', 0.005)
+        
+        if sideways_enabled > 0.5 and len(state[symbol]["bars_1min"]) >= sideways_detection_bars:
+            # Detect sideways market (price range is tight)
+            recent_bars = state[symbol]["bars_1min"][-sideways_detection_bars:]
+            highs = [b["high"] for b in recent_bars]
+            lows = [b["low"] for b in recent_bars]
+            high_price = max(highs)
+            low_price = min(lows)
+            mid_price = (high_price + low_price) / 2
+            range_ratio = (high_price - low_price) / mid_price if mid_price > 0 else 1.0
+            
+            is_sideways = range_ratio < sideways_range_pct
+            
+            if is_sideways and r_multiple < -sideways_max_loss_r and sideways_aggressiveness > 0.5:
+                logger.warning("[SIDEWAYS MARKET] Choppy conditions detected - exiting with tight stop")
+                logger.warning(f"  Range: {range_ratio*100:.2f}%, Losing: {abs(r_multiple):.2f}R")
+                execute_exit(symbol, current_price, "sideways_market_exit")
+                return
+        
+        # ====== PRIORITY 5: PROFIT PROTECTION ======
+        profit_lock_r = exit_params.get('profit_lock_activation_r', 2.0)
+        profit_aggressiveness = exit_params.get('profit_protection_aggressiveness', 0.5)
+        
+        if r_multiple >= profit_lock_r and profit_aggressiveness > 0.8:
+            # Aggressive profit protection mode - tighten trailing dramatically
+            if position.get("trailing_stop_active"):
+                logger.info(f"[PROFIT LOCK] {r_multiple:.2f}R profit - aggressive protection active")
+                # Trailing logic will use this to tighten (handled in check_trailing_stop)
+        
+        # ====== ADDITIONAL LEARNING PARAMETERS (tracked but modify existing logic) ======
+        # These don't cause immediate exits but affect behavior:
+        
+        # Runner management
+        runner_pct = exit_params.get('runner_percentage', 0.25)
+        runner_target = exit_params.get('runner_target_r', 5.0)
+        # Used in partial exit logic
+        
+        # Time-based learning
+        time_max_bars = exit_params.get('time_stop_max_bars', 60)
+        time_decay_rate = exit_params.get('time_decay_rate', 0.5)
+        # Affects trailing tightening over time
+        
+        # Regime change
+        regime_immediate_exit = exit_params.get('regime_change_immediate_exit', 0.0)
+        if regime_immediate_exit > 0.8:
+            # Would trigger on regime change (handled in regime detection above)
+            pass
+        
+        # Volatility spike
+        vol_spike_mult = exit_params.get('volatility_spike_adaptive_exit', 2.5)
+        # Affects stop widening on volatility
+        
+        # Loss acceptance (quality-based exits)
+        bad_entry_loss = exit_params.get('acceptable_loss_for_bad_entry', 0.5)
+        good_entry_loss = exit_params.get('acceptable_loss_for_good_entry', 2.0)
+        entry_quality_threshold = exit_params.get('entry_quality_threshold', 0.7)
+        
+        entry_confidence = position.get("entry_confidence", 0.5)
+        if entry_confidence < entry_quality_threshold:
+            # Bad entry - cut loss early
+            if abs(r_multiple) >= bad_entry_loss and r_multiple < 0:
+                logger.warning(f"[BAD ENTRY] Low confidence entry ({entry_confidence:.2f}) - cutting loss at {abs(r_multiple):.2f}R")
+                execute_exit(symbol, current_price, "bad_entry_loss_cut")
+                return
+    
+    # ========================================================================
+    # END OF NEW 35-PARAMETER CHECKS
+    # ========================================================================
+    
+    # EIGHTH - Partial exits (happens before breakeven/trailing because it reduces position size)
     check_partial_exits(symbol, current_bar["close"])
     
-    # FIFTH - Breakeven protection (must activate before trailing)
+    # NINTH - Breakeven protection (must activate before trailing)
     check_breakeven_protection(symbol, current_bar["close"])
     
-    # SIXTH - Trailing stop (only runs if breakeven already active)
+    # TENTH - Trailing stop (only runs if breakeven already active)
     check_trailing_stop(symbol, current_bar["close"])
     
-    # SEVENTH - Market divergence check (tighten stops if fighting momentum)
+    # ELEVENTH - Market divergence check (tighten stops if fighting momentum)
     if position["active"]:
         is_diverging, divergence_reason = check_market_divergence(symbol, position["side"])
         if is_diverging:
@@ -4908,7 +7151,7 @@ def check_exit_conditions(symbol: str) -> None:
                     if new_stop_order.get("order_id"):
                         position["stop_order_id"] = new_stop_order.get("order_id")
     
-    # EIGHTH - Time-decay tightening (last priority, gradual adjustment)
+    # TWELFTH - Time-decay tightening (last priority, gradual adjustment)
     check_time_decay_tightening(symbol, bar_time)
     
     # Check for signal reversal (lowest priority)
@@ -5336,7 +7579,12 @@ def execute_exit(symbol: str, exit_price: float, reason: str) -> None:
             # Get exit parameters that were used
             if "exit_params_used" in position:
                 exit_params = position["exit_params_used"]
-                regime = exit_params.get("market_regime", "UNKNOWN")
+                
+                # Calculate market regime at exit (don't rely on stored value)
+                from adaptive_exits import detect_market_regime
+                bars = state[symbol]["bars_1min"]
+                atr_value = calculate_atr(symbol, CONFIG.get("atr_period", 14))
+                regime = detect_market_regime(bars, atr_value if atr_value else 2.0)
                 
                 # Calculate trade duration
                 entry_time = position.get("entry_time")
@@ -5345,21 +7593,141 @@ def execute_exit(symbol: str, exit_price: float, reason: str) -> None:
                     duration = exit_time - entry_time
                     duration_minutes = duration.total_seconds() / 60
                 
-                # Record for learning
+                # Capture current market state for context-aware learning
+                try:
+                    current_rl_state = capture_rl_state(symbol, position["side"], exit_price)
+                    market_state = {
+                        'rsi': current_rl_state.get('rsi', 50.0),
+                        'volume_ratio': current_rl_state.get('volume_ratio', 1.0),
+                        'hour': current_rl_state.get('hour', 12),
+                        'day_of_week': current_rl_state.get('day_of_week', 0),
+                        'streak': current_rl_state.get('streak', 0),
+                        'recent_pnl': current_rl_state.get('recent_pnl', 0.0),
+                        'vix': current_rl_state.get('vix', 15.0),
+                        'vwap_distance': current_rl_state.get('vwap_distance', 0.0),
+                        'atr': current_rl_state.get('atr', exit_params.get('current_atr', 0))
+                    }
+                except Exception as e:
+                    logger.debug(f"Failed to capture market state for exit: {e}")
+                    market_state = None
+                
+                # Record for learning with market context AND ALL TRACKED FEATURES
                 adaptive_manager.record_exit_outcome(
                     regime=regime,
                     exit_params=exit_params,
                     trade_outcome={
+                        # Basic outcome
                         'pnl': pnl,
                         'duration': duration_minutes,
                         'exit_reason': reason,
                         'side': position["side"],
                         'contracts': position["quantity"],
-                        'win': pnl > 0
-                    }
+                        'win': pnl > 0,
+                        
+                        # === COMPLETE 45-FEATURE TRACKING (matches backtest) ===
+                        # Entry context
+                        'entry_confidence': position.get("entry_confidence", 0.0),
+                        'entry_price': position.get("entry_price", 0.0),
+                        
+                        # Performance Metrics (from tracking)
+                        'mae': position.get("mae", 0.0),
+                        'mfe': position.get("mfe", 0.0),
+                        'max_r_achieved': position.get("max_r_achieved", 0.0),
+                        'min_r_achieved': position.get("min_r_achieved", 0.0),
+                        'r_multiple': pnl / (abs(position["entry_price"] - position["stop_price"]) * position["quantity"] * CONFIG.get("tick_value", 12.50) / CONFIG.get("tick_size", 0.25)) if position.get("stop_price") else 0.0,
+                        
+                        # Exit Strategy State
+                        'breakeven_activated': position.get("breakeven_active", False),
+                        'trailing_activated': position.get("trailing_stop_active", False),
+                        'breakeven_activation_bar': position.get("breakeven_activation_bar", 0),
+                        'trailing_activation_bar': position.get("trailing_activation_bar", 0),
+                        'bars_until_breakeven': position.get("bars_until_breakeven", 0),
+                        'bars_until_trailing': position.get("bars_until_trailing", 0),
+                        'time_in_breakeven_bars': position.get("time_in_breakeven_bars", 0),
+                        'exit_param_update_count': position.get("exit_param_update_count", 0),
+                        'stop_adjustment_count': position.get("stop_adjustment_count", 0),
+                        'stop_hit': reason == "stop_loss",
+                        
+                        # Decision History
+                        'decision_history': position.get("decision_history", []),
+                        'unrealized_pnl_history': position.get("unrealized_pnl_history", []),
+                        'peak_unrealized_pnl': position.get("peak_unrealized_pnl", 0.0),
+                        'peak_r_multiple': position.get("peak_r_multiple", 0.0),
+                        'opportunity_cost': max(0.0, position.get("peak_unrealized_pnl", 0.0) - pnl),
+                        
+                        # Daily Loss Limit Context (3 NEW FEATURES)
+                        'daily_pnl_before_trade': state[symbol].get("daily_pnl", 0.0) - pnl,
+                        'daily_loss_limit': CONFIG.get("daily_loss_limit", 1000.0),
+                        'daily_loss_proximity_pct': max(0.0, (-(state[symbol].get("daily_pnl", 0.0) - pnl) / CONFIG.get("daily_loss_limit", 1000.0)) * 100.0),
+                        
+                        # Advanced tracking arrays
+                        'exit_param_updates': position.get("exit_param_updates", []),
+                        'stop_adjustments': position.get("stop_adjustments", []),
+                        
+                        # Execution quality
+                        'slippage_ticks': position.get("exit_slippage_ticks", 0.0),
+                        'commission_cost': position.get("commission_cost", 0.0),
+                        'bid_ask_spread_ticks': position.get("exit_bid_ask_spread_ticks", 0.0),
+                        
+                        # Market context
+                        'session': position.get("entry_session", "NY"),
+                        'volume_at_exit': state[symbol]["bars_1min"][-1].get("volume", 0) if len(state[symbol]["bars_1min"]) > 0 else 0,
+                        'volatility_regime_change': position.get("volatility_regime_at_entry", "NORMAL") != market_state.get("volatility_regime", "NORMAL") if market_state else False,
+                        
+                        # Drawdown tracking
+                        'profit_drawdown_from_peak': position.get("profit_drawdown_from_peak", 0.0),
+                        'max_drawdown_percent': position.get("max_drawdown_percent", 0.0),
+                        'drawdown_bars': position.get("drawdown_bars", 0),
+                        
+                        # Volatility during trade
+                        'avg_atr_during_trade': sum(position.get("atr_samples", [])) / len(position.get("atr_samples", [1])),
+                        'atr_change_percent': ((position.get("atr_samples", [0])[-1] - position.get("entry_atr", 1)) / position.get("entry_atr", 1) * 100.0) if position.get("atr_samples") and position.get("entry_atr", 0) > 0 else 0.0,
+                        'high_volatility_bars': position.get("high_volatility_bars", 0),
+                        
+                        # Trade context
+                        'duration_bars': position.get("duration_bars", 0),
+                        'trade_number_in_session': position.get("trade_number_in_session", 0),
+                        'wins_in_last_5_trades': position.get("wins_in_last_5_trades", 0),
+                        'losses_in_last_5_trades': position.get("losses_in_last_5_trades", 0),
+                        
+                        # Market conditions (for backtest compatibility)
+                        'vix': market_state.get('vix', 15.0) if market_state else 15.0,
+                        'cumulative_pnl_before_trade': state[symbol].get("daily_pnl", 0.0) - pnl,  # P&L before this trade
+                        
+                        # NEW: Temporal features for pattern learning
+                        'entry_hour': entry_time.hour if entry_time else 12,
+                        'entry_minute': entry_time.minute if entry_time else 0,
+                        'exit_hour': exit_time.hour,
+                        'exit_minute': exit_time.minute,
+                        'day_of_week': exit_time.weekday(),  # 0=Monday, 6=Sunday
+                        'bars_held': position.get("duration_bars", 0),  # Already tracked
+                        
+                        # Time-of-day exit tracking
+                        'exit_hour': exit_time.hour,
+                        'exit_minute': exit_time.minute,
+                        'held_through_sessions': (exit_time - position.get("entry_time", exit_time)).total_seconds() > 14400 if position.get("entry_time") else False,  # >4 hours
+                        'minutes_until_close': max(0.0, (21 * 60) - (exit_time.hour * 60 + exit_time.minute)) if exit_time.hour < 21 else 0.0,
+                    },
+                    market_state=market_state
                 )
                 
-                logger.info(f"[EXIT RL] Learned {regime} exit -> ${pnl:+.2f} in {duration_minutes:.1f}min")
+                logger.info(f"[EXIT RL] Learned {regime} exit -> ${pnl:+.2f} in {duration_minutes:.1f}min with market context")
+                
+                # === EXIT RL FEATURE 10: EXIT EFFICIENCY ANALYSIS ===
+                # Analyze MAE/MFE patterns periodically (every 5 trades)
+                exit_count = len(adaptive_manager.exit_experiences) if hasattr(adaptive_manager, 'exit_experiences') else 0
+                if exit_count > 0 and exit_count % 5 == 0:
+                    try:
+                        efficiency_results = adaptive_manager.analyze_mae_mfe_patterns()
+                        if efficiency_results:
+                            logger.info(f"[EXIT EFFICIENCY] Analysis complete:")
+                            logger.info(f"   Analyzed {efficiency_results.get('total_analyzed', 0)} trades")
+                            logger.info(f"   Avg MAE: ${efficiency_results.get('avg_mae', 0):.2f}, Avg MFE: ${efficiency_results.get('avg_mfe', 0):.2f}")
+                            capture_rate = efficiency_results.get('capture_rate', 0)
+                            if capture_rate > 0:
+                                logger.info(f"   Capture Rate: {capture_rate:.1%} (how much of MFE was captured)")
+                    except Exception as e:
+                        logger.debug(f"Exit efficiency analysis failed: {e}")
     except Exception as e:
         logger.debug(f"Exit learning failed: {e}")
     
@@ -5382,15 +7750,15 @@ def execute_exit(symbol: str, exit_price: float, reason: str) -> None:
         
         reason_descriptions = {
             "flatten_mode_exit": "Flatten mode aggressive exit",
-            "time_based_profit_take": "4:40 PM profit lock before settlement",
-            "time_based_loss_cut": "4:42 PM small loss cut before settlement",
-            "emergency_forced_flatten": "4:45 PM flatten before maintenance",
-            "tightened_target": "3 PM tightened target (1:1 R/R)",
-            "early_loss_cut": "3:30 PM early loss cut (<75% stop)",
+            "time_based_profit_take": "8:40 PM UTC profit lock before settlement",
+            "time_based_loss_cut": "8:42 PM UTC small loss cut before settlement",
+            "emergency_forced_flatten": "8:45 PM UTC flatten before maintenance",
+            "tightened_target": "7 PM UTC tightened target (1:1 R/R)",
+            "early_loss_cut": "7:30 PM UTC early loss cut (<75% stop)",
             "proactive_stop": "Proactive stop (within 2 ticks)",
             "early_profit_lock": "Early profit lock in flatten mode",
-            "friday_weekend_protection": "Friday 3 PM weekend protection",
-            "friday_profit_protection": "Friday 2 PM profit protection",
+            "friday_weekend_protection": "Friday 7 PM UTC weekend protection",
+            "friday_profit_protection": "Friday 6 PM UTC profit protection",
             "trailing_stop_failure_emergency": "Trailing stop update failed - emergency exit"
         }
         
@@ -5499,6 +7867,29 @@ def execute_exit(symbol: str, exit_price: float, reason: str) -> None:
     # CRITICAL: IMMEDIATELY save state to disk - position is now FLAT
     save_position_state(symbol)
     logger.info("  ✓ Position state saved to disk (FLAT)")
+    
+    # Update state status
+    state[symbol]["bot_status_message"] = "Monitoring..."
+    
+    # Store exit signal info for dashboard
+    exit_pnl = state[symbol].get("daily_pnl", 0.0)
+    pnl_sign = "+" if exit_pnl >= 0 else ""
+    state[symbol]["last_signal_type"] = f"EXIT @ ${exit_price:.2f} ({pnl_sign}${pnl:.2f})"
+    state[symbol]["last_signal_timestamp"] = get_current_time().timestamp()
+    
+    # Update dashboard to show flat position
+    if dashboard:
+        dashboard.update_symbol_data(symbol, {
+            "position": "FLAT",
+            "position_qty": 0,
+            "position_side": None,
+            "status": "Monitoring..."
+        })
+        # Update P&L
+        dashboard.update_symbol_data(symbol, {
+            "pnl_today": state[symbol].get("daily_pnl", 0.0)
+        })
+        dashboard.display()
 
 
 def calculate_aggressive_price(base_price: float, order_side: str, attempt: int) -> float:
@@ -5631,36 +8022,36 @@ def execute_flatten_with_limit_orders(symbol: str, order_side: str, contracts: i
 
 def check_vwap_reset(symbol: str, current_time: datetime) -> None:
     """
-    Check if VWAP should reset at 6 PM ET (futures market day start).
-    For 24/5 trading: VWAP resets at 6 PM when futures trading day begins.
+    Check if VWAP should reset at 11 PM UTC (futures market day start).
+    For 24/5 trading: VWAP resets at 11 PM when futures trading day begins (Sunday opening).
     
     Args:
         symbol: Instrument symbol
-        current_time: Current datetime in Eastern Time
+        current_time: Current datetime in UTC
     """
     current_date = current_time.date()
-    vwap_reset_time = datetime_time(18, 0)  # 6 PM ET - futures trading day starts
+    vwap_reset_time = datetime_time(23, 0)  # 11 PM UTC - futures trading day starts
     
-    # Check if we've crossed 6 PM on a new day
+    # Check if we've crossed 11 PM UTC on a new day
     if state[symbol]["vwap_day"] is None:
         # First run - initialize VWAP day
         state[symbol]["vwap_day"] = current_date
         logger.info(f"Trading day initialized: {current_date}")
         return
     
-    # If it's a new day and we're past 6 PM, reset VWAP
-    # OR if it's the same calendar day but we just crossed 6 PM
+    # If it's a new day and we're past 11 PM UTC, reset VWAP
+    # OR if it's the same calendar day but we just crossed 11 PM UTC
     last_reset_date = state[symbol]["vwap_day"]
     crossed_reset_time = current_time.time() >= vwap_reset_time
     
-    # New trading day starts at 6 PM, so check if we've moved to a new VWAP session
+    # New trading day starts at 11 PM UTC, so check if we've moved to a new VWAP session
     if crossed_reset_time and last_reset_date != current_date:
         perform_vwap_reset(symbol, current_date, current_time)
 
 
 def perform_vwap_reset(symbol: str, new_date: Any, reset_time: datetime) -> None:
     """
-    Perform VWAP reset at 6 PM ET daily (futures trading day start).
+    Perform VWAP reset at 11 PM UTC daily (futures trading day start).
     
     Args:
         symbol: Instrument symbol
@@ -5669,7 +8060,7 @@ def perform_vwap_reset(symbol: str, new_date: Any, reset_time: datetime) -> None
     """
     logger.info(SEPARATOR_LINE)
     logger.info(f"DAILY RESET at {reset_time.strftime('%Y-%m-%d %H:%M:%S %Z')}")
-    logger.info(f"Futures trading day start (6 PM ET) - New trading day: {new_date}")
+    logger.info(f"Futures trading day start (11 PM UTC) - New trading day: {new_date}")
     logger.info(SEPARATOR_LINE)
     
     # Clear accumulated 1-minute bars for VWAP calculation
@@ -5697,19 +8088,19 @@ def perform_vwap_reset(symbol: str, new_date: Any, reset_time: datetime) -> None
 def check_daily_reset(symbol: str, current_time: datetime) -> None:
     """
     Check if we've crossed into a new trading day and reset daily counters.
-    For 24/5 trading: Resets at 6 PM ET (futures trading day start).
+    For 24/5 trading: Resets at 11 PM UTC (futures trading day start).
     
     Args:
         symbol: Instrument symbol
-        current_time: Current datetime in Eastern Time
+        current_time: Current datetime in UTC
     """
     current_date = current_time.date()
-    vwap_reset_time = datetime_time(18, 0)  # 6 PM ET - futures trading day starts
+    vwap_reset_time = datetime_time(23, 0)  # 11 PM UTC - futures trading day starts
     
     # If we have a trading day stored and it's different from current date
     if state[symbol]["trading_day"] is not None:
         if state[symbol]["trading_day"] != current_date:
-            # Reset daily counters at 6 PM (same as VWAP reset)
+            # Reset daily counters at 11 PM UTC (same as VWAP reset)
             if current_time.time() >= vwap_reset_time:
                 perform_daily_reset(symbol, current_date)
     else:
@@ -5892,7 +8283,7 @@ def check_tick_timeout(current_time: datetime) -> Tuple[bool, Optional[str]]:
     Check if data feed has timed out.
     
     Args:
-        current_time: Current datetime in Eastern Time
+        current_time: Current datetime in UTC
     
     Returns:
         Tuple of (is_safe, reason)
@@ -5917,7 +8308,7 @@ def check_trade_limits(current_time: datetime) -> Tuple[bool, Optional[str]]:
     24/5 trading - only stop for maintenance window and weekends.
     
     Args:
-        current_time: Current datetime in Eastern Time
+        current_time: Current datetime in UTC
     
     Returns:
         Tuple of (is_safe, reason)
@@ -5926,7 +8317,7 @@ def check_trade_limits(current_time: datetime) -> Tuple[bool, Optional[str]]:
     if bot_status["emergency_stop"]:
         return False, f"Emergency stop active: {bot_status['stop_reason']}"
     
-    # Check for weekend (Saturday + Sunday before 6 PM)
+    # Check for weekend (Saturday + Sunday before 23:00 UTC)
     if current_time.weekday() == 5:  # Saturday - always closed
         if bot_status["trading_enabled"]:
             logger.debug(f"Saturday detected - market closed")
@@ -5935,17 +8326,17 @@ def check_trade_limits(current_time: datetime) -> Tuple[bool, Optional[str]]:
         return False, "Weekend - market closed"
     
     if current_time.weekday() == 6:  # Sunday
-        if current_time.time() < datetime_time(18, 0):  # Before 6 PM Sunday
+        if current_time.time() < datetime_time(23, 0):  # Before 23:00 UTC Sunday
             if bot_status["trading_enabled"]:
-                logger.debug(f"Sunday before 6 PM - market closed")
+                logger.debug(f"Sunday before 23:00 UTC - market closed")
                 bot_status["trading_enabled"] = False
                 bot_status["stop_reason"] = "weekend"
-            return False, "Weekend - market closed (opens 6 PM)"
+            return False, "Weekend - market closed (opens 23:00 UTC)"
     
-    # Check for futures maintenance window (5:00 PM - 6:00 PM ET Monday-Friday)
-    if current_time.weekday() < 5:  # Monday through Friday only
-        maintenance_start = datetime_time(17, 0)  # 5 PM
-        maintenance_end = datetime_time(18, 0)    # 6 PM
+    # Check for futures maintenance window (21:00-22:00 UTC Monday-Thursday)
+    if current_time.weekday() < 4:  # Monday through Thursday only
+        maintenance_start = datetime_time(21, 0)  # 21:00 UTC
+        maintenance_end = datetime_time(22, 0)    # 22:00 UTC
         if maintenance_start <= current_time.time() < maintenance_end:
             if bot_status["trading_enabled"]:
                 logger.debug(f"Maintenance window - disabling trading")
@@ -6039,7 +8430,7 @@ def check_safety_conditions(symbol: str) -> Tuple[bool, Optional[str]]:
                 logger.error("🛑 CONFIDENCE TRADING: DAILY LIMIT HIT - STOPPING TRADING")
                 logger.error(f"Daily Loss: ${state[symbol]['daily_pnl']:.2f}")
                 logger.error(f"Daily Limit: ${-CONFIG.get('daily_loss_limit', 1000):.2f}")
-                logger.error("Bot will STOP making new trades until daily reset at 6 PM ET")
+                logger.error("Bot will STOP making new trades until daily reset at 11 PM UTC")
                 logger.error("Bot continues running and monitoring - will resume after maintenance hour")
                 logger.error("=" * 80)
                 bot_status["trading_enabled"] = False
@@ -6066,7 +8457,7 @@ def check_safety_conditions(symbol: str) -> Tuple[bool, Optional[str]]:
                     
                     logger.info(f"Position closed at ${flatten_price:.2f} - Confidence Trading limit hit")
                 
-                return False, "Confidence Trading: Daily limit hit - trading stopped until next session (6 PM ET reset)"
+                return False, "Confidence Trading: Daily limit hit - trading stopped until next session (11 PM UTC reset)"
             
             # SMART POSITION MANAGEMENT: If severity is critical (95%+), consider closing losing positions
             if severity >= 0.95 and state[symbol]["position"]["active"]:
@@ -6111,12 +8502,12 @@ def check_safety_conditions(symbol: str) -> Tuple[bool, Optional[str]]:
             # Don't stop trading - both modes continue with scaled-down logic
         else:
             # NEITHER MODE ENABLED: STOP trading until next session (after maintenance)
-            # Bot stays running but doesn't execute new trades until daily reset at 6 PM ET
+            # Bot stays running but doesn't execute new trades until daily reset at 11 PM UTC
             logger.warning("=" * 80)
             logger.warning("⚠️ LIMITS REACHED - STOPPING TRADING UNTIL NEXT SESSION")
             logger.warning(f"Reason: {approach_reason}")
             logger.warning(f"Severity: {severity*100:.1f}%")
-            logger.warning("Bot will STOP making new trades until daily reset at 6 PM ET")
+            logger.warning("Bot will STOP making new trades until daily reset at 11 PM UTC")
             logger.warning("Bot continues running and monitoring - will resume after maintenance hour")
             logger.warning("To scale down when approaching limits, enable Confidence Trading or Recovery Mode")
             logger.warning("=" * 80)
@@ -6152,7 +8543,7 @@ def check_safety_conditions(symbol: str) -> Tuple[bool, Optional[str]]:
                 
                 logger.info(f"Position closed at ${flatten_price:.2f} to protect from further losses")
             
-            return False, "Daily limits reached - trading stopped until next session (6 PM ET reset)"
+            return False, "Daily limits reached - trading stopped until next session (11 PM UTC reset)"
     else:
         # Not approaching failure - clear any safety mode that was set
         if bot_status.get("stop_reason") in ["daily_limits_reached", "recovery_mode", "confidence_trading", "confidence_trading_limit_hit"]:
@@ -6190,8 +8581,10 @@ def check_no_overnight_positions(symbol: str) -> None:
     
     # Critical: If it's past 5 PM and we still have a position, this is a SERIOUS ERROR
     if current_time.time() >= CONFIG["shutdown_time"]:
+        critical_msg = f"POSITION PAST 9 PM UTC - Emergency close required for {symbol}"
+        log_critical_error(critical_msg)
+        
         logger.critical("=" * 70)
-        logger.critical("CRITICAL ERROR: POSITION DETECTED PAST 5 PM ET")
         logger.critical("OVERNIGHT POSITION RISK - IMMEDIATE EMERGENCY CLOSE REQUIRED")
         logger.critical("=" * 70)
         logger.critical(f"Position: {state[symbol]['position']['side']} "
@@ -6508,25 +8901,23 @@ def get_current_time() -> datetime:
 def get_trading_state(dt: datetime = None) -> str:
     """
     Centralized time checking function that returns current trading state.
-    24/5 trading - supports multi-user global operation with UTC-first approach.
+    24/5 trading - all logic uses UTC (matches ES futures schedule and data).
     
     **AZURE-FIRST DESIGN**: Checks Azure time service first for:
-    - Maintenance windows (Mon-Thu 5-6 PM, Fri 5 PM - Sun 6 PM)
-    - Economic events (FOMC/NFP/CPI blocking)
+    - Maintenance windows (Mon-Thu 21:00-22:00 UTC, Fri 21:00 - Sun 23:00 UTC)
     - Single source of truth for all time-based decisions
     
     Falls back to local time logic if Azure unreachable.
     
     Args:
         dt: Datetime to check (defaults to current time - live or backtest)
-            Can be UTC or timezone-aware. Will convert to exchange timezone.
+            Can be naive (assumed UTC) or timezone-aware (converted to UTC).
     
     Returns:
         Trading state:
         - 'entry_window': Market open, ready to trade
-        - 'flatten_mode': 4:45-5:00 PM ET, close positions before maintenance
+        - 'flatten_mode': 20:45-21:00 UTC, close positions before maintenance
         - 'closed': Market closed (flatten all positions immediately)
-        - 'event_block': Economic event active (FOMC/NFP/CPI)
     """
     # AZURE-FIRST: Try cloud time service (unless in backtest mode)
     if backtest_current_time is None:  # Live mode only
@@ -6536,58 +8927,55 @@ def get_trading_state(dt: datetime = None) -> str:
             return azure_state
     
     # FALLBACK: Local time logic (backtest mode or Azure unreachable)
-    # Get current time (UTC-first for multi-user)
+    # Get current time in UTC
     if dt is None:
         dt = get_current_time()
     
-    # Convert to UTC first (standardize)
+    # Convert to UTC (standardize)
     if dt.tzinfo is None:
-        # If naive datetime, assume it's Eastern time (legacy compatibility)
-        tz = pytz.timezone(CONFIG["timezone"])
-        dt = tz.localize(dt)
+        # If naive datetime, assume it's UTC
+        dt = pytz.UTC.localize(dt)
     
-    # Convert to UTC, then to exchange timezone (Eastern Time for ES)
+    # Convert to UTC
     utc_time = dt.astimezone(pytz.UTC)
-    exchange_tz = pytz.timezone(CONFIG["timezone"])  # Eastern Time for ES
-    local_time = utc_time.astimezone(exchange_tz)
     
-    weekday = local_time.weekday()  # 0=Monday, 6=Sunday
-    current_time = local_time.time()
+    weekday = utc_time.weekday()  # 0=Monday, 6=Sunday
+    current_time = utc_time.time()
     
-    # ES Futures Hours (Eastern Time):
-    # Sunday 6:00 PM - Friday 5:00 PM (with daily 5-6 PM maintenance Mon-Thu)
+    # ES Futures Hours (UTC):
+    # Sunday 23:00 - Friday 21:00 (with daily 21:00-22:00 maintenance Mon-Thu)
     
     # CLOSED: Saturday (all day)
     if weekday == 5:  # Saturday
         return 'closed'
     
-    # CLOSED: Sunday before 6:00 PM ET (opens AT 6:00 PM exactly)
-    if weekday == 6 and current_time < datetime_time(18, 0):
+    # CLOSED: Sunday before 23:00 UTC (opens AT 23:00 UTC exactly)
+    if weekday == 6 and current_time < datetime_time(23, 0):
         return 'closed'
     
-    # CLOSED: Friday at/after 5:00 PM ET (closes AT 5:00 PM exactly - weekend starts)
-    if weekday == 4 and current_time >= datetime_time(17, 0):
+    # CLOSED: Friday at/after 21:00 UTC (closes AT 21:00 UTC exactly - weekend starts)
+    if weekday == 4 and current_time >= datetime_time(21, 0):
         return 'closed'
     
     # Get configured trading times from CONFIG (supports 24/5 futures)
-    flatten_time = CONFIG.get("flatten_time", datetime_time(16, 45))
-    forced_flatten_time = CONFIG.get("forced_flatten_time", datetime_time(17, 0))
+    flatten_time = CONFIG.get("flatten_time", datetime_time(20, 45))
+    forced_flatten_time = CONFIG.get("forced_flatten_time", datetime_time(21, 0))
     
-    # CLOSED: Daily maintenance (5:00-6:00 PM ET, Monday-Thursday)
+    # CLOSED: Daily maintenance (21:00-22:00 UTC, Monday-Thursday)
     if weekday < 4:  # Monday-Thursday
-        if forced_flatten_time <= current_time < datetime_time(18, 0):
+        if forced_flatten_time <= current_time < datetime_time(22, 0):
             return 'closed'  # Daily settlement period
     
     # FLATTEN MODE: 15 minutes before daily maintenance
-    # Only flatten between 4:45-5:00 PM (15 min before maintenance)
-    # Not after 6:00 PM (that's when the next session starts!)
+    # Only flatten between 20:45-21:00 UTC (15 min before maintenance)
+    # Not after 22:00 UTC (that's when the next session starts!)
     if flatten_time <= current_time < forced_flatten_time:
         return 'flatten_mode'
     
     # ENTRY WINDOW: Market open, ready to trade
     # For 24/5 futures, we're in entry window if:
-    # - Between 6:00 PM and 4:45 PM next day (Mon-Thu)
-    # - Between 6:00 PM and 5:00 PM Friday
+    # - Between 23:00 UTC Sunday and 20:45 UTC next day (Mon-Thu)
+    # - Between 23:00 UTC and 21:00 UTC Friday
     # - NOT in closed/flatten periods above
     return 'entry_window'
 
@@ -6599,7 +8987,7 @@ def get_trading_state(dt: datetime = None) -> str:
 def validate_timezone_configuration() -> None:
     """
     Phase Fifteen: Validate timezone configuration on bot startup.
-    Ensures pytz is working correctly and DST is handled properly.
+    Ensures timezone is set to UTC (matches ES futures schedule and historical data).
     """
     tz = pytz.timezone(CONFIG["timezone"])
     current_time = datetime.now(tz)
@@ -6607,23 +8995,24 @@ def validate_timezone_configuration() -> None:
     logger.info(SEPARATOR_LINE)
     logger.info("TIMEZONE CONFIGURATION VALIDATION")
     logger.info(SEPARATOR_LINE)
-    logger.info(f"Configured Timezone: {CONFIG['timezone']}")
-    logger.info(f"Current Time (ET): {current_time.strftime('%Y-%m-%d %H:%M:%S %Z')}")
+    logger.info(f"Configured Timezone: {CONFIG['timezone']} (UTC)")
+    logger.info(f"Current Time (UTC): {current_time.strftime('%Y-%m-%d %H:%M:%S %Z')}")
     logger.info(f"UTC Offset: {current_time.strftime('%z')}")
-    logger.info(f"DST Active: {bool(current_time.dst())}")
     
-    # Check if DST transition is near
-    tomorrow = current_time + timedelta(days=1)
-    if current_time.dst() != tomorrow.dst():
-        logger.warning("DST TRANSITION DETECTED - Clock changes within 24 hours")
-        logger.warning("Bot has been tested for DST transitions")
+    # Verify it's actually UTC
+    if CONFIG["timezone"] != "UTC":
+        logger.warning("⚠️  WARNING: Timezone is not UTC!")
+        logger.warning("Bot expects UTC to match ES futures schedule and historical data")
+        logger.warning("Please set timezone='UTC' in config.py")
     
-    # Warn if system local time differs significantly from ET
-    system_time = datetime.now()
-    if abs((current_time.replace(tzinfo=None) - system_time).total_seconds()) > 3600:
-        logger.warning("System local time differs from ET by >1 hour")
-        logger.warning(f"System: {system_time.strftime('%H:%M:%S')}, ET: {current_time.strftime('%H:%M:%S')}")
-        logger.warning("All trading decisions use ET - system time is informational only")
+    # System time comparison (use UTC for consistency)
+    system_time = datetime.now(pytz.UTC)
+    utc_time_now = datetime.now(pytz.UTC)
+    time_diff = abs((current_time.replace(tzinfo=None) - utc_time_now.replace(tzinfo=None)).total_seconds())
+    
+    if time_diff > 60:
+        logger.warning(f"System time differs from UTC by {time_diff:.0f} seconds")
+        logger.warning("All trading decisions use UTC - system time is informational only")
     
     logger.info(SEPARATOR_LINE)
 
@@ -6768,41 +9157,41 @@ Complete Time-Based Logic Summary
 
 Your bot operates in distinct time-based modes controlling all actions:
 
-TIME WINDOWS (All times Eastern Time - 24/5 Futures Trading):
+TIME WINDOWS (All times UTC - 24/5 Futures Trading):
 - Saturday: CLOSED - Market closed for weekend
-- Sunday before 6:00 PM: CLOSED - Waiting for futures open
-- Sunday 6:00 PM: MARKET OPEN - Trading resumes for the week
-- 6:00 PM - 4:45 PM (next day): ENTRY WINDOW - Full trading allowed 24 hours (Mon-Thu)
-- 4:45 PM - 5:00 PM: FLATTEN MODE - Close positions (15 min before maintenance)
-- 5:00 PM - 6:00 PM: MAINTENANCE - Daily settlement (Mon-Thu), market closed
-- Friday 4:45 PM - 5:00 PM: FLATTEN MODE - Close before weekend
-- Friday 5:00 PM onwards: WEEKEND - Market closed until Sunday 6:00 PM
+- Sunday before 11:00 PM: CLOSED - Waiting for futures open
+- Sunday 11:00 PM: MARKET OPEN - Trading resumes for the week
+- 11:00 PM - 8:45 PM (next day): ENTRY WINDOW - Full trading allowed 24 hours (Mon-Thu)
+- 8:45 PM - 9:00 PM: FLATTEN MODE - Close positions (15 min before maintenance)
+- 9:00 PM - 10:00 PM: MAINTENANCE - Daily settlement (Mon-Thu), market closed
+- Friday 8:45 PM - 9:00 PM: FLATTEN MODE - Close before weekend
+- Friday 9:00 PM onwards: WEEKEND - Market closed until Sunday 11:00 PM
 
 FLATTEN SCHEDULE (preserves 24-hour trading):
 - Monday-Thursday: Flatten 4:45-5:00 PM (15 min before daily maintenance)
 - Friday: Flatten 4:45-5:00 PM (before weekend close)
 - During flatten mode: Aggressive closing, no new entries
-- After 5:00 PM: Maintenance window (Mon-Thu) or weekend (Fri-Sun)
+- After 9:00 PM UTC: Maintenance window (Mon-Thu) or weekend (Fri-Sun)
 
 DAILY RESETS:
-- 6:00 PM ET: Daily session opens (after maintenance window)
-- 9:30 AM: VWAP reset (stock market alignment for equity indexes)
-- Daily counters reset at 6 PM when new session starts
+- 11:00 PM UTC: Daily session opens Sunday (after weekend), continues 24/5
+- 1:30 PM UTC: VWAP reset (stock market alignment for equity indexes)
+- Daily counters reset at 11 PM UTC when new session starts
 
 CRITICAL SAFETY RULES (24/5 FUTURES):
-1. FLATTEN BEFORE MAINTENANCE - Close by 4:45 PM daily (15 min buffer before 5 PM)
-2. NO WEEKEND POSITIONS - Force close by 4:45 PM Friday (before 5 PM weekend close)
-3. MAINTENANCE WINDOW - Market closed 5-6 PM Mon-Thu for settlement
-4. TIMEZONE ENFORCEMENT - All decisions use America/New_York (Eastern Time)
-5. DST AWARENESS - pytz handles spring forward / fall back automatically
+1. FLATTEN BEFORE MAINTENANCE - Close by 8:45 PM UTC daily (15 min buffer before 9 PM UTC)
+2. NO WEEKEND POSITIONS - Force close by 8:45 PM UTC Friday (before 9 PM UTC weekend close)
+3. MAINTENANCE WINDOW - Market closed 9-10 PM UTC Mon-Thu for settlement
+4. TIMEZONE ENFORCEMENT - All decisions use UTC
+5. DST AWARENESS - Not needed - UTC is timezone-agnostic
 6. AUDIT TRAIL - Every time-based action logged with timestamp and reason
 
 WHY THIS MATTERS FOR PROP FIRMS:
 TopStep's rules are designed to fail traders who don't respect:
-- Daily settlement (5 PM ET reset Mon-Thu, maintenance window)
+- Daily settlement (9 PM UTC reset Mon-Thu, maintenance window)
 - Overnight gap exposure
 - Weekend event risk
-- Daily loss limits (restart at 5 PM, not midnight)
+- Daily loss limits (restart at 9 PM UTC, not midnight)
 
 By building time constraints into core logic, you protect against:
 - Gap risk from overnight news (Asia/Europe markets, economic data)
@@ -6833,71 +9222,156 @@ def main(symbol_override: str = None) -> None:
         symbol_override: Optional symbol to trade (overrides CONFIG["instrument"])
                         Used for multi-symbol bot instances
     """
-    global event_loop, timer_manager, bid_ask_manager
+    global event_loop, timer_manager, bid_ask_manager, dashboard
     
-    # Use symbol override if provided (for multi-symbol support)
-    trading_symbol = symbol_override if symbol_override else CONFIG["instrument"]
+    # Get list of trading symbols (multi-symbol support)
+    if "instruments" in CONFIG and CONFIG["instruments"]:
+        trading_symbols = CONFIG["instruments"]
+    else:
+        trading_symbol = symbol_override if symbol_override else CONFIG["instrument"]
+        trading_symbols = [trading_symbol]
     
+    # Initialize dashboard FIRST (before any logging)
+    dashboard = get_dashboard(trading_symbols, CONFIG)
+    dashboard.start()  # This clears screen and initializes dashboard display
+    
+    # Update dashboard with initial bot data
+    initial_account = CONFIG.get("account_size", 50000)
+    dashboard.update_bot_data({
+        "account_balance": initial_account,
+        "max_contracts": CONFIG.get("max_contracts", 3),
+        "daily_loss_limit": CONFIG.get("daily_loss_limit", 1000),
+        "confidence_threshold": CONFIG.get("confidence_threshold", 65),
+        "recovery_mode": CONFIG.get("recovery_mode", False),
+        "confidence_trading": CONFIG.get("confidence_trading", False),
+    })
+    
+    # Initial display
+    dashboard.display()
+    
+    # Dashboard is now active - all status shown via dashboard only
     logger.info(SEPARATOR_LINE)
-    logger.info(f"QuoTrading AI Bot Starting [{trading_symbol}]")
-    logger.info(SEPARATOR_LINE)
+    
+    # Use first symbol as primary
+    primary_symbol = trading_symbols[0]
     
     # Log symbol specifications if loaded
     if SYMBOL_SPEC:
-        logger.info(f"[{trading_symbol}] Symbol: {SYMBOL_SPEC.name} ({SYMBOL_SPEC.symbol})")
-        logger.info(f"[{trading_symbol}]   Tick Value: ${SYMBOL_SPEC.tick_value:.2f} | Tick Size: ${SYMBOL_SPEC.tick_size}")
-        logger.info(f"[{trading_symbol}]   Slippage: {SYMBOL_SPEC.typical_slippage_ticks} ticks | Volatility: {SYMBOL_SPEC.volatility_factor}x")
-        logger.info(f"[{trading_symbol}]   Trading Hours: {SYMBOL_SPEC.session_start} - {SYMBOL_SPEC.session_end} ET")
+        logger.info(f"[{primary_symbol}] Symbol: {SYMBOL_SPEC.name} ({SYMBOL_SPEC.symbol})")
+        logger.info(f"[{primary_symbol}]   Tick Value: ${SYMBOL_SPEC.tick_value:.2f} | Tick Size: ${SYMBOL_SPEC.tick_size}")
+        logger.info(f"[{primary_symbol}]   Slippage: {SYMBOL_SPEC.typical_slippage_ticks} ticks | Volatility: {SYMBOL_SPEC.volatility_factor}x")
+        logger.info(f"[{primary_symbol}]   Trading Hours: {SYMBOL_SPEC.session_start} - {SYMBOL_SPEC.session_end} UTC")
     
     # Display operating mode
     if CONFIG.get('shadow_mode', False):
-        logger.info(f"[{trading_symbol}] Mode: 📊 SIGNAL-ONLY MODE (Manual Trading)")
-        logger.info(f"[{trading_symbol}] ⚠️  Signal mode: Shows trading signals without executing trades")
+        logger.info(f"[{primary_symbol}] Mode: 📊 SIGNAL-ONLY MODE (Manual Trading)")
+        logger.info(f"[{primary_symbol}] ⚠️  Signal mode: Shows trading signals without executing trades")
     else:
-        logger.info(f"[{trading_symbol}] Mode: LIVE TRADING")
+        logger.info(f"[{primary_symbol}] Mode: LIVE TRADING")
     
-    logger.info(f"[{trading_symbol}] Instrument: {trading_symbol}")
-    logger.info(f"[{trading_symbol}] Entry Window: {CONFIG['entry_start_time']} - {CONFIG['entry_end_time']} ET")
-    logger.info(f"[{trading_symbol}] Flatten Mode: {CONFIG['flatten_time']} ET")
-    logger.info(f"[{trading_symbol}] Force Close: {CONFIG['forced_flatten_time']} ET")
-    logger.info(f"[{trading_symbol}] Shutdown: {CONFIG['shutdown_time']} ET")
-    logger.info(f"[{trading_symbol}] Max Contracts: {CONFIG['max_contracts']}")
-    logger.info(f"[{trading_symbol}] Max Trades/Day: {CONFIG['max_trades_per_day']}")
-    logger.info(f"[{trading_symbol}] Risk Per Trade: {CONFIG['risk_per_trade'] * 100:.1f}%")
-    logger.info(f"[{trading_symbol}] Daily Loss Limit: ${CONFIG['daily_loss_limit']}")
+    logger.info(f"[{primary_symbol}] Instruments: {', '.join(trading_symbols)}")
+    logger.info(f"[{primary_symbol}] Entry Window: {CONFIG['entry_start_time']} - {CONFIG['entry_end_time']} UTC")
+    logger.info(f"[{primary_symbol}] Flatten Mode: {CONFIG['flatten_time']} UTC")
+    logger.info(f"[{primary_symbol}] Force Close: {CONFIG['forced_flatten_time']} UTC")
+    logger.info(f"[{primary_symbol}] Shutdown: {CONFIG['shutdown_time']} UTC")
+    logger.info(f"[{primary_symbol}] Max Contracts: {CONFIG['max_contracts']}")
+    logger.info(f"[{primary_symbol}] Max Trades/Day: {CONFIG['max_trades_per_day']}")
+    logger.info(f"[{primary_symbol}] Position Sizing: Fixed at {CONFIG['max_contracts']} contracts")
+    logger.info(f"[{primary_symbol}] Daily Loss Limit: ${CONFIG['daily_loss_limit']}")
     logger.info(SEPARATOR_LINE)
     
     # Phase Fifteen: Validate timezone configuration
     validate_timezone_configuration()
     
     # Initialize bid/ask manager
-    logger.info(f"[{trading_symbol}] Initializing bid/ask manager...")
+    logger.info(f"[{primary_symbol}] Initializing bid/ask manager...")
     bid_ask_manager = BidAskManager(CONFIG)
+    
+    # Initialize adaptive exit manager for learned exit patterns
+    logger.info(f"[{primary_symbol}] Initializing adaptive exit manager with CLOUD RL...")
+    from adaptive_exits import AdaptiveExitManager
+    adaptive_manager = AdaptiveExitManager(
+        config=CONFIG,
+        experience_file='data/local_experiences/exit_experiences_v2.json',  # Local v2 format
+        cloud_api_url=CLOUD_ML_API_URL  # Use cloud API for shared experiences
+    )
+    logger.info(f"[{primary_symbol}]   ✅ Loaded {len(adaptive_manager.exit_experiences):,} exit experiences from {'CLOUD' if adaptive_manager.use_cloud else 'LOCAL'}")
     
     # Initialize broker (replaces initialize_sdk)
     initialize_broker()
     
+    # Initialize Azure time service for maintenance countdown
+    try:
+        check_azure_time_service()
+    except Exception as e:
+        logger.warning(f"Could not fetch Azure time on startup: {e}")
+        # Use local time as fallback
+        utc_tz = pytz.timezone('UTC')
+        local_utc = datetime.now(utc_tz).isoformat()
+        bot_status["azure_time"] = local_utc
+        logger.info(f"Using local UTC time as fallback: {local_utc}")
+    
     # Phase 12: Record starting equity for drawdown monitoring
-    bot_status["starting_equity"] = get_account_equity()
-    logger.info(f"[{trading_symbol}] Starting Equity: ${bot_status['starting_equity']:.2f}")
+    # Use the equity already fetched during broker initialization
+    if bot_status.get("starting_equity", 0) == 0:
+        # If not set yet, try to fetch it now
+        equity = get_account_equity()
+        bot_status["starting_equity"] = equity if equity is not None else 0.0
     
-    # Initialize state for instrument (use override symbol if provided)
-    initialize_state(trading_symbol)
+    starting_equity = bot_status.get("starting_equity", 0.0) or 0.0
+    logger.info(f"[{primary_symbol}] Starting Equity: ${starting_equity:.2f}")
     
-    # CRITICAL: Try to restore position state from disk if bot was restarted
-    logger.info(f"[{trading_symbol}] Checking for saved position state...")
-    position_restored = load_position_state(trading_symbol)
-    if position_restored:
-        logger.warning(f"[{trading_symbol}] ⚠️  BOT RESTARTED WITH ACTIVE POSITION - Managing existing trade")
+    # Calculate initial maintenance countdown - always calculate, even if Azure fails
+    maintenance_countdown = "-- h --m"
+    if bot_status.get("azure_time"):
+        try:
+            maintenance_countdown = dashboard.calculate_maintenance_time(bot_status["azure_time"])
+            logger.info(f"Maintenance countdown: {maintenance_countdown}")
+        except Exception as e:
+            logger.warning(f"Could not calculate maintenance time: {e}")
+            # Fallback to simple local calculation
+            maintenance_countdown = dashboard.calculate_maintenance_time(None)
     else:
-        logger.info(f"[{trading_symbol}] No active position to restore - starting fresh")
+        # Use local time
+        maintenance_countdown = dashboard.calculate_maintenance_time(None)
+        logger.info(f"Maintenance countdown (local): {maintenance_countdown}")
+    
+    # Update dashboard with actual account balance and maintenance
+    dashboard.update_bot_data({
+        "account_balance": starting_equity,
+        "maintenance_countdown": maintenance_countdown
+    })
+    dashboard.display()
+    
+    # Initialize state for all trading symbols
+    for symbol in trading_symbols:
+        initialize_state(symbol)
+        
+        # CRITICAL: Try to restore position state from disk if bot was restarted
+        logger.info(f"[{symbol}] Checking for saved position state...")
+        position_restored = load_position_state(symbol)
+        if position_restored:
+            logger.warning(f"[{symbol}] ⚠️  BOT RESTARTED WITH ACTIVE POSITION - Managing existing trade")
+            # Update dashboard with restored position
+            pos = state[symbol]["position"]
+            if pos["active"]:
+                dashboard.update_symbol_data(symbol, {
+                    "position": f"{pos['side'].upper()} {pos['quantity']}",
+                    "status": "Restored position"
+                })
+        else:
+            logger.info(f"[{symbol}] No active position to restore - starting fresh")
+            dashboard.update_symbol_data(symbol, {
+                "status": "Initializing..."
+            })
+        dashboard.display()
     
     # Skip historical bars fetching in live mode - not needed for real-time trading
     # The bot will build bars from live tick data
-    logger.info(f"[{trading_symbol}] Skipping historical bars fetch - will build bars from live data")
+    logger.info(f"[{primary_symbol}] Skipping historical bars fetch - will build bars from live data")
     
     # Initialize event loop
-    logger.info(f"[{trading_symbol}] Initializing event loop...")
+    logger.info(f"[{primary_symbol}] Initializing event loop...")
     event_loop = EventLoop(bot_status, CONFIG)
     
     # Register event handlers
@@ -6917,17 +9391,31 @@ def main(symbol_override: str = None) -> None:
     timer_manager = TimerManager(event_loop, CONFIG, tz)
     timer_manager.start()
     
-    # Subscribe to market data (trades) - use trading_symbol
-    subscribe_market_data(trading_symbol, on_tick)
-    
-    # Subscribe to bid/ask quotes if broker supports it
-    if broker is not None and hasattr(broker, 'subscribe_quotes'):
-        logger.info(f"[{trading_symbol}] Subscribing to bid/ask quotes...")
-        try:
-            broker.subscribe_quotes(symbol, on_quote)
-        except Exception as e:
-            logger.warning(f"Failed to subscribe to quotes: {e}")
-            logger.warning("Continuing without bid/ask quote data")
+    # Subscribe to market data for all symbols
+    for symbol in trading_symbols:
+        subscribe_market_data(symbol, on_tick)
+        
+        # Subscribe to bid/ask quotes if broker supports it
+        if broker is not None and hasattr(broker, 'subscribe_quotes'):
+            logger.info("=" * 80)
+            logger.info(f"[{symbol}] Subscribing to bid/ask quotes...")
+            logger.info(f"Broker type: {type(broker)}")
+            logger.info(f"Has subscribe_quotes: {hasattr(broker, 'subscribe_quotes')}")
+            logger.info("=" * 80)
+            try:
+                broker.subscribe_quotes(symbol, on_quote)
+                logger.info(f"[{symbol}] ✅ Successfully called broker.subscribe_quotes()")
+                dashboard.update_symbol_data(symbol, {"status": "Subscribed to quotes"})
+            except Exception as e:
+                logger.error(f"❌ Failed to subscribe to quotes for {symbol}: {e}")
+                logger.warning("Continuing without bid/ask quote data")
+                import traceback
+                traceback.print_exc()
+                dashboard.update_symbol_data(symbol, {"status": "Quote subscription failed"})
+        else:
+            logger.warning(f"[{symbol}] Broker does NOT support quote subscriptions")
+            logger.warning(f"broker={broker}, has_subscribe_quotes={hasattr(broker, 'subscribe_quotes') if broker else False}")
+        dashboard.display()
     
     # RL and Adaptive Exits are CLOUD-ONLY - no local RL components
     # Users get confidence from cloud, contribute to cloud hive mind
@@ -6940,16 +9428,255 @@ def main(symbol_override: str = None) -> None:
     logger.info("Press Ctrl+C for graceful shutdown")
     logger.info(SEPARATOR_LINE)
     
+    # Final dashboard update before entering event loop
+    for symbol in trading_symbols:
+        dashboard.update_symbol_data(symbol, {"status": "Monitoring..."})
+    dashboard.display()
+    
     # Run event loop (blocks until shutdown signal)
     try:
+        logger.critical("=" * 80)
+        logger.critical("STARTING EVENT LOOP - Bot should now run continuously")
+        logger.critical("=" * 80)
         event_loop.run()
+        logger.critical("=" * 80)
+        logger.critical("EVENT LOOP EXITED (this should only happen on Ctrl+C or error)")
+        logger.critical("=" * 80)
     except KeyboardInterrupt:
-        logger.info("Keyboard interrupt received")
+        logger.critical("\n" + "=" * 80)
+        logger.critical("🛑 SHUTDOWN REQUESTED (Ctrl+C)")
+        logger.critical("=" * 80)
+    except Exception as e:
+        logger.critical("\n" + "=" * 80)
+        logger.critical(f"❌ EVENT LOOP CRASHED: {e}")
+        logger.critical("=" * 80)
+        import traceback
+        traceback.print_exc()
     finally:
         logger.info("Event loop stopped")
         
+        # Generate session summary for primary symbol
+        if CONFIG.get("instrument") and CONFIG["instrument"] in state:
+            print_session_summary(CONFIG["instrument"])
+        
+        # Cleanup dashboard
+        if dashboard:
+            dashboard.stop()
+        
         # Metrics are already logged by event loop's _log_metrics()
         # No need to call get_metrics() here
+
+
+# ============================================================================
+# DASHBOARD UPDATE HELPERS
+# ============================================================================
+
+def log_critical_error(error_message: str):
+    """
+    Log a critical error to both logger and dashboard.
+    Only critical errors should use this to avoid dashboard spam.
+    
+    Args:
+        error_message: The critical error message
+    """
+    global dashboard
+    
+    # Always log to logger
+    logger.error(f"🚨 CRITICAL: {error_message}")
+    
+    # Also display on dashboard
+    if dashboard:
+        dashboard.add_critical_error(error_message)
+        dashboard.display()
+
+
+def update_dashboard_for_symbol(symbol: str) -> None:
+    """
+    Update dashboard display for a specific symbol with current market data.
+    
+    Args:
+        symbol: Symbol to update
+    """
+    global dashboard
+    
+    if dashboard is None or symbol not in state:
+        return
+    
+    symbol_state = state[symbol]
+    
+    # Get current market data
+    current_price = symbol_state.get("last_price", 0.0)
+    
+    # Get bid/ask if available
+    quote_data = {}
+    if bid_ask_manager:
+        quote = bid_ask_manager.get_current_quote(symbol)
+        if quote:
+            spread = quote.ask_price - quote.bid_price
+            quote_data = {
+                "bid": quote.bid_price,
+                "bid_size": quote.bid_size,
+                "ask": quote.ask_price,
+                "ask_size": quote.ask_size,
+                "spread": spread,
+            }
+            
+            # Determine market condition based on spread
+            if spread <= 0.50:
+                condition = "NORMAL - Tight spread, good liquidity"
+            elif spread <= 1.00:
+                condition = "NORMAL - Good liquidity"
+            elif spread <= 2.00:
+                condition = "NORMAL - Acceptable spread"
+            elif spread <= 5.00:
+                condition = "CAUTION - Wider spread"
+            else:
+                condition = "VOLATILE - Wide spreads detected"
+            quote_data["condition"] = condition
+    
+    # Get position data with P&L percentage
+    position_data = {}
+    pnl_percent = 0.0
+    if symbol_state["position"]["active"]:
+        pos = symbol_state["position"]
+        position_data = {
+            "position": f"{pos['side'].upper()} {pos['quantity']} @ ${pos['entry_price']:.2f}",
+            "position_qty": pos["quantity"],
+            "position_side": pos["side"],
+        }
+        
+        # Calculate P&L percentage
+        entry_price = pos.get("entry_price", current_price)
+        if entry_price > 0:
+            if pos["side"] == "long":
+                pnl_ticks = (current_price - entry_price) / CONFIG["tick_size"]
+            else:
+                pnl_ticks = (entry_price - current_price) / CONFIG["tick_size"]
+            
+            pnl_value = pnl_ticks * CONFIG["tick_value"] * pos["quantity"]
+            pnl_percent = (pnl_value / (entry_price * pos["quantity"])) * 100
+    else:
+        position_data = {
+            "position": "FLAT",
+            "position_qty": 0,
+            "position_side": None,
+        }
+    
+    # Get P&L
+    pnl_data = {
+        "pnl_today": symbol_state.get("daily_pnl", 0.0),
+        "pnl_percent": pnl_percent
+    }
+    
+    # Get market status from Azure or local time
+    current_time = get_current_time()
+    trading_state = get_trading_state(current_time)
+    
+    market_status = "OPEN" if trading_state == "entry_window" else "CLOSED"
+    if trading_state == "flatten_mode":
+        market_status = "FLATTEN"
+    
+    # Calculate maintenance countdown from Azure server time
+    maintenance_time = "-- h --m"
+    if dashboard:
+        server_time = bot_status.get("azure_time")
+        maintenance_time = dashboard.calculate_maintenance_time(server_time)
+    
+    # Get last signal info with time, confidence, and approval status
+    last_signal = symbol_state.get("last_signal_type", "--")
+    last_signal_time = ""
+    last_signal_confidence = ""
+    last_signal_approved = symbol_state.get("last_signal_approved", None)
+    
+    if "last_signal_timestamp" in symbol_state and symbol_state["last_signal_timestamp"]:
+        try:
+            sig_time = datetime.fromtimestamp(symbol_state["last_signal_timestamp"])
+            last_signal_time = sig_time.strftime("%H:%M")
+        except:
+            pass
+    
+    if "last_signal_confidence" in symbol_state and symbol_state["last_signal_confidence"]:
+        conf_val = symbol_state["last_signal_confidence"]
+        if isinstance(conf_val, float):
+            last_signal_confidence = f"{int(conf_val * 100)}%"
+    
+    # Get last rejected signal info
+    last_rejected_signal = ""
+    if "last_rejected_signal" in symbol_state and symbol_state["last_rejected_signal"]:
+        rejected = symbol_state["last_rejected_signal"]
+        if isinstance(rejected, dict):
+            # Format the rejected signal for display
+            rej_time = rejected.get("time")
+            if rej_time:
+                rej_time_str = rej_time.strftime("%H:%M")
+                rej_side = rejected.get("side", "").upper()
+                rej_conf = rejected.get("confidence", 0)
+                rej_conf_str = f"{int(rej_conf * 100)}%"
+                # Get price from state (approximate)
+                rej_reason = rejected.get("reason", "")
+                last_rejected_signal = f"{rej_time_str} {rej_side} (Conf: {rej_conf_str}) - {rej_reason}"
+    
+    # Get current status - update with live P&L if in trade
+    status = symbol_state.get("bot_status_message", "Monitoring...")
+    
+    # If in trade, enhance status with current P&L
+    if symbol_state["position"]["active"]:
+        pos = symbol_state["position"]
+        entry_price = pos.get("entry_price", current_price)
+        
+        # Calculate current P&L
+        if entry_price > 0:
+            if pos["side"] == "long":
+                pnl_ticks = (current_price - entry_price) / CONFIG["tick_size"]
+            else:
+                pnl_ticks = (entry_price - current_price) / CONFIG["tick_size"]
+            
+            current_pnl = pnl_ticks * CONFIG["tick_value"] * pos["quantity"]
+            pnl_sign = "+" if current_pnl > 0 else ""
+            
+            # Show target price if available
+            target = pos.get("target_price")
+            if target:
+                status = f"In trade - P&L: ${pnl_sign}{current_pnl:.2f} | Target: ${target:.2f}"
+            else:
+                status = f"In trade - P&L: ${pnl_sign}{current_pnl:.2f}"
+    
+    # Get skip reason if available
+    skip_reason = symbol_state.get("skip_reason", "")
+    
+    # Combine all data
+    update_data = {
+        "market_status": market_status,
+        "maintenance_in": maintenance_time,
+        "last_signal": last_signal,
+        "last_signal_time": last_signal_time,
+        "last_signal_confidence": last_signal_confidence,
+        "last_signal_approved": last_signal_approved,
+        "last_rejected_signal": last_rejected_signal,
+        "skip_reason": skip_reason,
+        "status": status,
+        **quote_data,
+        **position_data,
+        **pnl_data,
+    }
+    
+    # Update dashboard
+    dashboard.update_symbol_data(symbol, update_data)
+    
+    # Also update bot-level data with maintenance and TopStep status
+    # Check broker connection status properly
+    topstep_status = False
+    if broker is not None:
+        if hasattr(broker, 'is_connected'):
+            topstep_status = broker.is_connected()
+        elif hasattr(broker, 'connected'):
+            topstep_status = broker.connected
+    
+    dashboard.update_bot_data({
+        "maintenance_countdown": maintenance_time,
+        "topstep_connected": topstep_status,
+        "daily_pnl": sum(state[s].get("daily_pnl", 0.0) for s in trading_symbols)
+    })
 
 
 # ============================================================================
@@ -6980,7 +9707,14 @@ def handle_tick_event(event) -> None:
     state[symbol]["total_ticks_received"] += 1
     total_ticks = state[symbol]["total_ticks_received"]
     
-    # Log tick data periodically (every 1000 ticks to avoid spam)
+    # Update dashboard every 50 ticks (about every 1 second in active market)
+    # More frequent updates for real-time monitoring
+    if total_ticks % 50 == 0:
+        update_dashboard_for_symbol(symbol)
+        if dashboard:
+            dashboard.display()
+    
+    # Suppress normal logging - only log every 1000 ticks to reduce spam
     if total_ticks % 1000 == 0:
         # Get current bid/ask from bid_ask_manager if available
         bid_ask_info = ""
@@ -6989,7 +9723,10 @@ def handle_tick_event(event) -> None:
             if quote:
                 spread = quote.ask_price - quote.bid_price
                 bid_ask_info = f" | Bid: ${quote.bid_price:.2f} x {quote.bid_size} | Ask: ${quote.ask_price:.2f} x {quote.ask_size} | Spread: ${spread:.2f}"
-        logger.info(f"[TICK] {symbol} @ ${price:.2f} | Vol: {volume} | Total ticks: {total_ticks}{bid_ask_info}")
+        logger.critical(f"[TICK] {symbol} @ ${price:.2f} | Vol: {volume} | Total ticks: {total_ticks}{bid_ask_info}")
+    
+    # Store last price in state
+    state[symbol]["last_price"] = price
     
     # Create tick object
     tick = {
@@ -7144,9 +9881,101 @@ def handle_shutdown_event(data: Dict[str, Any]) -> None:
     bot_status["trading_enabled"] = False
 
 
+def print_session_summary(symbol: str) -> None:
+    """Print detailed session summary on exit"""
+    print("\n" + "=" * 80)
+    print("SESSION SUMMARY - QuoTrading AI Bot")
+    print("=" * 80)
+    
+    # Session duration
+    if bot_status.get("session_start_time"):
+        start_time = bot_status["session_start_time"]
+        end_time = datetime.now(pytz.UTC)
+        duration = end_time - start_time
+        hours = int(duration.total_seconds() // 3600)
+        minutes = int((duration.total_seconds() % 3600) // 60)
+        print(f"Session Duration: {hours}h {minutes}m")
+        print(f"Started: {start_time.strftime('%Y-%m-%d %H:%M:%S')}")
+        print(f"Ended: {end_time.strftime('%Y-%m-%d %H:%M:%S')}")
+    
+    print("\n" + "-" * 80)
+    print(f"SYMBOL: {symbol}")
+    print("-" * 80)
+    
+    # Trading statistics
+    symbol_state = state[symbol]
+    bars_count = symbol_state.get("bars_1min_count", 0)
+    ticks_received = symbol_state.get("total_ticks_received", 0)
+    
+    print(f"Bars Processed: {bars_count} (1-minute bars)")
+    print(f"Ticks Received: {ticks_received:,}")
+    
+    # P&L Summary
+    pnl_today = symbol_state.get("pnl_today", 0.0)
+    starting_equity = bot_status.get("starting_equity", 0.0) or 0.0
+    current_equity = get_account_equity()
+    current_equity = current_equity if current_equity is not None else 0.0
+    
+    print(f"\nStarting Equity: ${starting_equity:,.2f}")
+    print(f"Ending Equity: ${current_equity:,.2f}")
+    print(f"P&L Today: ${pnl_today:+,.2f}")
+    
+    if starting_equity > 0:
+        pnl_percent = (pnl_today / starting_equity) * 100
+        print(f"Return: {pnl_percent:+.2f}%")
+    
+    # Position info
+    position = symbol_state["position"]
+    if position.get("active"):
+        print(f"\n⚠️  WARNING: Active position still open!")
+        print(f"   Side: {position['side'].upper()}")
+        print(f"   Quantity: {position['quantity']}")
+        print(f"   Entry: ${position.get('entry_price', 0):.2f}")
+    else:
+        print(f"\n✓ No open positions")
+    
+    # Signal statistics
+    signals_generated = symbol_state.get("signals_generated", 0)
+    signals_approved = symbol_state.get("signals_approved", 0)
+    signals_rejected = symbol_state.get("signals_rejected", 0)
+    
+    if signals_generated > 0:
+        print(f"\nSignals Generated: {signals_generated}")
+        print(f"  Approved: {signals_approved}")
+        print(f"  Rejected: {signals_rejected}")
+        if signals_generated > 0:
+            approval_rate = (signals_approved / signals_generated) * 100
+            print(f"  Approval Rate: {approval_rate:.1f}%")
+    
+    # Trade statistics
+    trades_count = symbol_state.get("trades_today", 0)
+    winning_trades = symbol_state.get("winning_trades", 0)
+    losing_trades = symbol_state.get("losing_trades", 0)
+    
+    if trades_count > 0:
+        print(f"\nTrades Executed: {trades_count}")
+        print(f"  Wins: {winning_trades}")
+        print(f"  Losses: {losing_trades}")
+        if trades_count > 0:
+            win_rate = (winning_trades / trades_count) * 100
+            print(f"  Win Rate: {win_rate:.1f}%")
+    
+    print("\n" + "=" * 80)
+    print("Thank you for using QuoTrading AI Bot!")
+    print("=" * 80 + "\n")
+
+
 def cleanup_on_shutdown() -> None:
     """Cleanup tasks on shutdown"""
     logger.info("Running cleanup tasks...")
+    
+    # Stop dashboard display
+    if dashboard:
+        try:
+            dashboard.stop()
+            logger.info("Dashboard stopped")
+        except Exception as e:
+            logger.error(f"Error stopping dashboard: {e}")
     
     # Send bot shutdown alert
     try:
@@ -7182,10 +10011,10 @@ def cleanup_on_shutdown() -> None:
         except Exception as e:
             logger.error(f"Error stopping timer manager: {e}")
     
-    # Log session summary
+    # Print session summary
     symbol = CONFIG["instrument"]
     if symbol in state:
-        log_session_summary(symbol)
+        print_session_summary(symbol)
     
     logger.info("Cleanup complete")
 

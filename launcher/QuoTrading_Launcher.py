@@ -18,6 +18,7 @@ from tkinter import ttk, messagebox
 import os
 import json
 from pathlib import Path
+import pytz
 from datetime import datetime
 import sys
 import subprocess
@@ -25,7 +26,7 @@ import re
 import threading
 import time
 import requests  # For cloud API calls
-import platform  # For cross-platform mouse wheel support
+import platform  # For cross-platform detection
 import psutil  # For process checking (stale lock detection)
 
 # ========================================
@@ -1384,50 +1385,6 @@ class QuoTradingLauncher:
         modes_section = tk.Frame(symbols_modes_container, bg=self.colors['card'])
         modes_section.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         
-        # News Avoidance (top)
-        news_avoid_frame = tk.Frame(modes_section, bg=self.colors['card'])
-        news_avoid_frame.pack(fill=tk.X, pady=(0, 8))
-        
-        self.avoid_news_var = tk.BooleanVar(value=self.config.get("fomc_block_enabled", True))
-        self.fomc_gui_loading = True  # Flag to prevent popup during GUI initialization
-        
-        def on_news_toggle():
-            """Handle news avoidance toggle - show popup when enabling"""
-            # Skip popup if GUI is still loading
-            if self.fomc_gui_loading:
-                return
-            
-            if self.avoid_news_var.get():
-                # User just enabled news blocking - show popup
-                self.show_fomc_options_popup()
-            else:
-                # User disabled news blocking
-                self.config["fomc_block_enabled"] = False
-                self.config["fomc_force_close"] = False
-                self.save_config()
-        
-        tk.Checkbutton(
-            news_avoid_frame,
-            text="📰 Avoid High-Impact News Days",
-            variable=self.avoid_news_var,
-            command=on_news_toggle,
-            font=("Segoe UI", 8, "bold"),
-            bg=self.colors['card'],
-            fg=self.colors['text'],
-            selectcolor=self.colors['secondary'],
-            activebackground=self.colors['card'],
-            activeforeground=self.colors['success'],
-            cursor="hand2"
-        ).pack(anchor=tk.W)
-        
-        tk.Label(
-            news_avoid_frame,
-            text="Stops trading during major news events",
-            font=("Segoe UI", 7, "bold"),
-            bg=self.colors['card'],
-            fg=self.colors['text_light']
-        ).pack(anchor=tk.W, padx=(20, 0))
-        
         # Confidence Trading
         conf_mode_frame = tk.Frame(modes_section, bg=self.colors['card'])
         conf_mode_frame.pack(fill=tk.X, pady=(0, 5))
@@ -1562,9 +1519,6 @@ class QuoTradingLauncher:
             fg=self.colors['text_light']
         ).pack(anchor=tk.W, padx=(20, 0))
         
-        # GUI initialization complete - allow FOMC popup to show on user clicks
-        self.root.after(100, lambda: setattr(self, 'fomc_gui_loading', False))
-        
         # Account Settings Row - COMPACT
         settings_row = tk.Frame(content, bg=self.colors['card'])
         settings_row.pack(fill=tk.X, pady=(0, 3))
@@ -1639,12 +1593,23 @@ class QuoTradingLauncher:
             fg=self.colors['text']
         ).pack(anchor=tk.W, pady=(0, 1))
         
-        # Get account type to set ENFORCED limits
+        # Get account balance to set ENFORCED TopStep limits
+        # TopStep limits are based on ACCOUNT SIZE, not account type (eval vs funded)
         account_type = self.config.get("broker_type", "Prop Firm")
+        account_balance = self.config.get("fetched_account_balance", self.config.get("account_size", 50000))
         
-        # Enforce actual broker limits - exceeding these will cause trade rejection
+        # TopStep Contract Limits (same for evaluation and funded accounts)
+        # Based purely on account size - enforced by broker
         if account_type == "Prop Firm":
-            max_contracts_allowed = 5  # Prop firm strict limit
+            # TopStep rules based on account size
+            if account_balance >= 150000:
+                max_contracts_allowed = 15
+            elif account_balance >= 100000:
+                max_contracts_allowed = 10
+            elif account_balance >= 50000:
+                max_contracts_allowed = 5
+            else:
+                max_contracts_allowed = 3  # Under $50K accounts
         else:
             max_contracts_allowed = 25  # Live broker flexible limit
         
@@ -1663,10 +1628,15 @@ class QuoTradingLauncher:
         )
         contracts_spin.pack(fill=tk.X, ipady=2)
         
-        # Info label showing enforced contract limit
+        # Info label showing enforced TopStep contract limit
+        if account_type == "Prop Firm":
+            limit_text = f"TopStep Max: {max_contracts_allowed} contracts (${account_balance/1000:.0f}K account)"
+        else:
+            limit_text = f"Max {max_contracts_allowed} for {account_type} (enforced)"
+        
         contracts_info = tk.Label(
             contracts_frame,
-            text=f"Max {max_contracts_allowed} for {account_type} (enforced)",
+            text=limit_text,
             font=("Segoe UI", 7, "bold"),
             bg=self.colors['card'],
             fg=self.colors['text_light']
@@ -2328,6 +2298,7 @@ class QuoTradingLauncher:
         self.config["max_contracts"] = self.contracts_var.get()
         self.config["max_trades"] = self.trades_var.get()
         self.config["confidence_threshold"] = self.confidence_var.get()
+        self.config["rl_confidence_threshold"] = self.confidence_var.get() / 100.0  # Convert to decimal for bot
         self.config["shadow_mode"] = self.shadow_mode_var.get()
         self.config["confidence_trading"] = self.confidence_trading_var.get()
         self.config["selected_account"] = self.account_dropdown_var.get()
@@ -2383,7 +2354,6 @@ class QuoTradingLauncher:
                 return
         
         self.config["recovery_mode"] = self.recovery_mode_var.get()
-        self.config["fomc_block_enabled"] = self.avoid_news_var.get()
         
         # Auto-enable alerts if email is configured
         self.config["alerts_enabled"] = bool(self.config.get("alert_email") and self.config.get("alert_email_password"))
@@ -2430,27 +2400,56 @@ class QuoTradingLauncher:
         if not result:
             return
         
-        # Launch AI in PowerShell terminal
+        # Launch AI in terminal
         try:
             # Get the AI directory (parent of launcher folder)
             bot_dir = Path(__file__).parent.parent.absolute()
             
-            # PowerShell command to run the QuoTrading AI bot
-            ps_command = [
-                "powershell.exe",
-                "-NoExit",  # Keep window open
-                "-Command",
-                f"cd '{bot_dir}'; python src/quotrading_engine.py"
-            ]
+            # Get Python executable path - use venv if available
+            venv_python = bot_dir / ".venv" / "Scripts" / "python.exe"
+            if venv_python.exists():
+                python_exe = str(venv_python)
+            else:
+                python_exe = sys.executable
+            bot_script = bot_dir / "src" / "quotrading_engine.py"
             
-            # Start PowerShell process in a NEW CONSOLE WINDOW
-            self.bot_process = subprocess.Popen(
-                ps_command,
-                creationflags=subprocess.CREATE_NEW_CONSOLE,
-                cwd=str(bot_dir)
-            )
+            if platform.system() == "Windows":
+                # Windows: Use PowerShell for better console window
+                ps_command = [
+                    "powershell.exe",
+                    "-NoExit",  # Keep window open
+                    "-Command",
+                    f"& '{python_exe}' '{bot_script}'"
+                ]
+                self.bot_process = subprocess.Popen(
+                    ps_command,
+                    creationflags=subprocess.CREATE_NEW_CONSOLE,
+                    cwd=str(bot_dir)
+                )
+            elif platform.system() == "Darwin":
+                # Mac: Launch bot directly and let it run in background
+                # Terminal window will show via Console.app or user can monitor via Activity Monitor
+                self.bot_process = subprocess.Popen(
+                    [python_exe, str(bot_script)],
+                    cwd=str(bot_dir),
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE
+                )
+            else:
+                # Linux: Use gnome-terminal or xterm
+                try:
+                    self.bot_process = subprocess.Popen(
+                        ["gnome-terminal", "--", python_exe, str(bot_script)],
+                        cwd=str(bot_dir)
+                    )
+                except FileNotFoundError:
+                    # Fallback to xterm if gnome-terminal not available
+                    self.bot_process = subprocess.Popen(
+                        ["xterm", "-hold", "-e", python_exe, str(bot_script)],
+                        cwd=str(bot_dir)
+                    )
             
-            # CREATE ACCOUNT LOCK with bot's PowerShell PID
+            # CREATE ACCOUNT LOCK with bot's process PID
             bot_pid = self.bot_process.pid
             if selected_account_id:
                 self.create_account_lock(selected_account_id, bot_pid)
@@ -2475,226 +2474,6 @@ class QuoTradingLauncher:
                 f"Failed to launch bot:\n{str(e)}\n\n"
                 f"Make sure Python is installed and src/quotrading_engine.py exists."
             )
-    
-    def show_fomc_options_popup(self):
-        """Show popup asking user if they want to force close positions during FOMC events."""
-        # Create custom dialog
-        dialog = tk.Toplevel(self.root)
-        dialog.title("News Event Options")
-        dialog.geometry("500x420")
-        dialog.configure(bg=self.colors['background'])
-        dialog.resizable(False, False)
-        
-        # Center the dialog
-        dialog.transient(self.root)
-        dialog.grab_set()
-        
-        # Header with gradient
-        header_frame = tk.Frame(dialog, bg=self.colors['success_dark'], height=70)
-        header_frame.pack(fill=tk.X)
-        header_frame.pack_propagate(False)
-        
-        # Top accent line
-        tk.Frame(header_frame, bg=self.colors['success'], height=3).pack(fill=tk.X)
-        
-        tk.Label(
-            header_frame,
-            text="📅 News Event Blocking",
-            font=("Segoe UI", 15, "bold"),
-            bg=self.colors['success_dark'],
-            fg="white"
-        ).pack(expand=True)
-        
-        # Shadow line
-        tk.Frame(header_frame, bg=self.colors['shadow'], height=2).pack(side=tk.BOTTOM, fill=tk.X)
-        
-        # Content
-        content_frame = tk.Frame(dialog, bg=self.colors['background'])
-        content_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=15)
-        
-        # Explanation
-        tk.Label(
-            content_frame,
-            text="New entries will be blocked during FOMC/NFP/CPI events.",
-            font=("Segoe UI", 10, "bold"),
-            bg=self.colors['background'],
-            fg=self.colors['text'],
-            justify=tk.CENTER
-        ).pack(pady=(0, 3))
-        
-        tk.Label(
-            content_frame,
-            text="What should happen to existing positions?",
-            font=("Segoe UI", 9),
-            bg=self.colors['background'],
-            fg=self.colors['text_secondary'],
-            justify=tk.CENTER
-        ).pack(pady=(0, 18))
-        
-        # Options
-        option_var = tk.IntVar(value=0 if not self.config.get("fomc_force_close", False) else 1)
-        
-        # Option 1: Keep positions - CLEAN CARD
-        option1_frame = tk.Frame(content_frame, bg=self.colors['card'], relief=tk.FLAT, bd=0)
-        option1_frame.pack(fill=tk.X, pady=(0, 10))
-        option1_frame.configure(highlightbackground=self.colors['success'], highlightthickness=2)
-        
-        # Radio button row
-        radio1_container = tk.Frame(option1_frame, bg=self.colors['card'])
-        radio1_container.pack(fill=tk.X, padx=12, pady=(10, 5))
-        
-        tk.Radiobutton(
-            radio1_container,
-            text="✅ Keep Positions Running",
-            variable=option_var,
-            value=0,
-            font=("Segoe UI", 10, "bold"),
-            bg=self.colors['card'],
-            fg=self.colors['text'],
-            selectcolor=self.colors['secondary'],
-            activebackground=self.colors['card'],
-            cursor="hand2"
-        ).pack(side=tk.LEFT)
-        
-        tk.Label(
-            radio1_container,
-            text="⭐ Recommended",
-            font=("Segoe UI", 8, "bold"),
-            bg=self.colors['success'],
-            fg="white",
-            padx=8,
-            pady=2
-        ).pack(side=tk.LEFT, padx=(10, 0))
-        
-        # Description
-        tk.Label(
-            option1_frame,
-            text="Only blocks new entries. Existing positions stay active with normal stop-loss and profit targets.",
-            font=("Segoe UI", 6),
-            bg=self.colors['card'],
-            fg=self.colors['text_light'],
-            wraplength=440,
-            justify=tk.LEFT
-        ).pack(anchor=tk.W, padx=35, pady=(0, 10))
-        
-        # Option 2: Force close - CLEAN CARD
-        option2_frame = tk.Frame(content_frame, bg=self.colors['card'], relief=tk.FLAT, bd=0)
-        option2_frame.pack(fill=tk.X, pady=(0, 0))
-        option2_frame.configure(highlightbackground=self.colors['border_subtle'], highlightthickness=2)
-        
-        # Radio button row
-        radio2_container = tk.Frame(option2_frame, bg=self.colors['card'])
-        radio2_container.pack(fill=tk.X, padx=12, pady=(10, 5))
-        
-        tk.Radiobutton(
-            radio2_container,
-            text="⚠️ Force Close All Positions",
-            variable=option_var,
-            value=1,
-            font=("Segoe UI", 10, "bold"),
-            bg=self.colors['card'],
-            fg=self.colors['text'],
-            selectcolor=self.colors['secondary'],
-            activebackground=self.colors['card'],
-            cursor="hand2"
-        ).pack(side=tk.LEFT)
-        
-        tk.Label(
-            radio2_container,
-            text="Conservative",
-            font=("Segoe UI", 8, "bold"),
-            bg=self.colors['warning'],
-            fg="white",
-            padx=8,
-            pady=2
-        ).pack(side=tk.LEFT, padx=(10, 0))
-        
-        # Description
-        tk.Label(
-            option2_frame,
-            text="Automatically closes positions before events. Zero event exposure but may exit winning trades early.",
-            font=("Segoe UI", 6),
-            bg=self.colors['card'],
-            fg=self.colors['text_light'],
-            wraplength=440,
-            justify=tk.LEFT
-        ).pack(anchor=tk.W, padx=35, pady=(0, 10))
-        
-        # Buttons
-        button_frame = tk.Frame(dialog, bg=self.colors['background'])
-        button_frame.pack(fill=tk.X, padx=20, pady=(10, 20))
-        
-        def on_save():
-            self.config["fomc_block_enabled"] = True
-            self.config["fomc_force_close"] = bool(option_var.get())
-            self.save_config()
-            dialog.destroy()
-        
-        def on_cancel():
-            # User canceled, uncheck the news avoidance box
-            self.avoid_news_var.set(False)
-            self.config["fomc_block_enabled"] = False
-            self.config["fomc_force_close"] = False
-            self.save_config()
-            dialog.destroy()
-        
-        # Cancel button (left)
-        cancel_btn = tk.Button(
-            button_frame,
-            text="Cancel",
-            command=on_cancel,
-            font=("Segoe UI", 10, "bold"),
-            bg=self.colors['card'],
-            fg=self.colors['text'],
-            activebackground=self.colors['card_elevated'],
-            activeforeground=self.colors['text'],
-            cursor="hand2",
-            relief=tk.FLAT,
-            bd=0,
-            padx=30,
-            pady=10
-        )
-        cancel_btn.pack(side=tk.LEFT)
-        
-        # Add hover effect to cancel button
-        def on_cancel_enter(e):
-            cancel_btn.config(bg=self.colors['card_elevated'])
-        def on_cancel_leave(e):
-            cancel_btn.config(bg=self.colors['card'])
-        cancel_btn.bind("<Enter>", on_cancel_enter)
-        cancel_btn.bind("<Leave>", on_cancel_leave)
-        
-        # Save button (right)
-        save_btn = tk.Button(
-            button_frame,
-            text="Save Settings",
-            command=on_save,
-            font=("Segoe UI", 10, "bold"),
-            bg=self.colors['success'],
-            fg="white",
-            activebackground=self.colors['success_dark'],
-            activeforeground="white",
-            cursor="hand2",
-            relief=tk.FLAT,
-            bd=0,
-            padx=30,
-            pady=10
-        )
-        save_btn.pack(side=tk.RIGHT)
-        
-        # Add hover effect to save button
-        def on_save_enter(e):
-            save_btn.config(bg=self.colors['success_dark'])
-        def on_save_leave(e):
-            save_btn.config(bg=self.colors['success'])
-        save_btn.bind("<Enter>", on_save_enter)
-        save_btn.bind("<Leave>", on_save_leave)
-        
-        # Center on parent
-        dialog.update_idletasks()
-        x = self.root.winfo_x() + (self.root.winfo_width() // 2) - (dialog.winfo_width() // 2)
-        y = self.root.winfo_y() + (self.root.winfo_height() // 2) - (dialog.winfo_height() // 2)
-        dialog.geometry(f"+{x}+{y}")
     
     def show_settings_dialog(self):
         """Show comprehensive settings dialog with tabs."""
@@ -3628,7 +3407,7 @@ class QuoTradingLauncher:
         env_path = bot_dir / '.env'
         
         env_content = f"""# QuoTrading AI - Auto-generated Configuration
-# Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+# Generated: {datetime.now(pytz.UTC).strftime('%Y-%m-%d %H:%M:%S')} UTC
 # DO NOT EDIT MANUALLY - Use the launcher to change settings
 
 # QuoTrading License (Required - contact support@quotrading.com to purchase)
@@ -3655,7 +3434,7 @@ BOT_CONFIDENCE_THRESHOLD={self.confidence_var.get()}
 # Bot only takes signals above this confidence threshold (user's minimum)
 BOT_CONFIDENCE_TRADING={'true' if self.confidence_trading_var.get() else 'false'}
 # When approaching daily limit (80%+): SCALES DOWN (higher confidence thresholds + fewer contracts)
-# When limit HIT (100%): STOPS trading until daily reset at 6 PM ET
+# When limit HIT (100%): STOPS trading until daily reset at 11 PM UTC
 # When moving away from limit: Returns to user's initial settings
 
 # Recovery Mode (All Account Types)
@@ -3852,7 +3631,7 @@ BOT_LOG_LEVEL=INFO
         lock_data = {
             "account_id": account_id,
             "pid": bot_pid,
-            "created_at": datetime.now().isoformat(),
+            "created_at": datetime.now(pytz.UTC).isoformat(),
             "broker_username": self.config.get("topstep_username", "unknown")
         }
         
