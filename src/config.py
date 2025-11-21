@@ -285,16 +285,16 @@ class BotConfiguration:
     # Static exit management using config values
     
     # Breakeven Protection - ITERATION 3 (PROVEN WINNER!)
-    breakeven_enabled: bool = True  # ENABLED - Adaptive system will adjust dynamically
+    breakeven_enabled: bool = True  # ENABLED - Uses static config values
     breakeven_profit_threshold_ticks: int = 9  # Iteration 3 - proven optimal
-    breakeven_stop_offset_ticks: int = 1  # Baseline (adaptive adjusts)
+    breakeven_stop_offset_ticks: int = 1  # Static offset from entry
     
-    # Partial Exits (baseline - adaptive system adjusts R-multiples)
+    # Partial Exits (static R-multiples)
     partial_exits_enabled: bool = True  # ENABLED - Scale out at targets
     partial_exit_1_percentage: float = 0.50  # 50% exit at first level
-    partial_exit_1_r_multiple: float = 2.0  # Exit at 2.0R (adaptive: 1.4-3.0)
+    partial_exit_1_r_multiple: float = 2.0  # Exit at 2.0R
     partial_exit_2_percentage: float = 0.30  # 30% exit at second level
-    partial_exit_2_r_multiple: float = 3.0  # Exit at 3.0R (adaptive: 2.1-4.5)
+    partial_exit_2_r_multiple: float = 3.0  # Exit at 3.0R
     partial_exit_3_percentage: float = 0.20  # 20% exit at third level
     partial_exit_3_r_multiple: float = 5.0  # Exit at 5.0R
     

@@ -3972,10 +3972,9 @@ def check_breakeven_protection(symbol: str, current_price: float) -> None:
     """
     Check if breakeven protection should be activated and move stop to breakeven.
     
-    Uses ADAPTIVE parameters that adjust based on:
-    - Current market volatility (ATR)
-    - Market regime (trending vs choppy)
-    - Trade performance
+    Uses static parameters from config:
+    - breakeven_profit_threshold_ticks: Profit needed to activate (default: 8 ticks)
+    - breakeven_stop_offset_ticks: Stop offset from entry (default: 1 tick)
     
     Args:
         symbol: Instrument symbol
@@ -4056,10 +4055,9 @@ def check_trailing_stop(symbol: str, current_price: float) -> None:
     """
     Check and update trailing stop based on price movement.
     
-    Uses ADAPTIVE parameters that adjust based on:
-    - Current market volatility (ATR)
-    - Market regime (trending vs choppy)  
-    - Position holding duration
+    Uses static parameters from config:
+    - trailing_stop_distance_ticks: Distance from price extreme (default: 8 ticks)
+    - trailing_stop_min_profit_ticks: Minimum profit to activate (default: 12 ticks)
     
     Runs AFTER breakeven check. Only processes positions where breakeven is already active.
     Continuously updates stop to follow profitable price movement while protecting gains.
