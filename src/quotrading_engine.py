@@ -4290,6 +4290,7 @@ def check_sideways_timeout(symbol: str, current_price: float, current_time: date
     
     Uses regime-based sideways_timeout parameter (8-18 minutes depending on regime).
     Monitors if price not making meaningful progress in either direction.
+    Applies regardless of profit/loss - can trigger even if position is profitable.
     Timeout clock resets when regime changes.
     
     Args:
@@ -4325,26 +4326,49 @@ def check_sideways_timeout(symbol: str, current_price: float, current_time: date
     if time_elapsed_minutes < sideways_timeout_minutes:
         return False, None
     
-    # Check if price has been stagnant (minimal movement)
-    entry_price = position["entry_price"]
+    # Track price extremes during the timeout period to measure range
+    side = position["side"]
+    
+    # Initialize tracking if not present
+    if "sideways_high" not in position or regime_change_time:
+        # Reset tracking on regime change or first check
+        position["sideways_high"] = current_price
+        position["sideways_low"] = current_price
+        position["sideways_last_reset"] = current_time
+        return False, None
+    
+    # Update price extremes
+    position["sideways_high"] = max(position.get("sideways_high", current_price), current_price)
+    position["sideways_low"] = min(position.get("sideways_low", current_price), current_price)
+    
+    # Calculate price range during timeout period
     tick_size = CONFIG["tick_size"]
+    price_range_ticks = (position["sideways_high"] - position["sideways_low"]) / tick_size
     
-    # Calculate price movement from entry
-    price_movement_ticks = abs(current_price - entry_price) / tick_size
+    # Define "stagnant" as narrow range (< 5 ticks) regardless of distance from entry
+    # This catches positions that are profitable but stuck in tight range
+    stagnant_range_threshold_ticks = 5.0
     
-    # Define "stagnant" as less than 3 ticks of movement (minimal progress)
-    stagnant_threshold_ticks = 3.0
-    
-    if price_movement_ticks < stagnant_threshold_ticks:
-        # Price is stagnant and timeout exceeded
+    if price_range_ticks < stagnant_range_threshold_ticks:
+        # Price stuck in narrow range and timeout exceeded
+        entry_price = position["entry_price"]
+        
+        # Calculate current profit/loss for logging
+        if side == "long":
+            pnl_ticks = (current_price - entry_price) / tick_size
+        else:
+            pnl_ticks = (entry_price - current_price) / tick_size
+        
         logger.warning("=" * 60)
         logger.warning("SIDEWAYS TIMEOUT - EXITING STAGNANT POSITION")
         logger.warning("=" * 60)
         logger.warning(f"  Regime: {current_regime_name}")
         logger.warning(f"  Timeout: {sideways_timeout_minutes} minutes")
         logger.warning(f"  Time Elapsed: {time_elapsed_minutes:.1f} minutes")
-        logger.warning(f"  Price Movement: {price_movement_ticks:.1f} ticks")
+        logger.warning(f"  Price Range: {price_range_ticks:.1f} ticks (High: ${position['sideways_high']:.2f}, Low: ${position['sideways_low']:.2f})")
         logger.warning(f"  Entry: ${entry_price:.2f}, Current: ${current_price:.2f}")
+        logger.warning(f"  Current P&L: {pnl_ticks:+.1f} ticks ({'profit' if pnl_ticks >= 0 else 'loss'})")
+        logger.warning(f"  Reason: Position stuck in narrow range - not developing momentum")
         logger.warning("=" * 60)
         
         return True, current_price
