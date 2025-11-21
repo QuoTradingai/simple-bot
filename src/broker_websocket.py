@@ -223,7 +223,6 @@ class BrokerWebSocketStreamer:
                 self.subscriptions.append(sub)
         except Exception as e:
             logger.error(f"Failed to subscribe to depth: {e}", exc_info=True)
-            logger.error(f"Failed to subscribe to depth: {e}")
     
     def disconnect(self):
         """Disconnect from WebSocket"""

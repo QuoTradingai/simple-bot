@@ -5,7 +5,7 @@ Comprehensive specifications for all supported futures symbols.
 Used to adapt bot behavior to different instruments automatically.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import time
 from typing import Dict, Optional
 
@@ -41,7 +41,7 @@ class SymbolSpec:
     
     # Symbol mappings for different brokers (broker-specific formats)
     # Users should configure their specific broker's symbol format in config
-    broker_symbols: Dict[str, str] = None  # Generic broker symbol mappings
+    broker_symbols: Dict[str, str] = field(default_factory=dict)  # Generic broker symbol mappings
 
 
 # ============================================================================
@@ -117,15 +117,10 @@ SYMBOL_SPECS: Dict[str, SymbolSpec] = {
         typical_spread_ticks=1.0,
         volatility_factor=1.5,         # 50% more volatile than ES
         broker_symbols={
-
             "topstep": "F.US.NP",
-
             "tradovate": "NQZ4",
-
             "rithmic": "NQ",
-
             "ninjatrader": "NQ",
-
             "generic": "NQ"
 
         },
@@ -148,15 +143,10 @@ SYMBOL_SPECS: Dict[str, SymbolSpec] = {
         typical_spread_ticks=1.0,
         volatility_factor=1.5,
         broker_symbols={
-
             "topstep": "F.US.MNQEP",
-
             "tradovate": "MNQZ4",
-
             "rithmic": "MNQ",
-
             "ninjatrader": "MNQ",
-
             "generic": "MNQ"
 
         },
@@ -179,15 +169,10 @@ SYMBOL_SPECS: Dict[str, SymbolSpec] = {
         typical_spread_ticks=1.0,
         volatility_factor=0.8,         # Less volatile than ES
         broker_symbols={
-
             "topstep": "F.US.YM",
-
             "tradovate": "YMZ4",
-
             "rithmic": "YM",
-
             "ninjatrader": "YM",
-
             "generic": "YM"
 
         },
@@ -210,15 +195,10 @@ SYMBOL_SPECS: Dict[str, SymbolSpec] = {
         typical_spread_ticks=1.0,
         volatility_factor=1.3,         # More volatile than ES
         broker_symbols={
-
             "topstep": "F.US.RTY",
-
             "tradovate": "RTYZ4",
-
             "rithmic": "RTY",
-
             "ninjatrader": "RTY",
-
             "generic": "RTY"
 
         },
@@ -243,15 +223,10 @@ SYMBOL_SPECS: Dict[str, SymbolSpec] = {
         typical_spread_ticks=1.0,
         volatility_factor=2.0,         # 2x ES volatility
         broker_symbols={
-
             "topstep": "F.US.CL",
-
             "tradovate": "CLZ4",
-
             "rithmic": "CL",
-
             "ninjatrader": "CL",
-
             "generic": "CL"
 
         },
@@ -274,15 +249,10 @@ SYMBOL_SPECS: Dict[str, SymbolSpec] = {
         typical_spread_ticks=1.0,
         volatility_factor=1.2,
         broker_symbols={
-
             "topstep": "F.US.GC",
-
             "tradovate": "GCZ4",
-
             "rithmic": "GC",
-
             "ninjatrader": "GC",
-
             "generic": "GC"
 
         },
@@ -305,15 +275,10 @@ SYMBOL_SPECS: Dict[str, SymbolSpec] = {
         typical_spread_ticks=1.0,
         volatility_factor=2.5,         # Extremely volatile
         broker_symbols={
-
             "topstep": "F.US.NG",
-
             "tradovate": "NGZ4",
-
             "rithmic": "NG",
-
             "ninjatrader": "NG",
-
             "generic": "NG"
 
         },
@@ -338,15 +303,10 @@ SYMBOL_SPECS: Dict[str, SymbolSpec] = {
         typical_spread_ticks=1.0,
         volatility_factor=0.9,
         broker_symbols={
-
             "topstep": "F.US.E7",
-
             "tradovate": "6EZ4",
-
             "rithmic": "6E",
-
             "ninjatrader": "6E",
-
             "generic": "6E"
 
         },
@@ -371,15 +331,10 @@ SYMBOL_SPECS: Dict[str, SymbolSpec] = {
         typical_spread_ticks=1.0,
         volatility_factor=0.7,         # Less volatile
         broker_symbols={
-
             "topstep": "F.US.ZN",
-
             "tradovate": "ZNZ4",
-
             "rithmic": "ZN",
-
             "ninjatrader": "ZN",
-
             "generic": "ZN"
 
         },
