@@ -298,8 +298,8 @@ class RegimeDetector:
         
         summary = f"Current Regime: {self.current_regime}\n"
         summary += f"  {rules['description']}\n"
-        summary += f"  Stop Distance: {rules['stop_multiplier']:.0%}\n"
-        summary += f"  Target Distance: {rules['target_multiplier']:.0%}\n"
+        summary += f"  Stop Multiplier: {rules['stop_multiplier']:.2f}x\n"
+        summary += f"  Target Multiplier: {rules['target_multiplier']:.2f}x\n"
         summary += f"  Confidence Adj: {rules['confidence_threshold_adj']:+.0%}\n"
         
         return summary
