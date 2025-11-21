@@ -26,17 +26,20 @@ class SignalConfidenceRL:
     """
     Reinforcement learning layer that decides whether to trust VWAP signals.
     
+    NOTE: For production deployments, RL should be hosted in the cloud.
+    Local RL experience files are only used for backtesting and development.
+    
     State: Market conditions when signal triggers
     Action: Take trade (yes/no) + position size + exit params
     Reward: Profit/loss from trade outcome
     """
     
-    def __init__(self, experience_file: str = "data/signal_experience.json", backtest_mode: bool = False, confidence_threshold: Optional[float] = None, exploration_rate: Optional[float] = None, min_exploration: Optional[float] = None, exploration_decay: Optional[float] = None):
+    def __init__(self, experience_file: str = None, backtest_mode: bool = False, confidence_threshold: Optional[float] = None, exploration_rate: Optional[float] = None, min_exploration: Optional[float] = None, exploration_decay: Optional[float] = None):
         """
         Initialize RL confidence scorer.
         
         Args:
-            experience_file: Path to experience file
+            experience_file: Path to experience file (None = no local RL, cloud-based only)
             backtest_mode: Whether in backtest mode
             confidence_threshold: Optional fixed threshold (0.1-1.0). 
                                  - For LIVE/SHADOW mode: If None, defaults to 0.5 (50%). User's GUI setting always used.
@@ -45,7 +48,12 @@ class SignalConfidenceRL:
             min_exploration: Minimum exploration rate (0.0-1.0). Default: 0.05 (5%)
             exploration_decay: Decay factor for exploration rate. Default: 0.995
         """
-        self.experience_file = experience_file
+        # Default to no local experience file for production (cloud-based RL)
+        # Only load local file for backtesting or if explicitly provided
+        if experience_file is None and backtest_mode:
+            self.experience_file = "data/signal_experience.json"
+        else:
+            self.experience_file = experience_file
         self.experiences = []  # All past (state, action, reward) tuples
         self.recent_trades = deque(maxlen=20)  # Last 20 outcomes
         self.backtest_mode = backtest_mode
@@ -528,6 +536,11 @@ class SignalConfidenceRL:
     
     def load_experience(self):
         """Load past experiences from file."""
+        # Skip loading if no experience file is configured (cloud-based RL)
+        if self.experience_file is None:
+            logger.debug("[DEBUG] No local experience file configured (using cloud-based RL)")
+            return
+        
         logger.debug(f"[DEBUG] Attempting to load experiences from: {self.experience_file}")
         logger.debug(f"[DEBUG] File exists check: {os.path.exists(self.experience_file)}")
         
@@ -539,7 +552,7 @@ class SignalConfidenceRL:
                     data = json.load(f)
                     logger.debug(f"[DEBUG] JSON loaded successfully. Keys: {list(data.keys())}")
                     self.experiences = data.get('experiences', [])
-                    logger.debug(f" Loaded {len(self.experiences)} past signal experiences")
+                    logger.debug(f"✓ Loaded {len(self.experiences)} past signal experiences")
             except Exception as e:
                 logger.error(f"Failed to load experiences: {e}")
                 import traceback
@@ -549,6 +562,11 @@ class SignalConfidenceRL:
     
     def save_experience(self):
         """Save experiences to file."""
+        # Skip saving if no experience file is configured (cloud-based RL)
+        if self.experience_file is None:
+            logger.debug("[DEBUG] No local experience file configured - skipping save (cloud-based RL)")
+            return
+        
         try:
             with open(self.experience_file, 'w') as f:
                 json.dump({

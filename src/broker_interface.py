@@ -1,6 +1,7 @@
 """
 Broker Interface Abstraction Layer
-Provides clean separation between trading strategy and broker execution with TopStep SDK integration.
+Provides clean separation between trading strategy and broker execution.
+Supports multiple brokers through a common interface.
 """
 
 from abc import ABC, abstractmethod
@@ -10,23 +11,23 @@ import logging
 import time
 import asyncio
 
-# Import TopStep SDK (Project-X)
+# Import broker SDKs (optional dependencies)
 try:
     from project_x_py import ProjectX, ProjectXConfig, TradingSuite, TradingSuiteConfig
     from project_x_py import OrderSide, OrderType
     from project_x_py.realtime.core import ProjectXRealtimeClient
-    TOPSTEP_SDK_AVAILABLE = True
+    BROKER_SDK_AVAILABLE = True
 except ImportError:
-    TOPSTEP_SDK_AVAILABLE = False
-    logging.warning("TopStep SDK (project-x-py) not installed - broker operations will not work")
+    BROKER_SDK_AVAILABLE = False
+    logging.warning("Broker SDK (project-x-py) not installed - some broker operations may not work")
 
-# Import TopStep WebSocket streamer
+# Import WebSocket streamer
 try:
-    from topstep_websocket import TopStepWebSocketStreamer
-    TOPSTEP_WEBSOCKET_AVAILABLE = True
+    from broker_websocket import BrokerWebSocketStreamer
+    BROKER_WEBSOCKET_AVAILABLE = True
 except ImportError:
-    TOPSTEP_WEBSOCKET_AVAILABLE = False
-    logging.warning("TopStep WebSocket module not found - live streaming will not work")
+    BROKER_WEBSOCKET_AVAILABLE = False
+    logging.warning("Broker WebSocket module not found - live streaming will not work")
 
 
 logger = logging.getLogger(__name__)
@@ -173,22 +174,23 @@ class BrokerInterface(ABC):
         pass
 
 
-class TopStepBroker(BrokerInterface):
+class BrokerSDKImplementation(BrokerInterface):
     """
-    TopStep SDK broker implementation using Project-X SDK.
-    Wraps TopStep API calls with error handling and retry logic.
+    Broker SDK implementation using Project-X SDK.
+    Wraps broker API calls with error handling and retry logic.
+    Compatible with brokers that support the Project-X SDK protocol.
     """
     
-    def __init__(self, api_token: str, username: str = None, max_retries: int = 3, timeout: int = 30, instrument: str = "ES"):
+    def __init__(self, api_token: str, username: str = None, max_retries: int = 3, timeout: int = 30, instrument: str = None):
         """
-        Initialize TopStep broker.
+        Initialize broker connection.
         
         Args:
-            api_token: TopStep API token
-            username: TopStep username/email (required for SDK v3.5+)
+            api_token: Broker API token for authentication
+            username: Broker username/email (required for SDK v3.5+)
             max_retries: Maximum number of retry attempts
             timeout: Request timeout in seconds
-            instrument: Trading instrument symbol (default: ES)
+            instrument: Trading instrument symbol (must be configured by user)
         """
         self.api_token = api_token
         self.username = username
@@ -1054,21 +1056,26 @@ class TopStepBroker(BrokerInterface):
         logger.info("Circuit breaker reset")
 
 
-def create_broker(api_token: str, username: str = None, instrument: str = "ES") -> BrokerInterface:
+def create_broker(api_token: str, username: str = None, instrument: str = None) -> BrokerInterface:
     """
-    Factory function to create TopStep broker instance.
+    Factory function to create a broker instance.
     
     Args:
-        api_token: API token for TopStep (required)
-        username: TopStep username/email (required for SDK v3.5+)
-        instrument: Trading instrument symbol (default: ES)
+        api_token: Broker API token (required)
+        username: Broker username/email (required for SDK v3.5+)
+        instrument: Trading instrument symbol (must be configured by user)
     
     Returns:
-        TopStepBroker instance
+        BrokerInterface implementation
     
     Raises:
         ValueError: If API token is missing
     """
     if not api_token:
-        raise ValueError("API token is required for TopStep broker")
-    return TopStepBroker(api_token=api_token, username=username, instrument=instrument)
+        raise ValueError("API token is required for broker connection")
+    return BrokerSDKImplementation(api_token=api_token, username=username, instrument=instrument)
+
+
+# Backward compatibility alias for existing code
+TopStepBroker = BrokerSDKImplementation
+
