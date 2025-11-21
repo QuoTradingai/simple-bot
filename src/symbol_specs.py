@@ -460,7 +460,7 @@ if __name__ == "__main__":
         print(f"  Session: {spec.session_start} - {spec.session_end} ET")
         print(f"  Slippage: {spec.typical_slippage_ticks} ticks")
         print(f"  Volatility Factor: {spec.volatility_factor}x")
-        print(f"  TopStep: {spec.topstep_symbol}")
+        print(f"  Broker Symbols: {', '.join(f'{k}={v}' for k, v in spec.broker_symbols.items())}")
         
         # Test calculations
         test_ticks = 10

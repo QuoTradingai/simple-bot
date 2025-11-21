@@ -1073,7 +1073,7 @@ def create_broker(api_token: str, username: str = None, instrument: str = None) 
     """
     if not api_token:
         raise ValueError("API token is required for broker connection")
-    return TopStepBroker(api_token=api_token, username=username, instrument=instrument)
+    return BrokerSDKImplementation(api_token=api_token, username=username, instrument=instrument)
 
 
 # Backward compatibility alias for existing code
