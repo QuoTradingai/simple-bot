@@ -35,6 +35,7 @@ sys.path.insert(0, os.path.join(PROJECT_ROOT, 'src'))
 
 # Import backtesting framework from dev
 from backtesting import BacktestConfig, BacktestEngine, ReportGenerator
+from backtest_reporter import reset_reporter, get_reporter
 
 # Import production bot modules
 from config import load_config
@@ -186,10 +187,9 @@ def run_backtest(args: argparse.Namespace) -> Dict[str, Any]:
         Dictionary with backtest performance metrics
     """
     logger = logging.getLogger('backtest')
-    logger.info("="*60)
-    logger.info("STARTING BACKTEST MODE (Development Environment)")
-    logger.info("Backtesting does NOT use broker API - runs on historical data only")
-    logger.info("="*60)
+    
+    # Get the clean reporter
+    reporter = get_reporter()
     
     # Backtest mode environment variables already set at module import
     # (see top of file - BOT_BACKTEST_MODE and USE_CLOUD_SIGNALS)
@@ -214,6 +214,13 @@ def run_backtest(args: argparse.Namespace) -> Dict[str, Any]:
         # Default: last 7 days
         end_date = datetime.now(tz)
         start_date = end_date - timedelta(days=7)
+    
+    # Print clean header
+    reporter.print_header(
+        start_date=start_date.strftime('%Y-%m-%d'),
+        end_date=end_date.strftime('%Y-%m-%d'),
+        symbol=args.symbol if args.symbol else bot_config.instrument
+    )
         
     # Create backtest configuration
     data_path = args.data_path if args.data_path else os.path.join(PROJECT_ROOT, "data/historical_data")
@@ -265,6 +272,11 @@ def run_backtest(args: argparse.Namespace) -> Dict[str, Any]:
     # Use Eastern timezone for daily reset checks (follows production rules)
     eastern_tz = pytz.timezone("US/Eastern")
     
+    # Track previous position state to detect trade completions
+    prev_position_active = False
+    bars_processed = 0
+    total_bars = 0
+    
     def vwap_strategy_backtest(bars_1min: List[Dict[str, Any]], bars_15min: List[Dict[str, Any]]) -> None:
         """
         Actual VWAP Bounce strategy integrated with backtest engine.
@@ -277,7 +289,16 @@ def run_backtest(args: argparse.Namespace) -> Dict[str, Any]:
         - All trade management (stops, targets, breakeven, trailing)
         - UTC maintenance and flatten rules
         """
-        for bar in bars_1min:
+        nonlocal prev_position_active, bars_processed, total_bars
+        total_bars = len(bars_1min)
+        
+        for bar_idx, bar in enumerate(bars_1min):
+            bars_processed = bar_idx + 1
+            
+            # Update progress every 100 bars
+            if bars_processed % 100 == 0 or bars_processed == total_bars:
+                reporter.update_progress(bars_processed, total_bars)
+            
             # Extract bar data
             timestamp = bar['timestamp']
             price = bar['close']
@@ -300,11 +321,13 @@ def run_backtest(args: argparse.Namespace) -> Dict[str, Any]:
             # Handles stops, targets, breakeven, trailing, time decay
             check_exit_conditions(symbol)
             
-            # Update backtest engine with current position from bot state
+            # Track previous position state
             if symbol in state and 'position' in state[symbol]:
                 pos = state[symbol]['position']
+                current_active = pos.get('active', False)
+                prev_position_active = current_active
                 
-                # If bot has active position and backtest engine doesn't have it, record it
+                # Update backtest engine with current position from bot state
                 if pos.get('active') and engine.current_position is None:
                     engine.current_position = {
                         'symbol': symbol,
@@ -315,7 +338,6 @@ def run_backtest(args: argparse.Namespace) -> Dict[str, Any]:
                         'stop_price': pos.get('stop_price'),
                         'target_price': pos.get('target_price')
                     }
-                    logger.info(f"Backtest: {pos['side'].upper()} position entered at {pos['entry_price']}")
                     
                 # If bot closed position (active=False), close it in backtest engine too
                 elif not pos.get('active') and engine.current_position is not None:
@@ -323,62 +345,38 @@ def run_backtest(args: argparse.Namespace) -> Dict[str, Any]:
                     exit_time = timestamp
                     exit_reason = 'bot_exit'
                     engine._close_position(exit_time, exit_price, exit_reason)
-                    logger.info(f"Backtest: Position closed at {exit_price}, reason: {exit_reason}")
+        
+        # Ensure final progress is shown
+        print()  # New line after progress
         
     # Run backtest with integrated strategy
     results = engine.run_with_strategy(vwap_strategy_backtest)
     
-    # Save RL experiences after backtest completion
-    print("\nSaving RL experiences...")
-    try:
-        if rl_brain is not None and hasattr(rl_brain, 'save_experience'):
-            rl_brain.save_experience()
-            print("✅ Signal RL experiences saved")
-    except Exception as e:
-        print(f"⚠️ Failed to save signal RL experiences: {e}")
+    # Get trades from engine metrics and add to reporter
+    if hasattr(engine, 'metrics') and hasattr(engine.metrics, 'trades'):
+        for trade in engine.metrics.trades:
+            # Convert Trade dataclass to dict for reporter
+            trade_dict = {
+                'side': trade.side,
+                'quantity': trade.quantity,
+                'entry_price': trade.entry_price,
+                'exit_price': trade.exit_price,
+                'pnl': trade.pnl,
+                'exit_reason': trade.exit_reason,
+                'exit_time': trade.exit_time,
+                'duration_minutes': trade.duration_minutes,
+                'confidence': 100  # Default confidence
+            }
+            reporter.record_trade(trade_dict)
     
-    # Generate report
-    report_gen = ReportGenerator(engine.metrics)
+    # Update reporter totals from results
+    if results:
+        reporter.total_bars = total_bars
     
-    # Track RL learning progress
-    print("\n" + "="*60)
-    print("RL BRAIN LEARNING SUMMARY")
-    print("="*60)
+    # Print clean summary
+    reporter.print_summary()
     
-    # Read the experience files directly
-    try:
-        import json
-        signal_exp_file = os.path.join(PROJECT_ROOT, "data/signal_experience.json")
-        with open(signal_exp_file, 'r') as f:
-            signal_data = json.load(f)
-            signal_count = len(signal_data['experiences'])
-            signal_wins = len([e for e in signal_data['experiences'] if e['reward'] > 0])
-            signal_losses = len([e for e in signal_data['experiences'] if e['reward'] < 0])
-            signal_wr = (signal_wins / signal_count * 100) if signal_count > 0 else 0
-            
-            print(f"[SIGNALS] {signal_count} total experiences")
-            print(f"  Wins: {signal_wins} | Losses: {signal_losses} | Win Rate: {signal_wr:.1f}%")
-    except Exception as e:
-        print(f"Could not load signal experiences: {e}")
-        
-    print("="*60)
-    
-    # Print results to console
-    logger.info("\n" + "="*60)
-    logger.info("BACKTEST RESULTS")
-    logger.info("="*60)
-    logger.info(report_gen.generate_trade_breakdown())
-    logger.info("\n")
-    
-    # Save report if requested
-    if args.report:
-        report_gen.save_report(args.report)
-        logger.info(f"Report saved to: {args.report}")
-    
-    logger.info("="*60)
-    logger.info("BACKTEST COMPLETE")
-    logger.info("="*60)
-    
+    # Return results
     return results
 
 
@@ -386,31 +384,29 @@ def main():
     """Main entry point for development backtesting"""
     args = parse_arguments()
     
-    # Setup logging
+    # Setup logging - suppress verbose output for clean backtest display
     config_dict = {'log_directory': os.path.join(PROJECT_ROOT, 'logs')}
     logger = setup_logging(config_dict)
     
-    # Set log level
-    log_level = getattr(logging, args.log_level)
+    # Set log level - use WARNING to suppress INFO logs during backtest
+    if args.log_level == 'INFO':
+        # Override INFO to WARNING for cleaner output
+        log_level = logging.WARNING
+    else:
+        log_level = getattr(logging, args.log_level)
+    
     logger.setLevel(log_level)
     
-    # Also configure the backtesting module logger explicitly
-    backtesting_logger = logging.getLogger('backtesting')
-    backtesting_logger.setLevel(log_level)
+    # Suppress verbose logging from all loggers during backtest
+    logging.getLogger('quotrading_engine').setLevel(logging.WARNING)
+    logging.getLogger('backtesting').setLevel(logging.WARNING)
+    logging.getLogger('vwap_bot').setLevel(logging.ERROR)
+    logging.getLogger('backtest').setLevel(logging.WARNING)
     
-    logger.info("="*60)
-    logger.info("VWAP Bounce Bot - Development Backtest Environment")
-    logger.info("="*60)
-    logger.info("Features:")
-    logger.info("  ✅ Signal RL loaded from data/signal_experience.json")
-    logger.info("  ✅ Pattern matching for signal detection")
-    logger.info("  ✅ Regime detection and adaptation")
-    logger.info("  ✅ All trade management (stops, targets, breakeven, trailing)")
-    logger.info("  ✅ UTC maintenance and flatten rules")
-    logger.info("  ✅ Everything the live bot does")
-    logger.info("="*60 + "\n")
+    # Initialize clean reporter
+    reporter = reset_reporter(starting_balance=args.initial_equity)
     
-    # Run backtest
+    # Run backtest with clean output
     try:
         results = run_backtest(args)
         
