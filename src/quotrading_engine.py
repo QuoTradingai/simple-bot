@@ -205,6 +205,8 @@ state: Dict[str, Any] = {}
 
 # Backtest mode: Track current simulation time (for backtesting)
 # When None, uses real datetime.now(). When set, uses this timestamp.
+backtest_current_time: Optional[datetime] = None
+
 # Global tracking for safety mechanisms (Phase 12)
 bot_status: Dict[str, Any] = {
     "trading_enabled": True,
@@ -607,6 +609,10 @@ def check_cloud_kill_switch() -> None:
     """
     global broker
     
+    # Skip in backtest mode - no cloud API access needed
+    if os.getenv('BOT_BACKTEST_MODE') == 'true':
+        return
+    
     try:
         import requests
         
@@ -728,6 +734,10 @@ def check_azure_time_service() -> str:
     Returns:
         Trading state: 'entry_window', 'flatten_mode', or 'closed'
     """
+    # Skip in backtest mode - use local time logic instead
+    if os.getenv('BOT_BACKTEST_MODE') == 'true':
+        return None
+    
     try:
         import requests
         
@@ -802,6 +812,10 @@ def check_broker_connection() -> None:
     Only logs when there's an issue to avoid spam.
     """
     global broker
+    
+    # Skip all broker/cloud checks in backtest mode
+    if os.getenv('BOT_BACKTEST_MODE') == 'true':
+        return
     
     # CRITICAL: Check cloud services FIRST (kill switch + time service)
     try:
@@ -7266,6 +7280,8 @@ def main(symbol_override: str = None) -> None:
 
 def handle_tick_event(event) -> None:
     """Handle tick data event from event loop"""
+    global backtest_current_time
+    
     # Extract data from Event object
     data = event.data if hasattr(event, 'data') else event
     
@@ -7281,6 +7297,10 @@ def handle_tick_event(event) -> None:
     tz = pytz.timezone(CONFIG["timezone"])
     dt = datetime.fromtimestamp(timestamp_ms / 1000.0, tz=tz)
     bot_status["last_tick_time"] = dt
+    
+    # BACKTEST MODE: Update simulation time so all time-based logic uses historical time
+    if os.getenv('BOT_BACKTEST_MODE') == 'true':
+        backtest_current_time = dt
     
     # Increment total tick counter (separate from deque storage which caps at 10k)
     if "total_ticks_received" not in state[symbol]:

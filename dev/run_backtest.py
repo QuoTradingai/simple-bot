@@ -187,6 +187,8 @@ def run_backtest(args: argparse.Namespace) -> Dict[str, Any]:
     
     # Set backtest mode environment variable
     os.environ['BOT_BACKTEST_MODE'] = 'true'
+    # Disable cloud API calls during backtest (use local RL only)
+    os.environ['USE_CLOUD_SIGNALS'] = 'false'
     
     # Load configuration
     bot_config = load_config(backtest_mode=True)
