@@ -19,8 +19,11 @@ CME Futures Trading Schedule (UTC):
 - DAILY MAINTENANCE: 22:00-23:00 UTC (5-6 PM EST - 60-min daily break)
 - FLATTEN POSITIONS: 21:45 UTC (4:45 PM EST - 15 min before maintenance)
 - NO TRADING WINDOW: 21:45-23:00 UTC (flatten + maintenance)
-- SUNDAY OPEN: 22:00 UTC (5 PM EST Saturday - weekly start)
+- SUNDAY OPEN: 22:00 UTC (5 PM EST Sunday / 6 PM EDT Sunday - weekly start)
 - FRIDAY CLOSE: 22:00 UTC (5 PM EST - weekly close, same as daily maintenance)
+
+NOTE: Bot uses UTC times exclusively - no daylight saving time adjustments needed!
+EST/EDT conversions shown above are for reference only (EST=UTC-5, EDT=UTC-4).
 
 Bot States:
 - entry_window: Market open, trading allowed (23:00 UTC - 21:45 UTC next day)
@@ -6822,7 +6825,7 @@ def get_trading_state(dt: datetime = None) -> str:
     - Flatten time: 21:45 UTC daily (Mon-Fri) - 15 min before maintenance
     - Maintenance: 22:00-23:00 UTC (60-min daily break)
     - Friday close: 22:00 UTC (market closes early before weekend)
-    - Sunday open: 22:00 UTC (5 PM EST Saturday - note: this is Saturday evening in EST) (weekly start)
+    - Sunday open: 22:00 UTC (5 PM EST Sunday / 6 PM EDT Sunday) (weekly start)
     """
     # AZURE-FIRST: Try cloud time service (unless in backtest mode)
     if backtest_current_time is None:  # Live mode only
@@ -6903,11 +6906,12 @@ def validate_timezone_configuration() -> None:
     logger.info(f"Current Time (UTC): {current_time.strftime('%Y-%m-%d %H:%M:%S %Z')}")
     logger.info(f"UTC Offset: {current_time.strftime('%z')}")
     logger.info(f"CME Futures Schedule:")
-    logger.info(f"  - Market Open: 23:00 UTC")
-    logger.info(f"  - Flatten Time: 21:45 UTC daily")
-    logger.info(f"  - Maintenance: 22:00-23:00 UTC")
-    logger.info(f"  - Friday Close: 21:00 UTC")
-    logger.info(f"  - Sunday Open: 22:00 UTC")
+    logger.info(f"  - Market Open: 23:00 UTC (6 PM EST / 6 PM EDT)")
+    logger.info(f"  - Flatten Time: 21:45 UTC daily (4:45 PM EST / 5:45 PM EDT)")
+    logger.info(f"  - Maintenance: 22:00-23:00 UTC (5-6 PM EST / 6-7 PM EDT)")
+    logger.info(f"  - Friday Close: 22:00 UTC (5 PM EST / 6 PM EDT)")
+    logger.info(f"  - Sunday Open: 22:00 UTC (5 PM EST / 6 PM EDT)")
+    logger.info(f"NOTE: Bot operates in UTC - no daylight saving adjustments needed")
     logger.info(SEPARATOR_LINE)
 
 
