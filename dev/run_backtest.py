@@ -391,7 +391,12 @@ def main():
     logger = setup_logging(config_dict)
     
     # Set log level
-    logger.setLevel(getattr(logging, args.log_level))
+    log_level = getattr(logging, args.log_level)
+    logger.setLevel(log_level)
+    
+    # Also configure the backtesting module logger explicitly
+    backtesting_logger = logging.getLogger('backtesting')
+    backtesting_logger.setLevel(log_level)
     
     logger.info("="*60)
     logger.info("VWAP Bounce Bot - Development Backtest Environment")
