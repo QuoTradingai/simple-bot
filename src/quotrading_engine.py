@@ -4367,8 +4367,12 @@ def check_underwater_timeout(symbol: str, current_price: float, current_time: da
     Check if position should exit due to underwater timeout (continuous loss).
     
     Uses regime-based underwater_timeout parameter (6-10 minutes depending on regime).
-    Monitors if trade continuously losing beyond timeout duration.
-    Timeout clock resets when regime changes or when position goes back to profitable.
+    
+    KEY BEHAVIOR:
+    - Timer always counts TOTAL elapsed time since entry (never resets)
+    - When position profitable: Underwater timeout disabled (not checking)
+    - When position losing: Underwater timeout active using total elapsed time
+    - If position flips red→green→red: Total time used (red5min + green2min + red = 7min total)
     
     Args:
         symbol: Instrument symbol
@@ -4385,7 +4389,11 @@ def check_underwater_timeout(symbol: str, current_price: float, current_time: da
     
     side = position["side"]
     entry_price = position["entry_price"]
+    entry_time = position.get("entry_time")
     tick_size = CONFIG["tick_size"]
+    
+    if not entry_time:
+        return False, None
     
     # Calculate current P&L in ticks
     if side == "long":
@@ -4395,39 +4403,23 @@ def check_underwater_timeout(symbol: str, current_price: float, current_time: da
     
     # Check if currently underwater (losing)
     if pnl_ticks >= 0:
-        # Position is profitable or breakeven - reset underwater timer
-        if "underwater_start_time" in position:
-            del position["underwater_start_time"]
+        # Position is profitable or breakeven - underwater timeout disabled (not active)
+        # But timer keeps running in background
         return False, None
     
-    # Position is underwater (losing)
-    # Track when we first went underwater
-    if "underwater_start_time" not in position:
-        position["underwater_start_time"] = current_time
-        return False, None
-    
+    # Position is underwater (losing) - underwater timeout is ACTIVE
     # Get current regime and its underwater timeout
     current_regime_name = position.get("current_regime", position.get("entry_regime", "NORMAL"))
     current_regime = REGIME_DEFINITIONS.get(current_regime_name, REGIME_DEFINITIONS["NORMAL"])
     underwater_timeout_minutes = current_regime.underwater_timeout
     
-    # Determine start time for timeout measurement
-    # Use regime change time if it's more recent than underwater start, otherwise use underwater start
-    regime_change_time = position.get("regime_change_time")
-    underwater_start = position["underwater_start_time"]
+    # Calculate TOTAL elapsed time since entry (never resets)
+    total_elapsed_minutes = (current_time - entry_time).total_seconds() / 60.0
     
-    if regime_change_time and regime_change_time > underwater_start:
-        # Regime changed while underwater - reset clock from regime change
-        start_time = regime_change_time
-    else:
-        start_time = underwater_start
-    
-    # Calculate time underwater
-    time_underwater_minutes = (current_time - start_time).total_seconds() / 60.0
-    
-    # Check if exceeded underwater timeout
-    if time_underwater_minutes >= underwater_timeout_minutes:
-        # Continuously underwater beyond timeout
+    # Check if total elapsed time exceeds underwater timeout
+    # This means: if trade has been alive for 7 minutes total and underwater timeout is 6 min, exit
+    if total_elapsed_minutes >= underwater_timeout_minutes:
+        # Total time since entry exceeds underwater timeout while position is losing
         tick_value = CONFIG["tick_value"]
         loss_dollars = pnl_ticks * tick_value * position["quantity"]
         
@@ -4436,7 +4428,7 @@ def check_underwater_timeout(symbol: str, current_price: float, current_time: da
         logger.warning("=" * 60)
         logger.warning(f"  Regime: {current_regime_name}")
         logger.warning(f"  Timeout: {underwater_timeout_minutes} minutes")
-        logger.warning(f"  Time Underwater: {time_underwater_minutes:.1f} minutes")
+        logger.warning(f"  Total Elapsed Time: {total_elapsed_minutes:.1f} minutes (since entry)")
         logger.warning(f"  Current Loss: {abs(pnl_ticks):.1f} ticks (${loss_dollars:.2f})")
         logger.warning(f"  Entry: ${entry_price:.2f}, Current: ${current_price:.2f}")
         logger.warning("=" * 60)
