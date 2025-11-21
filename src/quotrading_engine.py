@@ -5918,36 +5918,36 @@ def execute_flatten_with_limit_orders(symbol: str, order_side: str, contracts: i
 
 def check_vwap_reset(symbol: str, current_time: datetime) -> None:
     """
-    Check if VWAP should reset at 6 PM ET (futures market day start).
-    For 24/5 trading: VWAP resets at 6 PM when futures trading day begins.
+    Check if VWAP should reset at 23:00 UTC (futures market day start).
+    For 24/5 trading: VWAP resets at 23:00 UTC when futures trading day begins.
     
     Args:
         symbol: Instrument symbol
-        current_time: Current datetime in Eastern Time
+        current_time: Current datetime in UTC
     """
     current_date = current_time.date()
-    vwap_reset_time = datetime_time(18, 0)  # 6 PM ET - futures trading day starts
+    vwap_reset_time = datetime_time(23, 0)  # 23:00 UTC - futures trading day starts
     
-    # Check if we've crossed 6 PM on a new day
+    # Check if we've crossed 23:00 UTC on a new day
     if state[symbol]["vwap_day"] is None:
         # First run - initialize VWAP day
         state[symbol]["vwap_day"] = current_date
         logger.info(f"Trading day initialized: {current_date}")
         return
     
-    # If it's a new day and we're past 6 PM, reset VWAP
-    # OR if it's the same calendar day but we just crossed 6 PM
+    # If it's a new day and we're past 23:00 UTC, reset VWAP
+    # OR if it's the same calendar day but we just crossed 23:00 UTC
     last_reset_date = state[symbol]["vwap_day"]
     crossed_reset_time = current_time.time() >= vwap_reset_time
     
-    # New trading day starts at 6 PM, so check if we've moved to a new VWAP session
+    # New trading day starts at 23:00 UTC, so check if we've moved to a new VWAP session
     if crossed_reset_time and last_reset_date != current_date:
         perform_vwap_reset(symbol, current_date, current_time)
 
 
 def perform_vwap_reset(symbol: str, new_date: Any, reset_time: datetime) -> None:
     """
-    Perform VWAP reset at 6 PM ET daily (futures trading day start).
+    Perform VWAP reset at 23:00 UTC daily (futures trading day start).
     
     Args:
         symbol: Instrument symbol
@@ -5956,7 +5956,7 @@ def perform_vwap_reset(symbol: str, new_date: Any, reset_time: datetime) -> None
     """
     logger.info(SEPARATOR_LINE)
     logger.info(f"DAILY RESET at {reset_time.strftime('%Y-%m-%d %H:%M:%S %Z')}")
-    logger.info(f"Futures trading day start (6 PM ET) - New trading day: {new_date}")
+    logger.info(f"Futures trading day start (23:00 UTC) - New trading day: {new_date}")
     logger.info(SEPARATOR_LINE)
     
     # Clear accumulated 1-minute bars for VWAP calculation
@@ -5984,19 +5984,19 @@ def perform_vwap_reset(symbol: str, new_date: Any, reset_time: datetime) -> None
 def check_daily_reset(symbol: str, current_time: datetime) -> None:
     """
     Check if we've crossed into a new trading day and reset daily counters.
-    For 24/5 trading: Resets at 6 PM ET (futures trading day start).
+    For 24/5 trading: Resets at 23:00 UTC (futures trading day start).
     
     Args:
         symbol: Instrument symbol
-        current_time: Current datetime in Eastern Time
+        current_time: Current datetime in UTC
     """
     current_date = current_time.date()
-    vwap_reset_time = datetime_time(18, 0)  # 6 PM ET - futures trading day starts
+    vwap_reset_time = datetime_time(23, 0)  # 23:00 UTC - futures trading day starts
     
     # If we have a trading day stored and it's different from current date
     if state[symbol]["trading_day"] is not None:
         if state[symbol]["trading_day"] != current_date:
-            # Reset daily counters at 6 PM (same as VWAP reset)
+            # Reset daily counters at 23:00 UTC (same as VWAP reset)
             if current_time.time() >= vwap_reset_time:
                 perform_daily_reset(symbol, current_date)
     else:
@@ -7060,41 +7060,42 @@ TIME WINDOWS (All times Eastern Time - 24/5 Futures Trading):
 - Sunday before 6:00 PM: CLOSED - Waiting for futures open
 - Sunday 6:00 PM: MARKET OPEN - Trading resumes for the week
 - 6:00 PM - 4:45 PM (next day): ENTRY WINDOW - Full trading allowed 24 hours (Mon-Thu)
-- 4:45 PM - 5:00 PM: FLATTEN MODE - Close positions (15 min before maintenance)
-- 5:00 PM - 6:00 PM: MAINTENANCE - Daily settlement (Mon-Thu), market closed
-- Friday 4:45 PM - 5:00 PM: FLATTEN MODE - Close before weekend
-- Friday 5:00 PM onwards: WEEKEND - Market closed until Sunday 6:00 PM
+- 21:45 - 22:00 UTC: FLATTEN MODE - Close positions (15 min before maintenance)
+- 22:00 - 23:00 UTC: MAINTENANCE - Daily settlement (Mon-Thu), market closed
+- Friday 21:00 UTC onwards: WEEKEND - Market closes early before weekend
+- Saturday: WEEKEND - Market closed
+- Sunday before 22:00 UTC: WEEKEND - Market closed until Sunday 22:00 UTC
 
-FLATTEN SCHEDULE (preserves 24-hour trading):
-- Monday-Thursday: Flatten 4:45-5:00 PM (15 min before daily maintenance)
-- Friday: Flatten 4:45-5:00 PM (before weekend close)
+FLATTEN SCHEDULE (UTC - CME Futures):
+- Monday-Thursday: Flatten 21:45-22:00 UTC (15 min before daily maintenance)
+- Friday: Market closes 21:00 UTC (no flatten mode needed, market just closes)
 - During flatten mode: Aggressive closing, no new entries
-- After 5:00 PM: Maintenance window (Mon-Thu) or weekend (Fri-Sun)
+- After 22:00 UTC: Maintenance window (Mon-Thu) or weekend (Fri-Sun)
 
 DAILY RESETS:
-- 6:00 PM ET: Daily session opens (after maintenance window)
-- 9:30 AM: VWAP reset (stock market alignment for equity indexes)
-- Daily counters reset at 6 PM when new session starts
+- 23:00 UTC: Daily session opens (after maintenance window)
+- 14:30 UTC (winter) / 13:30 UTC (summer): VWAP reset (stock market open alignment)
+- Daily counters reset at 23:00 UTC when new session starts
 
-CRITICAL SAFETY RULES (24/5 FUTURES):
-1. FLATTEN BEFORE MAINTENANCE - Close by 4:45 PM daily (15 min buffer before 5 PM)
-2. NO WEEKEND POSITIONS - Force close by 4:45 PM Friday (before 5 PM weekend close)
-3. MAINTENANCE WINDOW - Market closed 5-6 PM Mon-Thu for settlement
-4. TIMEZONE ENFORCEMENT - All decisions use America/New_York (Eastern Time)
-5. DST AWARENESS - pytz handles spring forward / fall back automatically
+CRITICAL SAFETY RULES (24/5 FUTURES - UTC):
+1. FLATTEN BEFORE MAINTENANCE - Close by 21:45 UTC daily (15 min buffer before 22:00 UTC)
+2. NO WEEKEND POSITIONS - Market closes 21:00 UTC Friday (weekend begins)
+3. MAINTENANCE WINDOW - Market closed 22:00-23:00 UTC Mon-Thu for settlement
+4. TIMEZONE ENFORCEMENT - All decisions use UTC (CME futures standard)
+5. NO DST ISSUES - UTC never changes, no daylight saving complications
 6. AUDIT TRAIL - Every time-based action logged with timestamp and reason
 
 WHY THIS MATTERS FOR PROP FIRMS:
-TopStep's rules are designed to fail traders who don't respect:
-- Daily settlement (5 PM ET reset Mon-Thu, maintenance window)
+Prop firm rules are designed to fail traders who don't respect:
+- Daily settlement (22:00 UTC reset Mon-Thu, maintenance window)
 - Overnight gap exposure
 - Weekend event risk
-- Daily loss limits (restart at 5 PM, not midnight)
+- Daily loss limits (restart at 22:00 UTC, not midnight)
 
 By building time constraints into core logic, you protect against:
 - Gap risk from overnight news (Asia/Europe markets, economic data)
 - Weekend geopolitical events (can't control, can't trade out)
-- Settlement skew manipulation (institutional games in final 30 seconds)
+- Settlement skew manipulation (institutional games in final seconds)
 - Starting day already halfway to loss limit (overnight position losses carry forward)
 
 This time-based framework is NOT OPTIONAL for prop firm trading.
