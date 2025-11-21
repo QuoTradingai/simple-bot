@@ -15,12 +15,12 @@ This bot is designed to run continuously in UTC for global users:
 ✅ TIMEZONE SAFE: UTC-first design ensures consistency worldwide
 
 CME Futures Trading Schedule (UTC):
-- MAIN SESSION OPENS: 23:00 UTC (market resumes after maintenance)
-- DAILY MAINTENANCE: 22:00-23:00 UTC (60-min daily break)
-- FLATTEN POSITIONS: 21:45 UTC (15 min before maintenance)
+- MAIN SESSION OPENS: 23:00 UTC (6 PM EST - market resumes after maintenance)
+- DAILY MAINTENANCE: 22:00-23:00 UTC (5-6 PM EST - 60-min daily break)
+- FLATTEN POSITIONS: 21:45 UTC (4:45 PM EST - 15 min before maintenance)
 - NO TRADING WINDOW: 21:45-23:00 UTC (flatten + maintenance)
-- SUNDAY OPEN: 22:00 UTC (weekly start - note: this is Saturday 5 PM ET)
-- FRIDAY CLOSE: 21:00 UTC (weekly close - equivalent to 4 PM ET)
+- SUNDAY OPEN: 22:00 UTC (5 PM EST Saturday - weekly start)
+- FRIDAY CLOSE: 22:00 UTC (5 PM EST - weekly close, same as daily maintenance)
 
 Bot States:
 - entry_window: Market open, trading allowed (23:00 UTC - 21:45 UTC next day)
@@ -28,8 +28,8 @@ Bot States:
 - closed: During maintenance (22:00-23:00 UTC) or weekend, auto-flatten positions
 
 Friday Special Rules:
-- Trading ends at 21:00 UTC (no flatten logic needed, market closes before maintenance)
-- No new trades from 21:45-23:00 UTC (same flatten window)
+- Trading ends at 22:00 UTC (5 PM EST - same as daily maintenance start)
+- No flatten logic needed on Friday, market just closes at maintenance time
 
 For Multi-User Subscriptions:
 - All users see UTC times (standard across platform)
@@ -6055,7 +6055,7 @@ def perform_daily_reset(symbol: str, new_date: Any) -> None:
     bot_status["flatten_mode"] = False
     
     logger.info("Daily reset complete - Ready for trading")
-    logger.info("(VWAP reset handled separately at 9:30 AM)")
+    logger.info("(VWAP reset handled at market open 23:00 UTC / 6 PM EST)")
     logger.info(SEPARATOR_LINE)
 
 
@@ -6821,8 +6821,8 @@ def get_trading_state(dt: datetime = None) -> str:
     - Market opens: 23:00 UTC (Sunday-Thursday)
     - Flatten time: 21:45 UTC daily (Mon-Fri) - 15 min before maintenance
     - Maintenance: 22:00-23:00 UTC (60-min daily break)
-    - Friday close: 21:00 UTC (market closes early before weekend)
-    - Sunday open: 22:00 UTC (weekly start)
+    - Friday close: 22:00 UTC (market closes early before weekend)
+    - Sunday open: 22:00 UTC (5 PM EST Saturday - note: this is Saturday evening in EST) (weekly start)
     """
     # AZURE-FIRST: Try cloud time service (unless in backtest mode)
     if backtest_current_time is None:  # Live mode only
@@ -6848,7 +6848,7 @@ def get_trading_state(dt: datetime = None) -> str:
     current_time = utc_time.time()
     
     # CME Futures Hours (UTC):
-    # Sunday 22:00 UTC - Friday 21:00 UTC (with daily 22:00-23:00 UTC maintenance Mon-Thu)
+    # Sunday 22:00 UTC - Friday 22:00 UTC (with daily 22:00-23:00 UTC maintenance Mon-Thu)
     
     # CLOSED: Saturday (all day) - Market is closed
     if weekday == 5:  # Saturday
@@ -6858,8 +6858,8 @@ def get_trading_state(dt: datetime = None) -> str:
     if weekday == 6 and current_time < datetime_time(22, 0):
         return 'closed'
     
-    # FRIDAY SPECIAL: Market closes at 21:00 UTC (no flatten mode, just closes)
-    if weekday == 4 and current_time >= datetime_time(21, 0):
+    # FRIDAY SPECIAL: Market closes at 22:00 UTC (5 PM EST - same as maintenance start)
+    if weekday == 4 and current_time >= datetime_time(22, 0):
         return 'closed'
     
     # Get configured trading times from CONFIG (CME UTC schedule)
@@ -6879,7 +6879,7 @@ def get_trading_state(dt: datetime = None) -> str:
     # ENTRY WINDOW: Market open, ready to trade
     # We're in entry window if:
     # - Between 23:00 UTC and 21:45 UTC next day (Mon-Thu)
-    # - Between 23:00 UTC Sunday and 21:00 UTC Friday
+    # - Between 23:00 UTC Sunday and 22:00 UTC Friday
     # - NOT in closed/flatten periods above
     return 'entry_window'
 
@@ -7057,7 +7057,7 @@ TIME WINDOWS (All times Eastern Time - 24/5 Futures Trading):
 - 6:00 PM - 4:45 PM (next day): ENTRY WINDOW - Full trading allowed 24 hours (Mon-Thu)
 - 21:45 - 22:00 UTC: FLATTEN MODE - Close positions (15 min before maintenance)
 - 22:00 - 23:00 UTC: MAINTENANCE - Daily settlement (Mon-Thu), market closed
-- Friday 21:00 UTC onwards: WEEKEND - Market closes early before weekend
+- Friday 22:00 UTC onwards: WEEKEND - Market closes early before weekend
 - Saturday: WEEKEND - Market closed
 - Sunday before 22:00 UTC: WEEKEND - Market closed until Sunday 22:00 UTC
 
@@ -7068,13 +7068,12 @@ FLATTEN SCHEDULE (UTC - CME Futures):
 - After 22:00 UTC: Maintenance window (Mon-Thu) or weekend (Fri-Sun)
 
 DAILY RESETS:
-- 23:00 UTC: Daily session opens (after maintenance window)
-- 14:30 UTC (winter) / 13:30 UTC (summer): VWAP reset (stock market open alignment)
+- 23:00 UTC: Daily session opens (after maintenance window) - VWAP resets here at market open (6 PM EST)
 - Daily counters reset at 23:00 UTC when new session starts
 
 CRITICAL SAFETY RULES (24/5 FUTURES - UTC):
 1. FLATTEN BEFORE MAINTENANCE - Close by 21:45 UTC daily (15 min buffer before 22:00 UTC)
-2. NO WEEKEND POSITIONS - Market closes 21:00 UTC Friday (weekend begins)
+2. NO WEEKEND POSITIONS - Market closes 22:00 UTC Friday (weekend begins)
 3. MAINTENANCE WINDOW - Market closed 22:00-23:00 UTC Mon-Thu for settlement
 4. TIMEZONE ENFORCEMENT - All decisions use UTC (CME futures standard)
 5. NO DST ISSUES - UTC never changes, no daylight saving complications
