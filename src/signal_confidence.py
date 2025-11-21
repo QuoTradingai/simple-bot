@@ -269,14 +269,18 @@ class SignalConfidenceRL:
             hour_diff = abs(current.get('hour', 12) - past.get('hour', 12)) / 24
             streak_diff = abs(current.get('streak', 0) - past.get('streak', 0)) / 10
             
+            # Regime matching (0 if same regime, 1 if different)
+            regime_diff = 0.0 if current.get('regime', 'NORMAL') == past.get('regime', 'NORMAL') else 1.0
+            
             # Weighted similarity score (lower is more similar)
             similarity = (
-                rsi_diff * 0.25 +
-                vwap_diff * 0.25 +
-                atr_diff * 0.20 +
+                rsi_diff * 0.20 +
+                vwap_diff * 0.20 +
+                atr_diff * 0.15 +
                 volume_diff * 0.15 +
-                hour_diff * 0.10 +
-                streak_diff * 0.05
+                hour_diff * 0.08 +
+                streak_diff * 0.05 +
+                regime_diff * 0.17  # Regime is important - similar weight to RSI/VWAP
             )
             
             scored.append((similarity, exp))

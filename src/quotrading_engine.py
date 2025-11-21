@@ -131,9 +131,29 @@ except ImportError:
     create_broker = None
     BrokerInterface = None
 
+
+# ============================================================================
+# BACKTEST MODE UTILITIES
+# ============================================================================
+
+def is_backtest_mode() -> bool:
+    """
+    Check if running in backtest mode.
+    Centralized check to avoid code duplication.
+    
+    Returns:
+        True if in backtest mode, False otherwise
+    """
+    return os.getenv('BOT_BACKTEST_MODE', '').lower() in ('true', '1', 'yes')
+
+
 # Load configuration from environment and config module
-_bot_config = load_config()
-_bot_config.validate()  # Validate configuration at startup
+# Check if running in backtest mode from environment variable
+_is_backtest = is_backtest_mode()
+_bot_config = load_config(backtest_mode=_is_backtest)
+# Only validate if not in backtest mode (backtest mode skips broker requirements)
+if not _is_backtest:
+    _bot_config.validate()  # Validate configuration at startup
 
 # Convert BotConfiguration to dictionary for backward compatibility with existing code
 CONFIG: Dict[str, Any] = _bot_config.to_dict()
@@ -203,8 +223,13 @@ bid_ask_manager: Optional[BidAskManager] = None
 # State management dictionary
 state: Dict[str, Any] = {}
 
-# Backtest mode: Track current simulation time (for backtesting)
-# When None, uses real datetime.now(). When set, uses this timestamp.
+# Backtest mode tracking
+# When True, runs in backtest mode using historical data (no broker/cloud connections)
+# Global variable to track simulation time during backtesting.
+# When None, get_current_time() uses real datetime.now()
+# When set (by handle_tick_event), get_current_time() uses this historical timestamp
+backtest_current_time: Optional[datetime] = None
+
 # Global tracking for safety mechanisms (Phase 12)
 bot_status: Dict[str, Any] = {
     "trading_enabled": True,
@@ -607,6 +632,10 @@ def check_cloud_kill_switch() -> None:
     """
     global broker
     
+    # Skip in backtest mode - no cloud API access needed
+    if is_backtest_mode():
+        return
+    
     try:
         import requests
         
@@ -728,6 +757,10 @@ def check_azure_time_service() -> str:
     Returns:
         Trading state: 'entry_window', 'flatten_mode', or 'closed'
     """
+    # Skip in backtest mode - use local time logic instead
+    if is_backtest_mode():
+        return None
+    
     try:
         import requests
         
@@ -802,6 +835,10 @@ def check_broker_connection() -> None:
     Only logs when there's an issue to avoid spam.
     """
     global broker
+    
+    # Skip all broker/cloud checks in backtest mode
+    if is_backtest_mode():
+        return
     
     # CRITICAL: Check cloud services FIRST (kill switch + time service)
     try:
@@ -966,6 +1003,19 @@ def place_market_order(symbol: str, side: str, quantity: int) -> Optional[Dict[s
     Returns:
         Order object or None if failed
     """
+    # Backtest mode: Simulate order without broker
+    if is_backtest_mode():
+        logger.info(f"[BACKTEST] Market Order: {side} {quantity} {symbol}")
+        return {
+            "order_id": f"BACKTEST_{datetime.now().timestamp()}",
+            "symbol": symbol,
+            "side": side,
+            "quantity": quantity,
+            "type": "MARKET",
+            "status": "FILLED",
+            "backtest": True
+        }
+    
     logger.info(f"Market Order: {side} {quantity} {symbol}")
     
     if broker is None:
@@ -1037,6 +1087,20 @@ def place_stop_order(symbol: str, side: str, quantity: int, stop_price: float) -
     Returns:
         Order object or None if failed
     """
+    # Backtest mode: Simulate order without broker
+    if is_backtest_mode():
+        logger.info(f"[BACKTEST] Stop Order: {side} {quantity} {symbol} @ {stop_price}")
+        return {
+            "order_id": f"BACKTEST_STOP_{datetime.now().timestamp()}",
+            "symbol": symbol,
+            "side": side,
+            "quantity": quantity,
+            "type": "STOP",
+            "stop_price": stop_price,
+            "status": "PENDING",
+            "backtest": True
+        }
+    
     shadow_mode = CONFIG.get("shadow_mode", False)
     logger.info(f"{'[SHADOW MODE] ' if shadow_mode else ''}Stop Order: {side} {quantity} {symbol} @ {stop_price}")
     
@@ -1093,6 +1157,20 @@ def place_limit_order(symbol: str, side: str, quantity: int, limit_price: float)
     Returns:
         Order object or None if failed
     """
+    # Backtest mode: Simulate order without broker
+    if is_backtest_mode():
+        logger.info(f"[BACKTEST] Limit Order: {side} {quantity} {symbol} @ {limit_price}")
+        return {
+            "order_id": f"BACKTEST_LIMIT_{datetime.now().timestamp()}",
+            "symbol": symbol,
+            "side": side,
+            "quantity": quantity,
+            "type": "LIMIT",
+            "limit_price": limit_price,
+            "status": "PENDING",
+            "backtest": True
+        }
+    
     shadow_mode = CONFIG.get("shadow_mode", False)
     logger.info(f"{'[SHADOW MODE] ' if shadow_mode else ''}Limit Order: {side} {quantity} {symbol} @ {limit_price}")
     
@@ -1146,6 +1224,11 @@ def cancel_order(symbol: str, order_id: str) -> bool:
     Returns:
         True if cancelled successfully, False otherwise
     """
+    # Backtest mode: Simulate cancellation
+    if is_backtest_mode():
+        logger.info(f"[BACKTEST] Order {order_id} cancelled (simulated)")
+        return True
+    
     shadow_mode = CONFIG.get("shadow_mode", False)
     logger.info(f"{'[SHADOW MODE] ' if shadow_mode else ''}Cancelling Order: {order_id} for {symbol}")
     
@@ -1184,6 +1267,14 @@ def get_position_quantity(symbol: str) -> int:
     Returns:
         Current position quantity (positive for long, negative for short, 0 for flat)
     """
+    # Backtest mode uses tracked position
+    if is_backtest_mode():
+        if state.get(symbol) and state[symbol]["position"]["active"]:
+            qty = state[symbol]["position"]["quantity"]
+            side = state[symbol]["position"]["side"]
+            return qty if side == "long" else -qty
+        return 0
+    
     # Shadow mode uses tracked position
     if CONFIG.get("shadow_mode", False):
         if state.get(symbol) and state[symbol]["position"]["active"]:
@@ -1306,8 +1397,11 @@ def initialize_state(symbol: str) -> None:
     """
     # CRITICAL FIX: Reload config to get latest values (fixes subprocess caching issue)
     global _bot_config, CONFIG
-    _bot_config = load_config()
-    _bot_config.validate()
+    _is_backtest = is_backtest_mode()
+    _bot_config = load_config(backtest_mode=_is_backtest)
+    # Only validate if not in backtest mode
+    if not _is_backtest:
+        _bot_config.validate()
     CONFIG = _bot_config.to_dict()
     
     state[symbol] = {
@@ -2632,6 +2726,9 @@ def capture_rl_state(symbol: str, side: str, current_price: float) -> Dict[str, 
             else:
                 break  # Stop at breakeven
     
+    # Get current regime for RL decision making
+    regime = state[symbol].get("current_regime", "NORMAL")
+    
     rl_state = {
         "rsi": rsi if rsi is not None else 50,
         "vwap_distance": vwap_distance,
@@ -2642,7 +2739,8 @@ def capture_rl_state(symbol: str, side: str, current_price: float) -> Dict[str, 
         "recent_pnl": recent_pnl,
         "streak": streak,
         "side": side,
-        "price": current_price
+        "price": current_price,
+        "regime": regime  # Include regime for better decision making
     }
     
     return rl_state
@@ -2727,7 +2825,8 @@ def check_for_signals(symbol: str) -> None:
             return
         
         # RL approved - adjust position size based on confidence
-        logger.info(f" RL APPROVED LONG signal: {reason} (confidence: {confidence:.1%})")
+        regime = rl_state.get('regime', 'NORMAL')
+        logger.info(f" RL APPROVED LONG signal: {reason} (confidence: {confidence:.1%}) | Regime: {regime}")
         logger.info(f"   RSI: {rl_state['rsi']:.1f}, VWAP dist: {rl_state['vwap_distance']:.2f}, "
                   f"Vol ratio: {rl_state['volume_ratio']:.2f}x, Streak: {rl_state['streak']:+d}")
         
@@ -2777,7 +2876,8 @@ def check_for_signals(symbol: str) -> None:
             return
         
         # RL approved - adjust position size based on confidence
-        logger.info(f" RL APPROVED SHORT signal: {reason} (confidence: {confidence:.1%})")
+        regime = rl_state.get('regime', 'NORMAL')
+        logger.info(f" RL APPROVED SHORT signal: {reason} (confidence: {confidence:.1%}) | Regime: {regime}")
         logger.info(f"   RSI: {rl_state['rsi']:.1f}, VWAP dist: {rl_state['vwap_distance']:.2f}, "
                   f"Vol ratio: {rl_state['volume_ratio']:.2f}x, Streak: {rl_state['streak']:+d}")
         
@@ -5381,22 +5481,46 @@ def update_position_statistics(symbol: str, position: Dict[str, Any], exit_time:
     if position["entry_time"] is None:
         return
     
-    duration_seconds = (exit_time - position["entry_time"]).total_seconds()
-    duration_minutes = duration_seconds / 60.0
-    state[symbol]["session_stats"]["trade_durations"].append(duration_minutes)
+    # Ensure both timestamps are timezone-aware for accurate duration calculation
+    entry_time = position["entry_time"]
+    
+    # Calculate duration
+    try:
+        duration_seconds = (exit_time - entry_time).total_seconds()
+        duration_minutes = duration_seconds / 60.0
+        
+        # Sanity check - if duration is negative or absurdly large, log error
+        if duration_minutes < 0:
+            logger.error(f"Invalid duration: {duration_minutes:.1f} min (negative)")
+            logger.error(f"  Entry: {entry_time}")
+            logger.error(f"  Exit: {exit_time}")
+            return
+        elif duration_minutes > 10000:  # More than ~7 days
+            logger.error(f"Invalid duration: {duration_minutes:.1f} min (too large - over 7 days)")
+            logger.error(f"  Entry time: {entry_time}")
+            logger.error(f"  Exit time: {exit_time}")
+            logger.error(f"  Entry TZ: {entry_time.tzinfo}, Exit TZ: {exit_time.tzinfo}")
+            return
+            
+        state[symbol]["session_stats"]["trade_durations"].append(duration_minutes)
+        logger.info(f"  Position Duration: {duration_minutes:.1f} minutes")
+        
+    except Exception as e:
+        logger.error(f"Error calculating trade duration: {e}")
+        logger.error(f"  Entry: {entry_time} (type: {type(entry_time)})")
+        logger.error(f"  Exit: {exit_time} (type: {type(exit_time)})")
+        return
     
     # Track if this was a forced flatten due to time
     if reason in time_based_reasons:
         state[symbol]["session_stats"]["force_flattened_count"] += 1
     
     # Track after-noon entries
-    entry_hour = position["entry_time"].hour
+    entry_hour = entry_time.hour
     if entry_hour >= 12:
         state[symbol]["session_stats"]["after_noon_entries"] += 1
         if reason in time_based_reasons:
             state[symbol]["session_stats"]["after_noon_force_flattened"] += 1
-    
-    logger.info(f"  Position Duration: {duration_minutes:.1f} minutes")
 
 
 def handle_exit_orders(symbol: str, position: Dict[str, Any], exit_price: float, reason: str) -> None:
@@ -5603,7 +5727,7 @@ def execute_exit(symbol: str, exit_price: float, reason: str) -> None:
     if not position["active"]:
         return
     
-    exit_time = datetime.now(pytz.timezone(CONFIG["timezone"]))
+    exit_time = get_current_time()  # Use get_current_time() for backtest compatibility
     
     logger.info(SEPARATOR_LINE)
     logger.info(f"EXITING {position['side'].upper()} POSITION")
@@ -5669,6 +5793,10 @@ def execute_exit(symbol: str, exit_price: float, reason: str) -> None:
         
     except Exception as e:
         logger.debug(f"RL outcome recording failed: {e}")
+    
+    # Store exit reason in state for backtest tracking (position gets reset)
+    state[symbol]["last_exit_reason"] = reason
+    position["exit_reason"] = reason
     
     # Log time-based exits with detailed audit trail
     time_based_reasons = [
@@ -7266,6 +7394,8 @@ def main(symbol_override: str = None) -> None:
 
 def handle_tick_event(event) -> None:
     """Handle tick data event from event loop"""
+    global backtest_current_time
+    
     # Extract data from Event object
     data = event.data if hasattr(event, 'data') else event
     
@@ -7281,6 +7411,10 @@ def handle_tick_event(event) -> None:
     tz = pytz.timezone(CONFIG["timezone"])
     dt = datetime.fromtimestamp(timestamp_ms / 1000.0, tz=tz)
     bot_status["last_tick_time"] = dt
+    
+    # BACKTEST MODE: Update simulation time so all time-based logic uses historical time
+    if is_backtest_mode():
+        backtest_current_time = dt
     
     # Increment total tick counter (separate from deque storage which caps at 10k)
     if "total_ticks_received" not in state[symbol]:
