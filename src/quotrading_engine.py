@@ -6249,7 +6249,6 @@ def check_trade_limits(current_time: datetime) -> Tuple[bool, Optional[str]]:
     if not bot_status["trading_enabled"]:
         logger.debug(f"Re-enabling trading - market open at {utc_time}")
         bot_status["trading_enabled"] = True
-        bot_status["trading_enabled"] = True
         bot_status["stop_reason"] = None
     
     return True, None
@@ -6881,10 +6880,6 @@ def get_trading_state(dt: datetime = None) -> str:
     # We're in entry window if:
     # - Between 23:00 UTC and 21:45 UTC next day (Mon-Thu)
     # - Between 23:00 UTC Sunday and 21:00 UTC Friday
-    # - NOT in closed/flatten periods above
-    return 'entry_window'
-    # - Between 6:00 PM and 4:45 PM next day (Mon-Thu)
-    # - Between 6:00 PM and 5:00 PM Friday
     # - NOT in closed/flatten periods above
     return 'entry_window'
 
