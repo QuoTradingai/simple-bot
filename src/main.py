@@ -760,6 +760,10 @@ def run_multi_symbol_trading(args, bot_config, instruments):
 
 def main():
     """Main entry point"""
+    # Print a friendly greeting
+    print("Hello! Welcome to QuoTrading VWAP Bounce Bot")
+    print("=" * 60)
+    
     args = parse_arguments()
     
     # Load configuration with backtest mode flag
