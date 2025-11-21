@@ -171,21 +171,20 @@ Examples:
     return parser.parse_args()
 
 
-def initialize_rl_brains_for_backtest() -> Tuple[Any, Any]:
+def initialize_rl_brains_for_backtest() -> Any:
     """
-    Initialize RL brains (signal confidence and adaptive exits) for backtest mode.
+    Initialize RL brain (signal confidence) for backtest mode.
     This ensures experience files are loaded before the backtest runs.
     
     Note: Imports are done locally as these modules must be imported after 
     other bot components are initialized.
     
     Returns:
-        Tuple[Any, Any]: The initialized (rl_brain, adaptive_manager) instances
+        Any: The initialized rl_brain instance
     """
     logger = logging.getLogger('main')
     import vwap_bounce_bot
     from signal_confidence import SignalConfidenceRL
-    from adaptive_exits import AdaptiveExitManager
     
     # Initialize RL brain with experience file using PROJECT_ROOT
     if vwap_bounce_bot.rl_brain is None:
@@ -194,18 +193,9 @@ def initialize_rl_brains_for_backtest() -> Tuple[Any, Any]:
             experience_file=signal_exp_file,
             backtest_mode=True
         )
-        logger.info(f"Γ£ô RL BRAIN INITIALIZED for backtest - {len(vwap_bounce_bot.rl_brain.experiences)} signal experiences loaded")
+        logger.info(f"✅ RL BRAIN INITIALIZED for backtest - {len(vwap_bounce_bot.rl_brain.experiences)} signal experiences loaded")
     
-    # Initialize adaptive exit manager using PROJECT_ROOT
-    if vwap_bounce_bot.adaptive_manager is None:
-        exit_exp_file = os.path.join(PROJECT_ROOT, "data/exit_experience.json")
-        vwap_bounce_bot.adaptive_manager = AdaptiveExitManager(
-            config=vwap_bounce_bot.CONFIG,
-            experience_file=exit_exp_file
-        )
-        logger.info(f"Γ£ô ADAPTIVE EXITS INITIALIZED for backtest - {len(vwap_bounce_bot.adaptive_manager.exit_experiences)} exit experiences loaded")
-    
-    return vwap_bounce_bot.rl_brain, vwap_bounce_bot.adaptive_manager
+    return vwap_bounce_bot.rl_brain
 
 
 def run_backtest_with_params(
@@ -311,12 +301,11 @@ def run_backtest_with_params(
         from vwap_bounce_bot import initialize_state, on_tick, check_for_signals, check_exit_conditions, state, check_daily_reset
         initialize_state(symbol)
         
-        # Initialize RL brains (signal confidence and adaptive exits) for backtest
-        rl_brain, adaptive_manager = initialize_rl_brains_for_backtest()
+        # Initialize RL brain (signal confidence) for backtest
+        rl_brain = initialize_rl_brains_for_backtest()
         
-        # Track starting experience counts
+        # Track starting experience count
         starting_signal_count = len(rl_brain.experiences) if rl_brain else 0
-        starting_exit_count = len(adaptive_manager.exit_experiences) if adaptive_manager else 0
         
         et = tz  # Use same timezone
         
@@ -390,13 +379,6 @@ def run_backtest_with_params(
                 logger.debug("Signal RL experiences saved")
         except Exception as save_error:
             logger.warning(f"Failed to save signal RL experiences: {save_error}")
-        
-        try:
-            if adaptive_manager is not None and hasattr(adaptive_manager, 'save_experiences'):
-                adaptive_manager.save_experiences()
-                logger.debug("Adaptive exit experiences saved")
-        except Exception as save_error:
-            logger.warning(f"Failed to save adaptive exit experiences: {save_error}")
         
         if return_bars:
             return result_dict, all_bars
@@ -506,14 +488,13 @@ def run_backtest(args: argparse.Namespace, bot_config: Any) -> Dict[str, Any]:
     symbol = bot_config_dict['instrument']
     initialize_state(symbol)
     
-    # Initialize RL brains (signal confidence and adaptive exits) for backtest
-    rl_brain, adaptive_manager = initialize_rl_brains_for_backtest()
+    # Initialize RL brain (signal confidence) for backtest
+    rl_brain = initialize_rl_brains_for_backtest()
     
-    # Create a simple object to hold RL brain references for tracking
+    # Create a simple object to hold RL brain reference for tracking
     class BotRLReferences:
         def __init__(self):
             self.signal_rl = rl_brain
-            self.exit_manager = adaptive_manager
     
     # Set bot instance for RL tracking
     bot_ref = BotRLReferences()
@@ -583,12 +564,6 @@ def run_backtest(args: argparse.Namespace, bot_config: Any) -> Dict[str, Any]:
     except Exception as e:
         print(f"Γ£ù Failed to save signal RL experiences: {e}")
     
-    try:
-        if adaptive_manager is not None and hasattr(adaptive_manager, 'save_experiences'):
-            adaptive_manager.save_experiences()
-            print("Γ£ô Adaptive exit experiences saved")
-    except Exception as e:
-        print(f"Γ£ù Failed to save adaptive exit experiences: {e}")
     
     # Generate report
     report_gen = ReportGenerator(engine.metrics)
@@ -614,14 +589,6 @@ def run_backtest(args: argparse.Namespace, bot_config: Any) -> Dict[str, Any]:
     except Exception as e:
         print(f"Could not load signal experiences: {e}")
         
-    try:
-        exit_exp_file = os.path.join(PROJECT_ROOT, "data/exit_experience.json")
-        with open(exit_exp_file, 'r') as f:
-            exit_data = json.load(f)
-            exit_count = len(exit_data['exit_experiences'])
-            print(f"[EXITS] {exit_count} total experiences")
-    except Exception as e:
-        print(f"Could not load exit experiences: {e}")
     
     print("="*60)
     

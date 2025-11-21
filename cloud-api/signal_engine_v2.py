@@ -437,17 +437,10 @@ async def get_stats(
     total_signal_experiences = db.query(func.count(RLExperience.id)).filter(
         RLExperience.experience_type == 'SIGNAL'
     ).scalar()
-    total_exit_experiences = db.query(func.count(RLExperience.id)).filter(
-        RLExperience.experience_type == 'EXIT'
-    ).scalar()
     
     # Recent RL growth (last 24 hours)
     signal_experiences_24h = db.query(func.count(RLExperience.id)).filter(
         RLExperience.experience_type == 'SIGNAL',
-        RLExperience.timestamp >= yesterday
-    ).scalar()
-    exit_experiences_24h = db.query(func.count(RLExperience.id)).filter(
-        RLExperience.experience_type == 'EXIT',
         RLExperience.timestamp >= yesterday
     ).scalar()
     
@@ -471,10 +464,8 @@ async def get_stats(
         },
         "rl_experiences": {
             "total_signal_experiences": total_signal_experiences or 0,
-            "total_exit_experiences": total_exit_experiences or 0,
             "signal_experiences_24h": signal_experiences_24h or 0,
-            "exit_experiences_24h": exit_experiences_24h or 0,
-            "total_experiences": (total_signal_experiences or 0) + (total_exit_experiences or 0),
+            "total_experiences": total_signal_experiences or 0,
             "win_rate": round(win_rate, 1)
         }
     }
@@ -594,17 +585,10 @@ async def get_dashboard_stats(
     total_signal_experiences = db.query(func.count(RLExperience.id)).filter(
         RLExperience.experience_type == 'SIGNAL'
     ).scalar()
-    total_exit_experiences = db.query(func.count(RLExperience.id)).filter(
-        RLExperience.experience_type == 'EXIT'
-    ).scalar()
     
     # Recent RL growth (last 24 hours)
     signal_exp_24h = db.query(func.count(RLExperience.id)).filter(
         RLExperience.experience_type == 'SIGNAL',
-        RLExperience.timestamp >= one_day_ago
-    ).scalar()
-    exit_exp_24h = db.query(func.count(RLExperience.id)).filter(
-        RLExperience.experience_type == 'EXIT',
         RLExperience.timestamp >= one_day_ago
     ).scalar()
     
@@ -629,10 +613,8 @@ async def get_dashboard_stats(
         },
         "rl_experiences": {
             "total_signal_experiences": total_signal_experiences or 0,
-            "total_exit_experiences": total_exit_experiences or 0,
             "signal_experiences_24h": signal_exp_24h or 0,
-            "exit_experiences_24h": exit_exp_24h or 0,
-            "total_experiences": (total_signal_experiences or 0) + (total_exit_experiences or 0)
+            "total_experiences": total_signal_experiences or 0
         }
     }
 
@@ -645,14 +627,13 @@ async def get_dashboard_stats(
 # ============================================================================
 
 # Single shared RL experience pool (everyone runs same strategy)
-# Starts with Kevin's 178K signal + 121K exit experiences
+# Starts with Kevin's signal experiences
 # Grows as all users contribute (collective learning - hive mind!)
 signal_experiences = []  # Shared across all users
-exit_experiences = []    # Shared across all users
 
 def load_initial_experiences():
     """Load Kevin's proven experiences to seed the hive mind"""
-    global signal_experiences, exit_experiences
+    global signal_experiences
     import json
     import os
     
@@ -665,13 +646,7 @@ def load_initial_experiences():
             logger.info(f"✅ Loaded {len(signal_experiences):,} signal experiences from Kevin's backtests")
         
         # Load exit experiences (2,961 exits)
-        if os.path.exists("exit_experience.json"):
-            with open("exit_experience.json", "r") as f:
-                data = json.load(f)
-                exit_experiences = data.get("exit_experiences", [])
-            logger.info(f"✅ Loaded {len(exit_experiences):,} exit experiences from Kevin's backtests")
-        
-        logger.info(f"🧠 HIVE MIND INITIALIZED: {len(signal_experiences):,} signals + {len(exit_experiences):,} exits")
+        logger.info(f"🧠 HIVE MIND INITIALIZED: {len(signal_experiences):,} signals")
         logger.info(f"   All users will learn from and contribute to this shared wisdom pool!")
         
     except Exception as e:
@@ -730,9 +705,7 @@ def save_experiences():
     try:
         with open("signal_experience.json", "w") as f:
             json.dump(signal_experiences, f)
-        with open("exit_experience.json", "w") as f:
-            json.dump(exit_experiences, f)
-        logger.info(f"💾 Saved hive mind: {len(signal_experiences):,} signals + {len(exit_experiences):,} exits")
+        logger.info(f"💾 Saved hive mind: {len(signal_experiences):,} signals")
     except Exception as e:
         logger.error(f"Failed to save experiences: {e}")
 

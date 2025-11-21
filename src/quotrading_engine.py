@@ -183,9 +183,6 @@ rl_brain: Optional[SignalConfidenceRL] = None
 # Global bid/ask manager
 bid_ask_manager: Optional[BidAskManager] = None
 
-# Global adaptive exit manager (for streak tracking persistence)
-adaptive_manager: Optional[Any] = None
-
 # State management dictionary
 state: Dict[str, Any] = {}
 
@@ -4008,7 +4005,6 @@ def check_breakeven_protection(symbol: str, current_price: float) -> None:
         symbol: Instrument symbol
         current_price: Current market price
     """
-    global adaptive_manager
     
     position = state[symbol]["position"]
     
@@ -4020,37 +4016,9 @@ def check_breakeven_protection(symbol: str, current_price: float) -> None:
     entry_price = position["entry_price"]
     tick_size = CONFIG["tick_size"]
     
-    # ========================================================================
-    # ADAPTIVE EXIT MANAGEMENT - Calculate dynamic thresholds
-    # ========================================================================
-    
-    if adaptive_manager is not None:
-        try:
-            from adaptive_exits import get_adaptive_exit_params
-            
-            adaptive_params = get_adaptive_exit_params(
-                bars=state[symbol]["bars_1min"],
-                position=position,
-                current_price=current_price,
-                config=CONFIG,
-                adaptive_manager=adaptive_manager  # Pass global instance for persistence
-            )
-            
-            breakeven_threshold_ticks = adaptive_params["breakeven_threshold_ticks"]
-            breakeven_offset_ticks = adaptive_params["breakeven_offset_ticks"]
-            
-            # STORE exit params for learning when trade closes
-            position["exit_params_used"] = adaptive_params
-            
-        except Exception as e:
-            logger.error(f"[FAIL] Adaptive exits ERROR: {e}", exc_info=True)
-            logger.warning("[WARN] Falling back to static params")
-            breakeven_threshold_ticks = CONFIG.get("breakeven_profit_threshold_ticks", 8)
-            breakeven_offset_ticks = CONFIG.get("breakeven_stop_offset_ticks", 1)
-    else:
-        # Static parameters
-        breakeven_threshold_ticks = CONFIG.get("breakeven_profit_threshold_ticks", 8)
-        breakeven_offset_ticks = CONFIG.get("breakeven_stop_offset_ticks", 1)
+    # Static parameters - use config values
+    breakeven_threshold_ticks = CONFIG.get("breakeven_profit_threshold_ticks", 8)
+    breakeven_offset_ticks = CONFIG.get("breakeven_stop_offset_ticks", 1)
     
     # Step 2 - Calculate current profit in ticks
     if side == "long":
@@ -4124,7 +4092,6 @@ def check_trailing_stop(symbol: str, current_price: float) -> None:
         symbol: Instrument symbol
         current_price: Current market price
     """
-    global adaptive_manager
     
     position = state[symbol]["position"]
     
@@ -4136,36 +4103,9 @@ def check_trailing_stop(symbol: str, current_price: float) -> None:
     entry_price = position["entry_price"]
     tick_size = CONFIG["tick_size"]
     
-    # ========================================================================
-    # ADAPTIVE EXIT MANAGEMENT - Calculate dynamic trailing parameters
-    # ========================================================================
-    if adaptive_manager is not None:
-        try:
-            from adaptive_exits import get_adaptive_exit_params
-            
-            adaptive_params = get_adaptive_exit_params(
-                bars=state[symbol]["bars_1min"],
-                position=position,
-                current_price=current_price,
-                config=CONFIG,
-                adaptive_manager=adaptive_manager  # Pass global instance for persistence
-            )
-            
-            trailing_distance_ticks = adaptive_params["trailing_distance_ticks"]
-            min_profit_ticks = adaptive_params["trailing_min_profit_ticks"]
-            
-            # STORE exit params for learning when trade closes
-            position["exit_params_used"] = adaptive_params
-            
-        except Exception as e:
-            logger.error(f"[FAIL] Adaptive trailing ERROR: {e}", exc_info=True)
-            logger.warning("[WARN] Falling back to static trailing params")
-            trailing_distance_ticks = CONFIG.get("trailing_stop_distance_ticks", 8)
-            min_profit_ticks = CONFIG.get("trailing_stop_min_profit_ticks", 12)
-    else:
-        # Static parameters
-        trailing_distance_ticks = CONFIG.get("trailing_stop_distance_ticks", 8)
-        min_profit_ticks = CONFIG.get("trailing_stop_min_profit_ticks", 12)
+    # Static parameters - use config values
+    trailing_distance_ticks = CONFIG.get("trailing_stop_distance_ticks", 8)
+    min_profit_ticks = CONFIG.get("trailing_stop_min_profit_ticks", 12)
     
     # Calculate current profit
     if side == "long":
@@ -5248,7 +5188,6 @@ def execute_exit(symbol: str, exit_price: float, reason: str) -> None:
         exit_price: Exit price
         reason: Reason for exit (stop_loss, target_reached, signal_reversal, etc.)
     """
-    global adaptive_manager  # Declare at top of function
     
     position = state[symbol]["position"]
     
@@ -5280,14 +5219,6 @@ def execute_exit(symbol: str, exit_price: float, reason: str) -> None:
         )
     except Exception as e:
         logger.debug(f"Failed to send exit alert: {e}")
-    
-    # ADAPTIVE EXIT MANAGEMENT - Record trade result for streak tracking
-    if adaptive_manager is not None:
-        try:
-            adaptive_manager.record_trade_result(pnl)
-            logger.info(f" STREAK TRACKING: Recorded P&L ${pnl:+.2f} (Recent: {len(adaptive_manager.recent_trades)} trades)")
-        except Exception as e:
-            logger.debug(f"Streak tracking update skipped: {e}")
     
     # REINFORCEMENT LEARNING - Record outcome to cloud API (shared learning pool)
     try:
@@ -5331,37 +5262,6 @@ def execute_exit(symbol: str, exit_price: float, reason: str) -> None:
         logger.debug(f"RL outcome recording failed: {e}")
     
     # ADAPTIVE EXIT LEARNING - Record exit parameters and outcome
-    try:
-        if adaptive_manager is not None and hasattr(adaptive_manager, 'record_exit_outcome'):
-            # Get exit parameters that were used
-            if "exit_params_used" in position:
-                exit_params = position["exit_params_used"]
-                regime = exit_params.get("market_regime", "UNKNOWN")
-                
-                # Calculate trade duration
-                entry_time = position.get("entry_time")
-                duration_minutes = 0
-                if entry_time:
-                    duration = exit_time - entry_time
-                    duration_minutes = duration.total_seconds() / 60
-                
-                # Record for learning
-                adaptive_manager.record_exit_outcome(
-                    regime=regime,
-                    exit_params=exit_params,
-                    trade_outcome={
-                        'pnl': pnl,
-                        'duration': duration_minutes,
-                        'exit_reason': reason,
-                        'side': position["side"],
-                        'contracts': position["quantity"],
-                        'win': pnl > 0
-                    }
-                )
-                
-                logger.info(f"[EXIT RL] Learned {regime} exit -> ${pnl:+.2f} in {duration_minutes:.1f}min")
-    except Exception as e:
-        logger.debug(f"Exit learning failed: {e}")
     
     # Log time-based exits with detailed audit trail
     time_based_reasons = [
