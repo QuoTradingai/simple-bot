@@ -122,6 +122,7 @@ from bid_ask_manager import BidAskManager, BidAskQuote
 from notifications import get_notifier
 from signal_confidence import SignalConfidenceRL
 from regime_detection import get_regime_detector, REGIME_DEFINITIONS
+from cloud_api import CloudAPIClient
 
 # Conditionally import broker (only needed for live trading, not backtesting)
 try:
@@ -214,8 +215,11 @@ recovery_manager: Optional[ErrorRecoveryManager] = None
 # Global timer manager
 timer_manager: Optional[TimerManager] = None
 
-# Global RL brain for signal confidence learning
+# Global RL brain for signal confidence learning (ONLY for backtesting - NOT used in live)
 rl_brain: Optional[SignalConfidenceRL] = None
+
+# Global cloud API client for live trading decisions
+cloud_api_client: Optional[CloudAPIClient] = None
 
 # Global bid/ask manager
 bid_ask_manager: Optional[BidAskManager] = None
@@ -286,80 +290,50 @@ USER_ID = get_user_id()
 
 async def get_ml_confidence_async(rl_state: Dict[str, Any], side: str) -> Tuple[bool, float, str]:
     """
-    Get ML confidence from cloud API (shared RL learning pool) with automatic retry.
+    Get RL decision from cloud API or local RL brain (backtest mode).
+    
+    LIVE MODE: Uses cloud_api_client to ask cloud RL brain for decision
+    BACKTEST MODE: Uses local rl_brain for learning and testing
+    
     Returns: (take_signal, confidence, reason)
     """
-    if not USE_CLOUD_SIGNALS:
-        # Fallback to local RL brain if cloud disabled
+    global cloud_api_client, rl_brain
+    
+    # BACKTEST MODE: Use local RL brain
+    if is_backtest_mode() or CONFIG.get("backtest_mode", False):
         if rl_brain is not None:
             return rl_brain.should_take_signal(rl_state)
-        return True, 0.5, "Cloud API disabled, no local RL"
+        return True, 0.65, "Backtest mode - no RL brain initialized"
     
-    # Retry up to 3 times with exponential backoff
-    max_retries = 3
-    for attempt in range(max_retries):
-        try:
-            # Prepare payload for cloud API
-            payload = {
-                "user_id": USER_ID,
-                "symbol": CONFIG["instrument"],
-                "side": side,
-                "rsi": rl_state.get("rsi", 50),
-                "vwap_distance": rl_state.get("vwap_distance", 0),
-                "volume_ratio": rl_state.get("volume_ratio", 1.0),
-                "streak": rl_state.get("streak", 0),
-                "time_of_day_score": rl_state.get("time_of_day_score", 0.5),
-                "volatility": rl_state.get("volatility", 1.0)
-            }
-            
-            # Increase timeout slightly on retries
-            timeout_seconds = 3.0 + (attempt * 1.0)  # 3s, 4s, 5s
-            
-            async with aiohttp.ClientSession() as session:
-                async with session.post(
-                    f"{CLOUD_ML_API_URL}/api/main",
-                    json=payload,
-                    timeout=aiohttp.ClientTimeout(total=timeout_seconds)
-                ) as response:
-                    if response.status == 200:
-                        data = await response.json()
-                        confidence = data.get("confidence", 0.5)
-                        take_signal = data.get("should_trade", False)
-                        reason = data.get("reason", "Cloud RL evaluation")
-                        
-                        if attempt > 0:
-                            logger.info(f"[CLOUD RL] ✅ Success on retry {attempt + 1}")
-                        
-                        logger.debug(f"[CLOUD RL] {side.upper()} signal: {take_signal} (confidence: {confidence:.1%}) - {reason}")
-                        logger.debug(f"   Shared pool: {data.get('total_trades', 0)} trades, WR: {data.get('win_rate', 0):.1%}")
-                        
-                        return take_signal, confidence, reason
-                    else:
-                        logger.warning(f"Cloud ML API returned status {response.status} (attempt {attempt + 1}/{max_retries})")
-                        if attempt < max_retries - 1:
-                            await asyncio.sleep(0.5 * (attempt + 1))  # 0.5s, 1s, 1.5s backoff
-                            continue
-                        logger.error("Cloud API failed after all retries - REJECTING TRADE for safety")
-                        return False, 0.0, "Cloud API error - rejecting trade for safety"
-                        
-        except asyncio.TimeoutError:
-            logger.warning(f"Cloud ML API timeout (attempt {attempt + 1}/{max_retries})")
-            if attempt < max_retries - 1:
-                await asyncio.sleep(0.5 * (attempt + 1))
-                continue
-            logger.error("Cloud API timeout after all retries - REJECTING TRADE for safety")
-            return False, 0.0, "API timeout - rejecting trade for safety"
-        except Exception as e:
-            logger.warning(f"Cloud ML API error: {e} (attempt {attempt + 1}/{max_retries})")
-            if attempt < max_retries - 1:
-                await asyncio.sleep(0.5 * (attempt + 1))
-                continue
-            logger.error(f"Cloud API error after all retries - REJECTING TRADE for safety: {e}")
-            return False, 0.0, f"API error - rejecting trade for safety"
+    # LIVE MODE: Use cloud API client
+    if cloud_api_client is None:
+        logger.error("Cloud API client not initialized - cannot trade safely")
+        return False, 0.0, "Cloud API not initialized"
     
-    # Should never reach here, but just in case
-    logger.error("Unknown error in RL API call - REJECTING TRADE for safety")
-    return False, 0.0, "Unknown error - rejecting trade for safety"
+    # Add side and price to state for cloud decision
+    rl_state_with_context = rl_state.copy()
+    rl_state_with_context['side'] = side.lower()
+    
+    # Get current price from state
+    current_price = state.get("current_price", 0)
+    rl_state_with_context['price'] = current_price
+    
+    # Ask cloud RL brain for decision (synchronous call with timeout)
+    try:
+        # Run in thread pool to avoid blocking async event loop
+        loop = asyncio.get_event_loop()
+        take_trade, confidence, reason = await loop.run_in_executor(
+            None, 
+            cloud_api_client.ask_should_take_trade,
+            rl_state_with_context
+        )
+        
+        logger.info(f"☁️ Cloud RL Decision: {reason}")
+        return take_trade, confidence, reason
+        
+    except Exception as e:
+        logger.error(f"Cloud API error: {e}")
+        return False, 0.0, f"Cloud API error: {e}"
 
 
 def get_ml_confidence(rl_state: Dict[str, Any], side: str) -> Tuple[bool, float, str]:
@@ -380,66 +354,46 @@ async def save_trade_experience_async(
     execution_data: Dict[str, Any]
 ) -> None:
     """
-    Save trade result to cloud API (shared RL learning pool) with automatic retry.
-    All users contribute to and learn from the same experience pool.
+    Report trade outcome to cloud RL brain (live mode) or local RL brain (backtest mode).
+    Cloud brain learns from all users' experiences collectively.
     """
-    if not USE_CLOUD_SIGNALS:
-        # Save to local RL brain if cloud disabled
+    global cloud_api_client, rl_brain
+    
+    # BACKTEST MODE: Use local RL brain
+    if is_backtest_mode() or CONFIG.get("backtest_mode", False):
         if rl_brain is not None:
             rl_brain.record_outcome(rl_state, True, pnl, duration_minutes, execution_data)
         return
     
-    # Retry up to 2 times for saves (less critical than getting confidence)
-    max_retries = 2
-    for attempt in range(max_retries):
-        try:
-            # Prepare trade experience payload
-            payload = {
-                "user_id": USER_ID,
-                "symbol": CONFIG["instrument"],
-                "side": side,
-                "signal": f"{side}_bounce",  # "long_bounce" or "short_bounce"
-                "rsi": rl_state.get("rsi", 50),
-                "vwap_distance": rl_state.get("vwap_distance", 0),
-                "volume_ratio": rl_state.get("volume_ratio", 1.0),
-                "streak": rl_state.get("streak", 0),
-                "time_of_day_score": rl_state.get("time_of_day_score", 0.5),
-                "volatility": rl_state.get("volatility", 1.0),
-                "pnl": pnl,
-                "duration_minutes": duration_minutes,
-                "exit_reason": execution_data.get("exit_reason", "unknown")
-            }
-            
-            # Increase timeout on retries
-            timeout_seconds = 5.0 + (attempt * 2.0)  # 5s, 7s
-            
-            async with aiohttp.ClientSession() as session:
-                async with session.post(
-                    f"{CLOUD_ML_API_URL}/api/main",
-                    json=payload,
-                    timeout=aiohttp.ClientTimeout(total=timeout_seconds)
-                ) as response:
-                    if response.status == 200:
-                        data = await response.json()
-                        if attempt > 0:
-                            logger.info(f"[CLOUD RL] ✅ Trade saved on retry {attempt + 1}")
-                        else:
-                            logger.info(f"[CLOUD RL] ✅ Trade saved to hive mind: ${pnl:+.2f}")
-                        logger.info(f"   🧠 Shared pool: {data.get('total_shared_trades', 0):,} total trades, WR: {data.get('shared_win_rate', 0):.1%}")
-                        return  # Success!
-                    else:
-                        logger.warning(f"Failed to save trade (status {response.status}, attempt {attempt + 1}/{max_retries})")
-                        if attempt < max_retries - 1:
-                            await asyncio.sleep(1.0 * (attempt + 1))  # 1s, 2s backoff
-                            continue
-                        logger.error(f"❌ Trade NOT saved to cloud after {max_retries} attempts - data point lost")
-                        
-        except Exception as e:
-            logger.warning(f"Error saving trade: {e} (attempt {attempt + 1}/{max_retries})")
-            if attempt < max_retries - 1:
-                await asyncio.sleep(1.0 * (attempt + 1))
-                continue
-            logger.error(f"❌ Trade NOT saved to cloud after {max_retries} attempts - data point lost")
+    # LIVE MODE: Report to cloud
+    if cloud_api_client is None:
+        logger.warning("Cloud API client not initialized - cannot report trade outcome")
+        return
+    
+    try:
+        # Add side and price to state
+        state_with_context = rl_state.copy()
+        state_with_context['side'] = side.lower()
+        state_with_context['price'] = state.get("current_price", 0)
+        
+        # Convert duration to seconds
+        duration_seconds = duration_minutes * 60.0
+        
+        # Report to cloud in background (non-blocking)
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(
+            None,
+            cloud_api_client.report_trade_outcome,
+            state_with_context,
+            True,  # took_trade
+            pnl,
+            duration_seconds
+        )
+        
+        logger.info(f"✅ Outcome reported to cloud: ${pnl:+.2f} in {duration_minutes:.1f}min")
+        
+    except Exception as e:
+        logger.debug(f"Non-critical: Could not report outcome to cloud: {e}")
 
 
 async def save_rejected_signal_async(
@@ -2730,6 +2684,7 @@ def capture_rl_state(symbol: str, side: str, current_price: float) -> Dict[str, 
     regime = state[symbol].get("current_regime", "NORMAL")
     
     rl_state = {
+        "symbol": symbol,  # CRITICAL: Symbol for multi-instrument RL brains
         "rsi": rsi if rsi is not None else 50,
         "vwap_distance": vwap_distance,
         "atr": atr,
@@ -7277,7 +7232,7 @@ def main(symbol_override: str = None) -> None:
         symbol_override: Optional symbol to trade (overrides CONFIG["instrument"])
                         Used for multi-symbol bot instances
     """
-    global event_loop, timer_manager, bid_ask_manager
+    global event_loop, timer_manager, bid_ask_manager, cloud_api_client, rl_brain
     
     # Use symbol override if provided (for multi-symbol support)
     trading_symbol = symbol_override if symbol_override else CONFIG["instrument"]
@@ -7285,6 +7240,27 @@ def main(symbol_override: str = None) -> None:
     logger.info(SEPARATOR_LINE)
     logger.info(f"QuoTrading AI Bot Starting [{trading_symbol}]")
     logger.info(SEPARATOR_LINE)
+    
+    # Initialize Cloud API Client for LIVE mode, RL Brain for BACKTEST mode
+    if is_backtest_mode() or CONFIG.get("backtest_mode", False):
+        logger.info(f"[{trading_symbol}] BACKTEST MODE: Using local RL brain")
+        # RL brain will be initialized by backtest code
+    else:
+        logger.info(f"[{trading_symbol}] LIVE MODE: Initializing cloud API client...")
+        license_key = CONFIG.get("quotrading_license") or CONFIG.get("user_api_key")
+        
+        if not license_key:
+            logger.error(f"[{trading_symbol}] No license key found in config - cannot connect to cloud RL")
+            logger.error(f"[{trading_symbol}] Add 'quotrading_license' to config.json")
+            return
+        
+        cloud_api_url = "https://quotrading-flask-api.azurewebsites.net"
+        cloud_api_client = CloudAPIClient(
+            api_url=cloud_api_url,
+            license_key=license_key,
+            timeout=10
+        )
+        logger.info(f"[{trading_symbol}] ✅ Cloud API client initialized")
     
     # Log symbol specifications if loaded
     if SYMBOL_SPEC:

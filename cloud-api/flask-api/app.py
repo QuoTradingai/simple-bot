@@ -17,6 +17,7 @@ import stripe
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
+from rl_decision_engine import CloudRLDecisionEngine
 
 app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
@@ -48,8 +49,10 @@ FROM_EMAIL = os.environ.get("FROM_EMAIL", "noreply@quotrading.com")
 # Download link for the bot EXE
 BOT_DOWNLOAD_URL = os.environ.get("BOT_DOWNLOAD_URL", "https://your-download-link.com/QuoTrading_Bot.exe")
 
-# Global cache
+# Global cache with time-based expiration (30 seconds)
 _experiences_cache = None
+_experiences_cache_time = None
+_CACHE_EXPIRATION_SECONDS = 30
 
 def send_license_email(email, license_key):
     """Send email with license key and download link"""
@@ -198,34 +201,103 @@ def validate_license(license_key: str):
     finally:
         conn.close()
 
-def load_experiences():
-    """Load RL experiences from Azure Storage"""
-    global _experiences_cache
+def load_experiences(symbol='ES'):
+    """
+    Load RL experiences from PostgreSQL database for specific symbol.
+    Each symbol (ES, NQ, YM, etc.) has separate RL brain.
+    Much faster for 1000+ concurrent users than blob storage.
+    Still uses 30-second cache for performance.
     
-    if _experiences_cache is not None:
-        return _experiences_cache
+    Args:
+        symbol: Trading symbol (ES, NQ, YM, RTY, etc.)
+    """
+    global _experiences_cache, _experiences_cache_time
     
-    if not STORAGE_CONNECTION_STRING:
-        logging.warning("No Azure Storage connection string - using empty experiences")
-        _experiences_cache = []
-        return _experiences_cache
+    # Cache key includes symbol to separate ES vs NQ vs YM brains
+    cache_key = f"{symbol}_experiences"
+    
+    # Check if cache is still valid for this symbol
+    if (_experiences_cache is not None and 
+        _experiences_cache_time is not None and
+        _experiences_cache.get('symbol') == symbol):
+        cache_age = (datetime.now() - _experiences_cache_time).total_seconds()
+        if cache_age < _CACHE_EXPIRATION_SECONDS:
+            return _experiences_cache.get('data', [])
+        else:
+            logging.info(f"Cache expired ({cache_age:.1f}s old) - reloading {symbol} from database")
     
     try:
-        blob_service = BlobServiceClient.from_connection_string(STORAGE_CONNECTION_STRING)
-        container_client = blob_service.get_container_client(CONTAINER_NAME)
-        blob_client = container_client.get_blob_client(BLOB_NAME)
+        conn = get_db_connection()
+        if not conn:
+            logging.error("Database unavailable - cannot load experiences")
+            return None  # Return None to signal connection failure
         
-        blob_data = blob_client.download_blob().readall()
-        experiences_data = json.loads(blob_data)
+        cursor = conn.cursor(cursor_factory=RealDictCursor)
         
-        _experiences_cache = experiences_data.get("experiences", [])
-        logging.info(f"✅ Loaded {len(_experiences_cache)} experiences from Azure Storage")
+        # Load all experiences from database for this symbol
+        cursor.execute("""
+            SELECT 
+                rsi,
+                vwap_distance,
+                atr,
+                volume_ratio,
+                hour,
+                day_of_week,
+                recent_pnl,
+                streak,
+                side,
+                regime,
+                took_trade,
+                pnl,
+                duration
+            FROM rl_experiences
+            WHERE symbol = %s
+            ORDER BY created_at DESC
+            LIMIT 10000
+        """, (symbol,))
         
-        return _experiences_cache
+        rows = cursor.fetchall()
+        
+        # Convert to RL engine format (nested structure)
+        experiences = []
+        for row in rows:
+            experiences.append({
+                'state': {
+                    'rsi': float(row['rsi']),
+                    'vwap_distance': float(row['vwap_distance']),
+                    'atr': float(row['atr']),
+                    'volume_ratio': float(row['volume_ratio']),
+                    'hour': int(row['hour']),
+                    'day_of_week': int(row['day_of_week']),
+                    'recent_pnl': float(row['recent_pnl']),
+                    'streak': int(row['streak']),
+                    'side': str(row['side']),
+                    'regime': str(row['regime'])
+                },
+                'action': {
+                    'took_trade': bool(row['took_trade'])
+                },
+                'reward': float(row['pnl']),  # Map pnl to reward
+                'duration': float(row['duration'])
+            })
+        
+        cursor.close()
+        conn.close()
+        
+        # Cache with symbol identifier
+        _experiences_cache = {
+            'symbol': symbol,
+            'data': experiences
+        }
+        _experiences_cache_time = datetime.now()
+        logging.info(f"✅ Loaded {len(experiences)} {symbol} experiences from PostgreSQL")
+        
+        return experiences
         
     except Exception as e:
-        logging.error(f"❌ Failed to load experiences: {e}")
+        logging.error(f"❌ Failed to load experiences from database: {e}")
         _experiences_cache = []
+        _experiences_cache_time = datetime.now()
         return _experiences_cache
 
 def calculate_confidence(signal_type: str, regime: str, vix_level: float, experiences: list) -> float:
@@ -678,11 +750,10 @@ def admin_dashboard_stats():
             cursor.execute("SELECT COUNT(*) as active FROM users WHERE license_status = 'active'")
             active_licenses = cursor.fetchone()['active']
             
-            # Online users (active in last 5 minutes)
+            # Online users (active in last 5 minutes based on API logs)
             cursor.execute("""
-                SELECT COUNT(*) as online FROM users 
-                WHERE last_active > NOW() - INTERVAL '5 minutes'
-                AND license_status = 'active'
+                SELECT COUNT(DISTINCT license_key) as online FROM api_logs
+                WHERE created_at > NOW() - INTERVAL '5 minutes'
             """)
             online_users = cursor.fetchone()['online']
             
@@ -716,11 +787,16 @@ def admin_list_users():
     try:
         with conn.cursor(cursor_factory=RealDictCursor) as cursor:
             cursor.execute("""
-                SELECT id, email, license_key, license_type, license_status, 
-                       license_expiration, created_at, last_active,
-                       CASE WHEN last_active > NOW() - INTERVAL '5 minutes' THEN true ELSE false END as is_online
-                FROM users
-                ORDER BY created_at DESC
+                SELECT u.id, u.email, u.license_key, u.license_type, u.license_status, 
+                       u.license_expiration, u.created_at,
+                       MAX(a.created_at) as last_active,
+                       CASE WHEN MAX(a.created_at) > NOW() - INTERVAL '5 minutes' 
+                            THEN true ELSE false END as is_online
+                FROM users u
+                LEFT JOIN api_logs a ON u.license_key = a.license_key
+                GROUP BY u.id, u.email, u.license_key, u.license_type, u.license_status, 
+                         u.license_expiration, u.created_at
+                ORDER BY u.created_at DESC
             """)
             users = cursor.fetchall()
             
@@ -759,11 +835,16 @@ def admin_get_user(account_id):
     
     try:
         with conn.cursor(cursor_factory=RealDictCursor) as cursor:
-            # Get user details
+            # Get user details with last active from api_logs
             cursor.execute("""
-                SELECT id, email, license_key, license_type, license_status,
-                       license_expiration, created_at, last_active
-                FROM users WHERE id = %s OR license_key = %s
+                SELECT u.id, u.email, u.license_key, u.license_type, u.license_status,
+                       u.license_expiration, u.created_at,
+                       MAX(a.created_at) as last_active
+                FROM users u
+                LEFT JOIN api_logs a ON u.license_key = a.license_key
+                WHERE u.id = %s OR u.license_key = %s
+                GROUP BY u.id, u.email, u.license_key, u.license_type, u.license_status,
+                         u.license_expiration, u.created_at
             """, (account_id, account_id))
             user = cursor.fetchone()
             
@@ -824,10 +905,13 @@ def admin_online_users():
     try:
         with conn.cursor(cursor_factory=RealDictCursor) as cursor:
             cursor.execute("""
-                SELECT id, email, license_key, license_type, last_active
-                FROM users 
-                WHERE last_active > NOW() - INTERVAL '5 minutes'
-                AND license_status = 'active'
+                SELECT u.id, u.email, u.license_key, u.license_type, 
+                       MAX(a.created_at) as last_active
+                FROM users u
+                INNER JOIN api_logs a ON u.license_key = a.license_key
+                WHERE a.created_at > NOW() - INTERVAL '5 minutes'
+                AND u.license_status = 'active'
+                GROUP BY u.id, u.email, u.license_key, u.license_type
                 ORDER BY last_active DESC
             """)
             online = cursor.fetchall()
@@ -1031,6 +1115,476 @@ def expire_licenses():
         logging.error(f"Error expiring licenses: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
 
+# ============================================================================
+# RL EXPERIENCE ENDPOINTS - Centralized Learning System
+# ============================================================================
+
+@app.route('/api/rl/submit-experience', methods=['POST'])
+def submit_rl_experience():
+    """Bot submits trading experience to centralized RL database"""
+    try:
+        # Validate license
+        license_key = request.headers.get('X-License-Key') or request.json.get('license_key')
+        if not license_key:
+            return jsonify({"error": "License key required"}), 401
+        
+        conn = get_db_connection()
+        if not conn:
+            return jsonify({"error": "Database error"}), 500
+        
+        try:
+            with conn.cursor(cursor_factory=RealDictCursor) as cursor:
+                cursor.execute("""
+                    SELECT license_status FROM users WHERE license_key = %s
+                """, (license_key,))
+                user = cursor.fetchone()
+                
+                if not user or user['license_status'] != 'active':
+                    return jsonify({"error": "Invalid or inactive license"}), 401
+                
+                # Get experience data from request
+                experience = request.json.get('experience')
+                if not experience:
+                    return jsonify({"error": "Experience data required"}), 400
+                
+                # Store in Azure Blob Storage
+                if STORAGE_CONNECTION_STRING:
+                    try:
+                        blob_service = BlobServiceClient.from_connection_string(STORAGE_CONNECTION_STRING)
+                        container_client = blob_service.get_container_client(CONTAINER_NAME)
+                        
+                        # Ensure container exists
+                        try:
+                            container_client.create_container()
+                        except:
+                            pass  # Container already exists
+                        
+                        blob_client = container_client.get_blob_client(BLOB_NAME)
+                        
+                        # Download existing data
+                        try:
+                            existing_data = json.loads(blob_client.download_blob().readall())
+                        except:
+                            existing_data = {"experiences": []}
+                        
+                        # Append new experience
+                        existing_data["experiences"].append(experience)
+                        
+                        # Upload updated data
+                        blob_client.upload_blob(
+                            json.dumps(existing_data),
+                            overwrite=True
+                        )
+                        
+                        total_count = len(existing_data["experiences"])
+                        logging.info(f"✅ RL experience added. Total: {total_count}")
+                        
+                        return jsonify({
+                            "status": "success",
+                            "total_experiences": total_count,
+                            "message": "Experience added to collective RL brain"
+                        }), 200
+                        
+                    except Exception as e:
+                        logging.error(f"Blob storage error: {e}")
+                        return jsonify({"error": "Storage error"}), 500
+                else:
+                    return jsonify({"error": "RL storage not configured"}), 503
+                    
+        finally:
+            conn.close()
+            
+    except Exception as e:
+        logging.error(f"Submit experience error: {e}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/api/rl/get-brain', methods=['GET'])
+def get_rl_brain():
+    """Bot downloads latest RL brain for inference"""
+    try:
+        # Validate license
+        license_key = request.headers.get('X-License-Key') or request.args.get('license_key')
+        if not license_key:
+            return jsonify({"error": "License key required"}), 401
+        
+        conn = get_db_connection()
+        if not conn:
+            return jsonify({"error": "Database error"}), 500
+        
+        try:
+            with conn.cursor(cursor_factory=RealDictCursor) as cursor:
+                cursor.execute("""
+                    SELECT license_status FROM users WHERE license_key = %s
+                """, (license_key,))
+                user = cursor.fetchone()
+                
+                if not user or user['license_status'] != 'active':
+                    return jsonify({"error": "Invalid or inactive license"}), 401
+                
+                # Download from Azure Blob Storage
+                if STORAGE_CONNECTION_STRING:
+                    try:
+                        blob_service = BlobServiceClient.from_connection_string(STORAGE_CONNECTION_STRING)
+                        blob_client = blob_service.get_blob_client(CONTAINER_NAME, BLOB_NAME)
+                        
+                        data = json.loads(blob_client.download_blob().readall())
+                        
+                        return jsonify({
+                            "status": "success",
+                            "total_experiences": len(data.get("experiences", [])),
+                            "experiences": data.get("experiences", [])
+                        }), 200
+                        
+                    except Exception as e:
+                        logging.error(f"Blob download error: {e}")
+                        return jsonify({"error": "RL brain not found"}), 404
+                else:
+                    return jsonify({"error": "RL storage not configured"}), 503
+                    
+        finally:
+            conn.close()
+            
+    except Exception as e:
+        logging.error(f"Get brain error: {e}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/api/admin/rl-stats', methods=['GET'])
+def admin_rl_stats():
+    """Admin endpoint to view RL statistics"""
+    admin_key = request.args.get('admin_key') or request.args.get('license_key')
+    if admin_key != ADMIN_API_KEY:
+        return jsonify({"error": "Unauthorized"}), 401
+    
+    try:
+        if STORAGE_CONNECTION_STRING:
+            try:
+                blob_service = BlobServiceClient.from_connection_string(STORAGE_CONNECTION_STRING)
+                blob_client = blob_service.get_blob_client(CONTAINER_NAME, BLOB_NAME)
+                
+                data = json.loads(blob_client.download_blob().readall())
+                experiences = data.get("experiences", [])
+                
+                # Calculate stats
+                total = len(experiences)
+                winning = sum(1 for e in experiences if e.get('reward', 0) > 0)
+                losing = sum(1 for e in experiences if e.get('reward', 0) < 0)
+                total_reward = sum(e.get('reward', 0) for e in experiences)
+                avg_reward = total_reward / total if total > 0 else 0
+                
+                return jsonify({
+                    "total_experiences": total,
+                    "winning_experiences": winning,
+                    "losing_experiences": losing,
+                    "win_rate": (winning / total * 100) if total > 0 else 0,
+                    "total_reward": total_reward,
+                    "avg_reward": avg_reward,
+                    "last_updated": blob_client.get_blob_properties().last_modified.isoformat()
+                }), 200
+                
+            except Exception as e:
+                logging.error(f"RL stats error: {e}")
+                return jsonify({"error": str(e)}), 500
+        else:
+            return jsonify({"error": "RL storage not configured"}), 503
+            
+    except Exception as e:
+        logging.error(f"Admin RL stats error: {e}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/api/admin/rl-experiences', methods=['GET'])
+def admin_rl_experiences():
+    """Admin endpoint to view recent RL experiences with full details"""
+    admin_key = request.args.get('admin_key') or request.args.get('license_key')
+    if admin_key != ADMIN_API_KEY:
+        return jsonify({"error": "Unauthorized"}), 401
+    
+    limit = int(request.args.get('limit', 100))
+    
+    try:
+        if STORAGE_CONNECTION_STRING:
+            try:
+                blob_service = BlobServiceClient.from_connection_string(STORAGE_CONNECTION_STRING)
+                blob_client = blob_service.get_blob_client(CONTAINER_NAME, BLOB_NAME)
+                
+                data = json.loads(blob_client.download_blob().readall())
+                experiences = data.get("experiences", [])
+                
+                # Return most recent experiences (last N items)
+                recent = experiences[-limit:] if len(experiences) > limit else experiences
+                # Reverse so newest first
+                recent.reverse()
+                
+                return jsonify({
+                    "total_experiences": len(experiences),
+                    "experiences": recent,
+                    "limit": limit
+                }), 200
+                
+            except Exception as e:
+                logging.error(f"RL experiences error: {e}")
+                return jsonify({"error": str(e)}), 500
+        else:
+            return jsonify({"error": "RL storage not configured"}), 503
+            
+    except Exception as e:
+        logging.error(f"Admin RL experiences error: {e}")
+        return jsonify({"error": str(e)}), 500
+
+# ============================================================================
+# RL DECISION ENDPOINTS - Cloud makes trading decisions for user bots
+# ============================================================================
+
+@app.route('/api/rl/analyze-signal', methods=['POST'])
+def analyze_signal():
+    """
+    User bot sends market state, cloud RL brain decides whether to take trade.
+    
+    Request body:
+    {
+        "license_key": "user's license key",
+        "state": {
+            "rsi": 45.2,
+            "vwap_distance": 0.02,
+            "atr": 2.5,
+            "volume_ratio": 1.3,
+            "hour": 14,
+            "day_of_week": 2,
+            "recent_pnl": -50.0,
+            "streak": -1,
+            "side": "long",
+            "price": 6767.75
+        }
+    }
+    
+    Response:
+    {
+        "take_trade": true/false,
+        "confidence": 0.68,
+        "reason": "✅ TAKE (68% confidence) - 8W/2L similar | Winners: 75% WR, $150 avg"
+    }
+    """
+    try:
+        data = request.get_json()
+        license_key = data.get('license_key')
+        state = data.get('state', {})
+        
+        # Validate license key
+        if not license_key:
+            return jsonify({"error": "Missing license_key"}), 401
+        
+        # Check license in database
+        conn = get_db_connection()
+        if not conn:
+            return jsonify({"error": "Database unavailable"}), 503
+        
+        cursor = conn.cursor(cursor_factory=RealDictCursor)
+        try:
+            cursor.execute("""
+                SELECT license_key, status, expires_at 
+                FROM licenses 
+                WHERE license_key = %s
+            """, (license_key,))
+            
+            license_data = cursor.fetchone()
+            
+            if not license_data:
+                return jsonify({"error": "Invalid license key"}), 401
+            
+            if license_data['status'] != 'active':
+                return jsonify({"error": f"License is {license_data['status']}"}), 401
+            
+            if license_data['expires_at'] and datetime.now() > license_data['expires_at']:
+                return jsonify({"error": "License expired"}), 401
+            
+            # Load RL brain and make decision for this symbol
+            symbol = state.get('symbol', 'ES')
+            experiences = load_experiences(symbol)
+            
+            if experiences is None:
+                # Database connection failed - REJECT for safety
+                return jsonify({
+                    "take_trade": False,
+                    "confidence": 0.0,
+                    "reason": "❌ Database unavailable - rejecting for safety"
+                }), 200
+            
+            if not experiences:
+                # No historical data for this symbol - REJECT for safety
+                return jsonify({
+                    "take_trade": False,
+                    "confidence": 0.0,
+                    "reason": "❌ No historical data for symbol - rejecting for safety"
+                }), 200
+            
+            # Create decision engine and analyze
+            engine = CloudRLDecisionEngine(experiences)
+            take_trade, confidence, reason = engine.should_take_signal(state)
+            
+            # Log API call
+            cursor.execute("""
+                INSERT INTO api_logs (license_key, endpoint, created_at)
+                VALUES (%s, %s, NOW())
+            """, (license_key, 'rl/analyze-signal'))
+            conn.commit()
+            
+            return jsonify({
+                "take_trade": take_trade,
+                "confidence": confidence,
+                "reason": reason
+            }), 200
+                
+        finally:
+            cursor.close()
+            conn.close()
+            
+    except Exception as e:
+        logging.error(f"Analyze signal error: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/api/rl/submit-outcome', methods=['POST'])
+def submit_outcome():
+    """
+    User bot reports trade outcome after execution (win/loss).
+    Cloud RL brain records this to PostgreSQL for scalability.
+    
+    SCALES TO 1000+ USERS: Direct database insert, no locking needed.
+    PostgreSQL handles concurrent writes natively.
+    
+    Request body:
+    {
+        "license_key": "user's license key",
+        "state": {...},  // Same state sent to analyze-signal
+        "took_trade": true,
+        "pnl": 125.50,
+        "duration": 1800  // seconds
+    }
+    
+    Response:
+    {
+        "success": true,
+        "total_experiences": 7560,
+        "win_rate": 0.56
+    }
+    """
+    try:
+        data = request.get_json()
+        license_key = data.get('license_key')
+        state = data.get('state', {})
+        took_trade = data.get('took_trade', False)
+        pnl = data.get('pnl', 0.0)
+        duration = data.get('duration', 0.0)
+        
+        # Validate license key
+        if not license_key:
+            return jsonify({"error": "Missing license_key"}), 401
+        
+        conn = get_db_connection()
+        if not conn:
+            return jsonify({"error": "Database unavailable"}), 503
+        
+        try:
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
+            cursor.execute("""
+                SELECT license_key, status, expires_at 
+                FROM licenses 
+                WHERE license_key = %s
+            """, (license_key,))
+            
+            license_data = cursor.fetchone()
+            
+            if not license_data:
+                return jsonify({"error": "Invalid license key"}), 401
+            
+            if license_data['status'] != 'active':
+                return jsonify({"error": f"License is {license_data['status']}"}), 401
+            
+            # Insert outcome directly into PostgreSQL (instant, no locking)
+            cursor.execute("""
+                INSERT INTO rl_experiences (
+                    license_key,
+                    symbol,
+                    rsi,
+                    vwap_distance,
+                    atr,
+                    volume_ratio,
+                    hour,
+                    day_of_week,
+                    recent_pnl,
+                    streak,
+                    side,
+                    regime,
+                    took_trade,
+                    pnl,
+                    duration,
+                    created_at
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
+            """, (
+                license_key,
+                state.get('symbol', 'ES'),  # Default to ES if not provided
+                state.get('rsi', 50.0),
+                state.get('vwap_distance', 0.0),
+                state.get('atr', 0.0),
+                state.get('volume_ratio', 1.0),
+                state.get('hour', 0),
+                state.get('day_of_week', 0),
+                state.get('recent_pnl', 0.0),
+                state.get('streak', 0),
+                state.get('side', 'long'),
+                state.get('regime', 'NORMAL'),
+                took_trade,
+                pnl,
+                duration
+            ))
+            
+            # Get total experiences and win rate for this symbol
+            symbol = state.get('symbol', 'ES')
+            cursor.execute("""
+                SELECT 
+                    COUNT(*) as total,
+                    AVG(CASE WHEN took_trade AND pnl > 0 THEN 1.0 ELSE 0.0 END) as win_rate,
+                    AVG(CASE WHEN took_trade THEN pnl ELSE 0 END) as avg_reward
+                FROM rl_experiences
+                WHERE took_trade = TRUE AND symbol = %s
+            """, (symbol,))
+            stats = cursor.fetchone()
+            
+            # Log API call
+            cursor.execute("""
+                INSERT INTO api_logs (license_key, endpoint, created_at)
+                VALUES (%s, %s, NOW())
+            """, (license_key, 'rl/submit-outcome'))
+            
+            conn.commit()
+            
+            # Clear cache so next load gets fresh data from database
+            global _experiences_cache, _experiences_cache_time
+            _experiences_cache = None
+            _experiences_cache_time = None
+            
+            return jsonify({
+                "success": True,
+                "total_experiences": int(stats['total'] or 0),
+                "win_rate": float(stats['win_rate'] or 0.0),
+                "avg_reward": float(stats['avg_reward'] or 0.0)
+            }), 200
+                
+        finally:
+            cursor.close()
+            conn.close()
+            
+    except Exception as e:
+        logging.error(f"Submit outcome error: {e}")
+        return jsonify({"error": str(e)}), 500
+
+# ============================================================================
+# END RL DECISION ENDPOINTS
+# ============================================================================
+
+# ============================================================================
+# RL ADMIN/STATS ENDPOINTS (existing)
+# ============================================================================
+
 @app.route('/api/stripe/success', methods=['GET'])
 def stripe_success():
     """Stripe checkout success page"""
@@ -1119,6 +1673,66 @@ def root():
         "endpoints": ["/api/hello", "/api/main", "/api/stripe/webhook", "/api/admin/create-license", "/api/admin/expire-licenses"]
     }), 200
 
+def init_database_if_needed():
+    """Initialize database table and indexes if they don't exist"""
+    try:
+        conn = psycopg2.connect(
+            host=DB_HOST,
+            database=DB_NAME,
+            user=DB_USER,
+            password=DB_PASSWORD,
+            sslmode='require'
+        )
+        cursor = conn.cursor()
+        
+        # Create table if not exists
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS rl_experiences (
+                id SERIAL PRIMARY KEY,
+                license_key VARCHAR(50) NOT NULL,
+                symbol VARCHAR(20) NOT NULL,
+                rsi DECIMAL(5,2) NOT NULL,
+                vwap_distance DECIMAL(10,6) NOT NULL,
+                atr DECIMAL(10,6) NOT NULL,
+                volume_ratio DECIMAL(10,2) NOT NULL,
+                hour INTEGER NOT NULL,
+                day_of_week INTEGER NOT NULL,
+                recent_pnl DECIMAL(10,2) NOT NULL,
+                streak INTEGER NOT NULL,
+                side VARCHAR(10) NOT NULL,
+                regime VARCHAR(50) NOT NULL,
+                took_trade BOOLEAN NOT NULL,
+                pnl DECIMAL(10,2) NOT NULL,
+                duration DECIMAL(10,2) NOT NULL,
+                created_at TIMESTAMP DEFAULT NOW()
+            )
+        """)
+        
+        # Create indexes if not exist
+        indexes = [
+            "CREATE INDEX IF NOT EXISTS idx_rl_experiences_license ON rl_experiences(license_key)",
+            "CREATE INDEX IF NOT EXISTS idx_rl_experiences_symbol ON rl_experiences(symbol)",
+            "CREATE INDEX IF NOT EXISTS idx_rl_experiences_created ON rl_experiences(created_at DESC)",
+            "CREATE INDEX IF NOT EXISTS idx_rl_experiences_took_trade ON rl_experiences(took_trade)",
+            "CREATE INDEX IF NOT EXISTS idx_rl_experiences_side ON rl_experiences(side)",
+            "CREATE INDEX IF NOT EXISTS idx_rl_experiences_regime ON rl_experiences(regime)",
+            "CREATE INDEX IF NOT EXISTS idx_rl_experiences_similarity ON rl_experiences(symbol, rsi, vwap_distance, atr, volume_ratio, side, regime)"
+        ]
+        
+        for idx in indexes:
+            cursor.execute(idx)
+        
+        conn.commit()
+        cursor.close()
+        conn.close()
+        
+        app.logger.info("✅ PostgreSQL database initialized successfully")
+        
+    except Exception as e:
+        app.logger.warning(f"Database initialization check: {e}")
+
 if __name__ == '__main__':
+    init_database_if_needed()
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port, debug=False)
+

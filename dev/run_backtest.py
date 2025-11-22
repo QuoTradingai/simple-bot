@@ -227,7 +227,7 @@ def run_backtest(args: argparse.Namespace) -> Dict[str, Any]:
     )
     
     # Show config values being used for backtest (from config.json)
-    print(f"📊 Backtest Configuration (from config.json):")
+    print(f"Backtest Configuration (from config.json):")
     print(f"   Max Contracts: {bot_config.max_contracts}")
     print(f"   RL Exploration Rate: {bot_config.rl_exploration_rate*100:.1f}%")
     print(f"   RL Min Exploration: {bot_config.rl_min_exploration_rate*100:.1f}%")
@@ -428,7 +428,7 @@ def run_backtest(args: argparse.Namespace) -> Dict[str, Any]:
         rl_brain.save_experience()
         final_experience_count = len(rl_brain.experiences)
         new_experiences = final_experience_count - initial_experience_count
-        print(f"✅ Signal RL experiences saved to data/signal_experience.json")
+        print(f"[OK] Signal RL experiences saved to data/signal_experience.json")
         print(f"   Total experiences: {final_experience_count}")
         print(f"   New experiences this backtest: {new_experiences}")
     else:
