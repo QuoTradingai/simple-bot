@@ -272,7 +272,7 @@ logger = setup_logging()
 # ============================================================================
 
 # Cloud ML API configuration
-CLOUD_ML_API_URL = os.getenv("CLOUD_ML_API_URL", "https://quotrading-signals.icymeadow-86b2969e.eastus.azurecontainerapps.io")
+CLOUD_ML_API_URL = os.getenv("CLOUD_ML_API_URL", "https://quotrading-api-v2.azurewebsites.net")
 USE_CLOUD_SIGNALS = os.getenv("USE_CLOUD_SIGNALS", "true").lower() == "true"
 
 # Generate privacy-preserving user ID
@@ -317,7 +317,7 @@ async def get_ml_confidence_async(rl_state: Dict[str, Any], side: str) -> Tuple[
             
             async with aiohttp.ClientSession() as session:
                 async with session.post(
-                    f"{CLOUD_ML_API_URL}/api/ml/get_confidence",
+                    f"{CLOUD_ML_API_URL}/api/main",
                     json=payload,
                     timeout=aiohttp.ClientTimeout(total=timeout_seconds)
                 ) as response:
@@ -415,7 +415,7 @@ async def save_trade_experience_async(
             
             async with aiohttp.ClientSession() as session:
                 async with session.post(
-                    f"{CLOUD_ML_API_URL}/api/ml/save_trade",
+                    f"{CLOUD_ML_API_URL}/api/main",
                     json=payload,
                     timeout=aiohttp.ClientTimeout(total=timeout_seconds)
                 ) as response:
@@ -479,7 +479,7 @@ async def save_rejected_signal_async(
             
             async with aiohttp.ClientSession() as session:
                 async with session.post(
-                    f"{CLOUD_ML_API_URL}/api/ml/save_rejected_signal",
+                    f"{CLOUD_ML_API_URL}/api/main",
                     json=payload,
                     timeout=aiohttp.ClientTimeout(total=timeout_seconds)
                 ) as response:
@@ -554,9 +554,9 @@ def initialize_broker() -> None:
         logger.info("🔐 Validating license...")
         try:
             import requests
-            api_url = os.getenv("QUOTRADING_API_URL", "https://quotrading-signals.icymeadow-86b2969e.eastus.azurecontainerapps.io")
+            api_url = os.getenv("QUOTRADING_API_URL", "https://quotrading-api-v2.azurewebsites.net")
             response = requests.post(
-                f"{api_url}/api/license/validate",
+                f"{api_url}/api/main",
                 json={"license_key": license_key},
                 timeout=10
             )
@@ -639,10 +639,10 @@ def check_cloud_kill_switch() -> None:
     try:
         import requests
         
-        cloud_api_url = CONFIG.get("cloud_api_url", "https://quotrading-signals.icymeadow-86b2969e.eastus.azurecontainerapps.io")
+        cloud_api_url = CONFIG.get("cloud_api_url", "https://quotrading-api-v2.azurewebsites.net")
         
         response = requests.get(
-            f"{cloud_api_url}/api/kill_switch/status",
+            f"{cloud_api_url}/api/main",
             timeout=5
         )
         
@@ -764,10 +764,10 @@ def check_azure_time_service() -> str:
     try:
         import requests
         
-        cloud_api_url = CONFIG.get("cloud_api_url", "https://quotrading-signals.icymeadow-86b2969e.eastus.azurecontainerapps.io")
+        cloud_api_url = CONFIG.get("cloud_api_url", "https://quotrading-api-v2.azurewebsites.net")
         
         response = requests.get(
-            f"{cloud_api_url}/api/time/simple",
+            f"{cloud_api_url}/api/main",
             timeout=5
         )
         
@@ -5879,7 +5879,7 @@ def execute_exit(symbol: str, exit_price: float, reason: str) -> None:
         }
         
         # Write to file
-        summary_file = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'trade_summary.json')
+        summary_file = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'data', 'trade_summary.json')
         with open(summary_file, 'w') as f:
             json.dump(trade_summary, f, indent=2)
         
