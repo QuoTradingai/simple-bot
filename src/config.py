@@ -625,6 +625,11 @@ def get_development_config() -> BotConfiguration:
             for key, value in json_config.items():
                 if hasattr(config, key):
                     setattr(config, key, value)
+            
+            # Handle legacy 'symbols' field (GUI format) - map to 'instrument' and 'instruments'
+            if 'symbols' in json_config and json_config['symbols']:
+                config.instrument = json_config['symbols'][0] if json_config['symbols'] else ""
+                config.instruments = json_config['symbols']
     
     # API token must be set via environment variable
     return config
@@ -645,6 +650,11 @@ def get_staging_config() -> BotConfiguration:
             for key, value in json_config.items():
                 if hasattr(config, key):
                     setattr(config, key, value)
+            
+            # Handle legacy 'symbols' field (GUI format) - map to 'instrument' and 'instruments'
+            if 'symbols' in json_config and json_config['symbols']:
+                config.instrument = json_config['symbols'][0] if json_config['symbols'] else ""
+                config.instruments = json_config['symbols']
     
     # API token must be set via environment variable
     return config
@@ -665,6 +675,11 @@ def get_production_config() -> BotConfiguration:
             for key, value in json_config.items():
                 if hasattr(config, key):
                     setattr(config, key, value)
+            
+            # Handle legacy 'symbols' field (GUI format) - map to 'instrument' and 'instruments'
+            if 'symbols' in json_config and json_config['symbols']:
+                config.instrument = json_config['symbols'][0] if json_config['symbols'] else ""
+                config.instruments = json_config['symbols']
     
     # API token must be set via environment variable
     return config
