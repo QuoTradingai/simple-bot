@@ -785,8 +785,8 @@ def admin_dashboard_stats():
             
             # Calculate revenue metrics
             pricing = {
-                'MONTHLY': 49.99,
-                'ANNUAL': 499.99,
+                'MONTHLY': 200.00,
+                'ANNUAL': 2000.00,
                 'TRIAL': 0.00,
                 'BETA': 0.00
             }
@@ -1825,8 +1825,8 @@ def admin_chart_mrr():
             cursor.execute("""
                 SELECT 
                     TO_CHAR(DATE_TRUNC('month', created_at), 'Mon') as month,
-                    COUNT(*) FILTER (WHERE license_type = 'MONTHLY') * 49.99 +
-                    COUNT(*) FILTER (WHERE license_type = 'ANNUAL') * 499.99 as revenue
+                    COUNT(*) FILTER (WHERE license_type = 'MONTHLY') * 200.00 +
+                    COUNT(*) FILTER (WHERE license_type = 'ANNUAL') * 2000.00 as revenue
                 FROM users
                 WHERE created_at >= NOW() - INTERVAL '6 months'
                 AND UPPER(license_status) = 'ACTIVE'
@@ -2192,8 +2192,8 @@ def admin_report_revenue():
         
         # Define pricing
         pricing = {
-            'MONTHLY': 49.99,
-            'ANNUAL': 499.99,
+            'MONTHLY': 200.00,
+            'ANNUAL': 2000.00,
             'TRIAL': 0.00
         }
         
@@ -2261,7 +2261,7 @@ def admin_report_revenue():
             "renewals": 0,  # Would need renewal tracking
             "renewal_revenue": 0.00,
             "cancellations": expired,
-            "lost_revenue": round(expired * 49.99, 2),  # Estimate
+            "lost_revenue": round(expired * 200.00, 2),  # Estimate
             "net_mrr": round(mrr, 2),
             "churn_rate": round(churn_rate, 2),
             "arpu": round(arpu, 2),
@@ -2420,7 +2420,7 @@ def admin_report_retention():
         churn_rate = (expired_this_month / active_users * 100) if active_users > 0 else 0
         
         # Lifetime value (average)
-        ltv = (avg_length / 30 * 49.99) if avg_length else 0
+        ltv = (avg_length / 30 * 200.00) if avg_length else 0
         
         cohort_data = []
         for c in cohorts:
@@ -2838,8 +2838,8 @@ def admin_retention_metrics():
             SELECT 
                 AVG(
                     CASE 
-                        WHEN license_type = 'MONTHLY' THEN (EXTRACT(DAY FROM license_expiration - created_at) / 30.0) * 49.99
-                        WHEN license_type = 'ANNUAL' THEN (EXTRACT(DAY FROM license_expiration - created_at) / 365.0) * 499.99
+                        WHEN license_type = 'MONTHLY' THEN (EXTRACT(DAY FROM license_expiration - created_at) / 30.0) * 200.00
+                        WHEN license_type = 'ANNUAL' THEN (EXTRACT(DAY FROM license_expiration - created_at) / 365.0) * 2000.00
                         ELSE 0
                     END
                 ) as avg_ltv

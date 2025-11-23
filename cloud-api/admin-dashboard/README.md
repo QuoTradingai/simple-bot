@@ -95,10 +95,10 @@ Generate detailed analytics reports:
 ### How Revenue is Calculated
 
 1. **Monthly Recurring Revenue (MRR)**:
-   - Monthly licenses: $49.99/month each
-   - Annual licenses: $499.99/year (counted as $41.67/month)
+   - Monthly licenses: $200/month each
+   - Annual licenses: $2000/year (counted as $166.67/month)
    - Trial/Beta: $0
-   - Formula: `MRR = (Monthly licenses × $49.99) + (Annual licenses × $41.67)`
+   - Formula: `MRR = (Monthly licenses × $200) + (Annual licenses × $166.67)`
 
 2. **Annual Recurring Revenue (ARR)**:
    - Formula: `ARR = MRR × 12`
