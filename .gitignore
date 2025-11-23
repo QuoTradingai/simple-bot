@@ -105,12 +105,9 @@ env.bak/
 venv.bak/
 
 # Environment configuration files (contain credentials)
-# Block all .env.* files by default
 .env.*
-# But allow these template files (safe to commit with placeholder values)
 !.env.example
 !.env.*.example
-!.env.docker
 
 # Spyder project settings
 .spyderproject
@@ -174,10 +171,3 @@ launcher/config.json
 # Keep example/template files
 !data/.gitkeep
 !launcher/.gitkeep
-
-# Docker and Kubernetes sensitive files
-kubernetes/secrets.yaml
-docker-compose.override.yml
-
-# Azure CLI local config
-.azure/
