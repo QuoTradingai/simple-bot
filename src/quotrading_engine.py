@@ -387,8 +387,7 @@ async def save_trade_experience_async(
             state_with_context,
             True,  # took_trade
             pnl,
-            duration_seconds,
-            execution_data  # Pass execution data to cloud for RL learning
+            duration_seconds
         )
         
         logger.info(f"✅ Outcome reported to cloud: ${pnl:+.2f} in {duration_minutes:.1f}min")

@@ -134,7 +134,7 @@ class CloudAPIClient:
         # Should never reach here, but just in case
         return self._fallback_decision(state)
     
-    def report_trade_outcome(self, state: Dict, took_trade: bool, pnl: float, duration: float, execution_data: Dict = None) -> bool:
+    def report_trade_outcome(self, state: Dict, took_trade: bool, pnl: float, duration: float) -> bool:
         """
         Report trade outcome to cloud RL brain.
         
@@ -143,13 +143,6 @@ class CloudAPIClient:
             took_trade: Whether trade was actually taken
             pnl: Profit/loss in dollars
             duration: Trade duration in seconds
-            execution_data: Execution quality metrics for RL learning (optional)
-                - order_type_used: "passive", "aggressive", "mixed"
-                - entry_slippage_ticks: Actual slippage in ticks
-                - partial_fill: Whether partial fill occurred
-                - fill_ratio: Percentage filled (0.66 = 2 of 3)
-                - exit_reason: How trade closed
-                - held_full_duration: Whether hit target/stop vs time exit
         
         Returns:
             True if successfully reported, False otherwise
@@ -159,15 +152,7 @@ class CloudAPIClient:
                 state=original_state,
                 took_trade=True,
                 pnl=125.50,
-                duration=1800,
-                execution_data={
-                    "order_type_used": "passive",
-                    "entry_slippage_ticks": 1.5,
-                    "partial_fill": False,
-                    "fill_ratio": 1.0,
-                    "exit_reason": "target_reached",
-                    "held_full_duration": True
-                }
+                duration=1800
             )
         """
         # Skip reporting if license is invalid
@@ -176,21 +161,15 @@ class CloudAPIClient:
             return False
         
         try:
-            payload = {
-                "license_key": self.license_key,
-                "state": state,
-                "took_trade": took_trade,
-                "pnl": pnl,
-                "duration": duration
-            }
-            
-            # Add execution data if provided
-            if execution_data:
-                payload["execution_data"] = execution_data
-            
             response = requests.post(
                 f"{self.api_url}/api/rl/submit-outcome",
-                json=payload,
+                json={
+                    "license_key": self.license_key,
+                    "state": state,
+                    "took_trade": took_trade,
+                    "pnl": pnl,
+                    "duration": duration
+                },
                 timeout=self.timeout
             )
             

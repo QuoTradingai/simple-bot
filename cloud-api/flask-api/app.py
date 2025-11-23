@@ -1457,15 +1457,7 @@ def submit_outcome():
         "state": {...},  // Same state sent to analyze-signal
         "took_trade": true,
         "pnl": 125.50,
-        "duration": 1800,  // seconds
-        "execution_data": {  // Optional: execution quality metrics for RL learning
-            "order_type_used": "passive",  // "passive", "aggressive", "mixed"
-            "entry_slippage_ticks": 1.5,  // Actual slippage in ticks
-            "partial_fill": false,  // Whether partial fill occurred
-            "fill_ratio": 1.0,  // Percentage filled (0.66 = 2 of 3)
-            "exit_reason": "target_reached",  // How trade closed
-            "held_full_duration": true  // Whether hit target/stop vs time exit
-        }
+        "duration": 1800  // seconds
     }
     
     Response:
@@ -1482,7 +1474,6 @@ def submit_outcome():
         took_trade = data.get('took_trade', False)
         pnl = data.get('pnl', 0.0)
         duration = data.get('duration', 0.0)
-        execution_data = data.get('execution_data', {})  # Get execution quality metrics
         
         # Validate license key
         if not license_key:
@@ -1508,35 +1499,29 @@ def submit_outcome():
             if license_data['status'] != 'active':
                 return jsonify({"error": f"License is {license_data['status']}"}), 401
             
-            # Extract execution quality metrics
-            order_type = execution_data.get('order_type_used')
-            slippage = execution_data.get('entry_slippage_ticks')
-            partial = execution_data.get('partial_fill', False)
-            fill_ratio = execution_data.get('fill_ratio', 1.0)
-            exit_reason = execution_data.get('exit_reason')
-            held_full = execution_data.get('held_full_duration', True)
-            
             # Insert outcome directly into PostgreSQL (instant, no locking)
             cursor.execute("""
                 INSERT INTO rl_experiences (
-                    license_key, symbol, rsi, vwap_distance, atr, volume_ratio,
-                    hour, day_of_week, recent_pnl, streak, side, regime,
-                    took_trade, pnl, duration,
-                    order_type_used, entry_slippage_ticks, partial_fill, 
-                    fill_ratio, exit_reason, held_full_duration,
+                    license_key,
+                    symbol,
+                    rsi,
+                    vwap_distance,
+                    atr,
+                    volume_ratio,
+                    hour,
+                    day_of_week,
+                    recent_pnl,
+                    streak,
+                    side,
+                    regime,
+                    took_trade,
+                    pnl,
+                    duration,
                     created_at
-                ) VALUES (
-                    %s, %s, %s, %s, %s, %s,
-                    %s, %s, %s, %s, %s, %s,
-                    %s, %s, %s,
-                    %s, %s, %s,
-                    %s, %s, %s,
-                    NOW()
-                )
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
             """, (
-                # State data
                 license_key,
-                state.get('symbol', 'ES'),
+                state.get('symbol', 'ES'),  # Default to ES if not provided
                 state.get('rsi', 50.0),
                 state.get('vwap_distance', 0.0),
                 state.get('atr', 0.0),
@@ -1547,17 +1532,9 @@ def submit_outcome():
                 state.get('streak', 0),
                 state.get('side', 'long'),
                 state.get('regime', 'NORMAL'),
-                # Outcome data
                 took_trade,
                 pnl,
-                duration,
-                # Execution quality data
-                order_type,
-                slippage,
-                partial,
-                fill_ratio,
-                exit_reason,
-                held_full
+                duration
             ))
             
             # Get total experiences and win rate for this symbol
