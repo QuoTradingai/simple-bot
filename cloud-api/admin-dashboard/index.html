@@ -699,6 +699,7 @@
         <div class="tab" onclick="switchTab('activity')">📊 Activity</div>
         <div class="tab" onclick="switchTab('online')">🟢 Online</div>
         <div class="tab" onclick="switchTab('rl')">🧠 RL Brain</div>
+        <div class="tab" onclick="switchTab('reports')">📈 Reports</div>
     </div>
 
     <!-- Content Area -->
@@ -854,6 +855,271 @@
                             <p style="margin-top: 16px; padding: 16px; background: #e8f5e9; border-left: 4px solid #4caf50; border-radius: 8px;">
                                 💡 <strong>Growth Strategy:</strong> As more users trade, the collective brain gets smarter. Each customer contributes experiences, and all customers benefit from improved signal quality.
                             </p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Reports Tab -->
+        <div class="tab-content" id="reports-tab">
+            <div style="padding: 40px;">
+                <div style="max-width: 1600px; margin: 0 auto;">
+                    <h2 style="font-size: 28px; margin-bottom: 30px; color: #202124;">
+                        📈 Advanced Reports & Analytics
+                    </h2>
+                    
+                    <!-- Report Configuration Panel -->
+                    <div style="background: white; border-radius: 16px; padding: 24px; box-shadow: 0 2px 8px rgba(0,0,0,0.08); margin-bottom: 24px;">
+                        <h3 style="font-size: 20px; margin-bottom: 20px; color: #202124;">Report Configuration</h3>
+                        
+                        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 20px; margin-bottom: 20px;">
+                            <!-- Report Type Selector -->
+                            <div class="form-group">
+                                <label class="form-label">Report Type</label>
+                                <select class="form-select" id="reportType" onchange="updateReportFilters()">
+                                    <option value="user-activity">User Activity Report</option>
+                                    <option value="revenue">Revenue Analysis</option>
+                                    <option value="performance">Trading Performance</option>
+                                    <option value="retention">Retention & Churn</option>
+                                </select>
+                            </div>
+                            
+                            <!-- Date Range -->
+                            <div class="form-group" id="startDateGroup">
+                                <label class="form-label">Start Date</label>
+                                <input type="date" class="form-input" id="reportStartDate">
+                            </div>
+                            
+                            <div class="form-group" id="endDateGroup">
+                                <label class="form-label">End Date</label>
+                                <input type="date" class="form-input" id="reportEndDate">
+                            </div>
+                        </div>
+                        
+                        <!-- Quick Date Filters -->
+                        <div style="margin-bottom: 20px;" id="quickFiltersGroup">
+                            <label class="form-label">Quick Filters:</label>
+                            <div style="display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px;">
+                                <button class="filter-btn" onclick="setQuickDateRange(7)">Last 7 Days</button>
+                                <button class="filter-btn" onclick="setQuickDateRange(30)">Last 30 Days</button>
+                                <button class="filter-btn" onclick="setQuickDateRange('month')">This Month</button>
+                                <button class="filter-btn" onclick="setQuickDateRange('lastMonth')">Last Month</button>
+                                <button class="filter-btn" onclick="setQuickDateRange('quarter')">This Quarter</button>
+                                <button class="filter-btn" onclick="setQuickDateRange('year')">This Year</button>
+                            </div>
+                        </div>
+                        
+                        <!-- Additional Filters -->
+                        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 20px; margin-bottom: 20px;">
+                            <!-- License Type Filter (for user activity & revenue) -->
+                            <div class="form-group" id="licenseTypeGroup">
+                                <label class="form-label">License Type</label>
+                                <select class="form-select" id="reportLicenseType">
+                                    <option value="all">All Types</option>
+                                    <option value="MONTHLY">Monthly</option>
+                                    <option value="ANNUAL">Annual</option>
+                                    <option value="TRIAL">Trial</option>
+                                </select>
+                            </div>
+                            
+                            <!-- Status Filter (for user activity) -->
+                            <div class="form-group" id="statusGroup">
+                                <label class="form-label">Status</label>
+                                <select class="form-select" id="reportStatus">
+                                    <option value="all">All Statuses</option>
+                                    <option value="ACTIVE">Active</option>
+                                    <option value="SUSPENDED">Suspended</option>
+                                    <option value="EXPIRED">Expired</option>
+                                </select>
+                            </div>
+                            
+                            <!-- Symbol Filter (for performance) -->
+                            <div class="form-group" id="symbolGroup" style="display: none;">
+                                <label class="form-label">Symbol</label>
+                                <select class="form-select" id="reportSymbol">
+                                    <option value="all">All Symbols</option>
+                                    <option value="ES">ES (E-mini S&P 500)</option>
+                                    <option value="NQ">NQ (E-mini Nasdaq)</option>
+                                    <option value="YM">YM (E-mini Dow)</option>
+                                    <option value="RTY">RTY (E-mini Russell)</option>
+                                </select>
+                            </div>
+                            
+                            <!-- Month/Year (for revenue) -->
+                            <div class="form-group" id="monthGroup" style="display: none;">
+                                <label class="form-label">Month</label>
+                                <select class="form-select" id="reportMonth">
+                                    <option value="1">January</option>
+                                    <option value="2">February</option>
+                                    <option value="3">March</option>
+                                    <option value="4">April</option>
+                                    <option value="5">May</option>
+                                    <option value="6">June</option>
+                                    <option value="7">July</option>
+                                    <option value="8">August</option>
+                                    <option value="9">September</option>
+                                    <option value="10">October</option>
+                                    <option value="11">November</option>
+                                    <option value="12">December</option>
+                                </select>
+                            </div>
+                            
+                            <div class="form-group" id="yearGroup" style="display: none;">
+                                <label class="form-label">Year</label>
+                                <select class="form-select" id="reportYear">
+                                    <option value="2025">2025</option>
+                                    <option value="2024">2024</option>
+                                    <option value="2023">2023</option>
+                                </select>
+                            </div>
+                        </div>
+                        
+                        <!-- Generate Button -->
+                        <div style="display: flex; gap: 12px; align-items: center;">
+                            <button class="refresh-btn" onclick="generateReport()" style="font-size: 16px; padding: 12px 32px;">
+                                Generate Report
+                            </button>
+                            <button class="export-btn" onclick="exportReportCSV()" id="exportReportBtn" style="display: none;">
+                                Export to CSV
+                            </button>
+                            <span id="reportLoadingIndicator" style="display: none; color: #1a73e8; font-size: 14px;">
+                                ⏳ Generating report...
+                            </span>
+                        </div>
+                    </div>
+                    
+                    <!-- Report Results -->
+                    <div id="reportResults" style="display: none;">
+                        <!-- User Activity Report Table -->
+                        <div id="userActivityResults" style="display: none; background: white; border-radius: 16px; padding: 24px; box-shadow: 0 2px 8px rgba(0,0,0,0.08);">
+                            <h3 style="font-size: 20px; margin-bottom: 16px; color: #202124;">User Activity Report</h3>
+                            <p style="color: #5f6368; margin-bottom: 16px;" id="userActivityCount"></p>
+                            <div style="overflow-x: auto;">
+                                <table class="sheet-table">
+                                    <thead>
+                                        <tr>
+                                            <th onclick="sortReportTable(0)">Account ID</th>
+                                            <th onclick="sortReportTable(1)">Email</th>
+                                            <th onclick="sortReportTable(2)">Signup Date</th>
+                                            <th onclick="sortReportTable(3)">Last Active</th>
+                                            <th onclick="sortReportTable(4)">License Type</th>
+                                            <th onclick="sortReportTable(5)">Status</th>
+                                            <th onclick="sortReportTable(6)">API Calls</th>
+                                            <th onclick="sortReportTable(7)">Trades</th>
+                                            <th onclick="sortReportTable(8)">Total P&L</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="userActivityTableBody"></tbody>
+                                </table>
+                            </div>
+                        </div>
+                        
+                        <!-- Revenue Report -->
+                        <div id="revenueResults" style="display: none; background: white; border-radius: 16px; padding: 24px; box-shadow: 0 2px 8px rgba(0,0,0,0.08);">
+                            <h3 style="font-size: 20px; margin-bottom: 24px; color: #202124;">Revenue Analysis Report</h3>
+                            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 20px;">
+                                <div style="padding: 16px; background: #e3f2fd; border-radius: 8px;">
+                                    <div style="font-size: 14px; color: #1976d2; margin-bottom: 4px;">New Subscriptions</div>
+                                    <div style="font-size: 28px; font-weight: bold; color: #1565c0;" id="revNewSubs">-</div>
+                                    <div style="font-size: 12px; color: #1976d2; margin-top: 4px;" id="revNewRev">-</div>
+                                </div>
+                                <div style="padding: 16px; background: #e8f5e9; border-radius: 8px;">
+                                    <div style="font-size: 14px; color: #388e3c; margin-bottom: 4px;">Monthly Recurring Revenue</div>
+                                    <div style="font-size: 28px; font-weight: bold; color: #2e7d32;" id="revMRR">-</div>
+                                    <div style="font-size: 12px; color: #388e3c; margin-top: 4px;" id="revARPU">-</div>
+                                </div>
+                                <div style="padding: 16px; background: #fff3e0; border-radius: 8px;">
+                                    <div style="font-size: 14px; color: #f57c00; margin-bottom: 4px;">Cancellations</div>
+                                    <div style="font-size: 28px; font-weight: bold; color: #e65100;" id="revCancellations">-</div>
+                                    <div style="font-size: 12px; color: #f57c00; margin-top: 4px;" id="revLostRev">-</div>
+                                </div>
+                                <div style="padding: 16px; background: #fce4ec; border-radius: 8px;">
+                                    <div style="font-size: 14px; color: #c2185b; margin-bottom: 4px;">Churn Rate</div>
+                                    <div style="font-size: 28px; font-weight: bold; color: #ad1457;" id="revChurnRate">-</div>
+                                    <div style="font-size: 12px; color: #c2185b; margin-top: 4px;">vs. last period</div>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <!-- Performance Report -->
+                        <div id="performanceResults" style="display: none; background: white; border-radius: 16px; padding: 24px; box-shadow: 0 2px 8px rgba(0,0,0,0.08);">
+                            <h3 style="font-size: 20px; margin-bottom: 24px; color: #202124;">Trading Performance Report</h3>
+                            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; margin-bottom: 24px;">
+                                <div style="padding: 16px; background: #f5f5f5; border-radius: 8px;">
+                                    <div style="font-size: 14px; color: #5f6368;">Total Trades</div>
+                                    <div style="font-size: 24px; font-weight: bold;" id="perfTotalTrades">-</div>
+                                </div>
+                                <div style="padding: 16px; background: #f5f5f5; border-radius: 8px;">
+                                    <div style="font-size: 14px; color: #5f6368;">Win Rate</div>
+                                    <div style="font-size: 24px; font-weight: bold;" id="perfWinRate">-</div>
+                                </div>
+                                <div style="padding: 16px; background: #f5f5f5; border-radius: 8px;">
+                                    <div style="font-size: 14px; color: #5f6368;">Total P&L</div>
+                                    <div style="font-size: 24px; font-weight: bold;" id="perfTotalPnL">-</div>
+                                </div>
+                                <div style="padding: 16px; background: #f5f5f5; border-radius: 8px;">
+                                    <div style="font-size: 14px; color: #5f6368;">Avg Duration</div>
+                                    <div style="font-size: 24px; font-weight: bold;" id="perfAvgDuration">-</div>
+                                </div>
+                            </div>
+                            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px;">
+                                <div style="padding: 16px; background: #e8f5e9; border-radius: 8px;">
+                                    <div style="font-size: 14px; color: #388e3c; margin-bottom: 8px;">Best Performing Day</div>
+                                    <div style="font-size: 20px; font-weight: bold; color: #2e7d32;" id="perfBestDay">-</div>
+                                    <div style="font-size: 16px; color: #388e3c; margin-top: 4px;" id="perfBestDayPnL">-</div>
+                                </div>
+                                <div style="padding: 16px; background: #ffebee; border-radius: 8px;">
+                                    <div style="font-size: 14px; color: #d32f2f; margin-bottom: 8px;">Worst Performing Day</div>
+                                    <div style="font-size: 20px; font-weight: bold; color: #c62828;" id="perfWorstDay">-</div>
+                                    <div style="font-size: 16px; color: #d32f2f; margin-top: 4px;" id="perfWorstDayPnL">-</div>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <!-- Retention Report -->
+                        <div id="retentionResults" style="display: none; background: white; border-radius: 16px; padding: 24px; box-shadow: 0 2px 8px rgba(0,0,0,0.08);">
+                            <h3 style="font-size: 20px; margin-bottom: 24px; color: #202124;">Retention & Churn Report</h3>
+                            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; margin-bottom: 24px;">
+                                <div style="padding: 16px; background: #e3f2fd; border-radius: 8px;">
+                                    <div style="font-size: 14px; color: #1976d2;">Active Users</div>
+                                    <div style="font-size: 28px; font-weight: bold; color: #1565c0;" id="retActiveUsers">-</div>
+                                </div>
+                                <div style="padding: 16px; background: #fff3e0; border-radius: 8px;">
+                                    <div style="font-size: 14px; color: #f57c00;">Expired This Month</div>
+                                    <div style="font-size: 28px; font-weight: bold; color: #e65100;" id="retExpired">-</div>
+                                </div>
+                                <div style="padding: 16px; background: #e8f5e9; border-radius: 8px;">
+                                    <div style="font-size: 14px; color: #388e3c;">Retention Rate</div>
+                                    <div style="font-size: 28px; font-weight: bold; color: #2e7d32;" id="retRetentionRate">-</div>
+                                </div>
+                                <div style="padding: 16px; background: #fce4ec; border-radius: 8px;">
+                                    <div style="font-size: 14px; color: #c2185b;">Churn Rate</div>
+                                    <div style="font-size: 28px; font-weight: bold; color: #ad1457;" id="retChurnRate">-</div>
+                                </div>
+                                <div style="padding: 16px; background: #f5f5f5; border-radius: 8px;">
+                                    <div style="font-size: 14px; color: #5f6368;">Avg Subscription</div>
+                                    <div style="font-size: 28px; font-weight: bold;" id="retAvgDays">-</div>
+                                </div>
+                                <div style="padding: 16px; background: #f3e5f5; border-radius: 8px;">
+                                    <div style="font-size: 14px; color: #7b1fa2;">Lifetime Value</div>
+                                    <div style="font-size: 28px; font-weight: bold; color: #6a1b9a;" id="retLTV">-</div>
+                                </div>
+                            </div>
+                            
+                            <!-- Cohort Analysis -->
+                            <h4 style="font-size: 18px; margin: 24px 0 16px; color: #202124;">Cohort Analysis</h4>
+                            <table class="sheet-table">
+                                <thead>
+                                    <tr>
+                                        <th>Cohort Month</th>
+                                        <th>Total Users</th>
+                                        <th>Still Active</th>
+                                        <th>Retention %</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="cohortTableBody"></tbody>
+                            </table>
                         </div>
                     </div>
                 </div>
@@ -1584,6 +1850,320 @@
 
         // Call on page load
         setTimeout(initializeCharts, 1000);
+
+        // ==================== REPORTS FUNCTIONS ====================
+        
+        let currentReportData = null;
+        
+        function updateReportFilters() {
+            const reportType = document.getElementById('reportType').value;
+            
+            // Show/hide filter groups based on report type
+            document.getElementById('startDateGroup').style.display = ['user-activity', 'performance'].includes(reportType) ? 'block' : 'none';
+            document.getElementById('endDateGroup').style.display = ['user-activity', 'performance'].includes(reportType) ? 'block' : 'none';
+            document.getElementById('quickFiltersGroup').style.display = ['user-activity', 'performance'].includes(reportType) ? 'block' : 'none';
+            document.getElementById('licenseTypeGroup').style.display = ['user-activity', 'revenue'].includes(reportType) ? 'block' : 'none';
+            document.getElementById('statusGroup').style.display = reportType === 'user-activity' ? 'block' : 'none';
+            document.getElementById('symbolGroup').style.display = reportType === 'performance' ? 'block' : 'none';
+            document.getElementById('monthGroup').style.display = reportType === 'revenue' ? 'block' : 'none';
+            document.getElementById('yearGroup').style.display = reportType === 'revenue' ? 'block' : 'none';
+            
+            // Set default month/year for revenue report
+            if (reportType === 'revenue') {
+                const now = new Date();
+                document.getElementById('reportMonth').value = now.getMonth() + 1;
+                document.getElementById('reportYear').value = now.getFullYear();
+            }
+        }
+        
+        function setQuickDateRange(range) {
+            const now = new Date();
+            let startDate, endDate;
+            
+            if (typeof range === 'number') {
+                // Last N days
+                startDate = new Date(now.getTime() - range * 24 * 60 * 60 * 1000);
+                endDate = now;
+            } else if (range === 'month') {
+                startDate = new Date(now.getFullYear(), now.getMonth(), 1);
+                endDate = now;
+            } else if (range === 'lastMonth') {
+                startDate = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+                endDate = new Date(now.getFullYear(), now.getMonth(), 0);
+            } else if (range === 'quarter') {
+                const quarter = Math.floor(now.getMonth() / 3);
+                startDate = new Date(now.getFullYear(), quarter * 3, 1);
+                endDate = now;
+            } else if (range === 'year') {
+                startDate = new Date(now.getFullYear(), 0, 1);
+                endDate = now;
+            }
+            
+            document.getElementById('reportStartDate').value = startDate.toISOString().split('T')[0];
+            document.getElementById('reportEndDate').value = endDate.toISOString().split('T')[0];
+        }
+        
+        async function generateReport() {
+            const reportType = document.getElementById('reportType').value;
+            const loadingIndicator = document.getElementById('reportLoadingIndicator');
+            const exportBtn = document.getElementById('exportReportBtn');
+            
+            // Show loading
+            loadingIndicator.style.display = 'inline';
+            exportBtn.style.display = 'none';
+            
+            // Hide all result sections
+            document.getElementById('userActivityResults').style.display = 'none';
+            document.getElementById('revenueResults').style.display = 'none';
+            document.getElementById('performanceResults').style.display = 'none';
+            document.getElementById('retentionResults').style.display = 'none';
+            
+            try {
+                let url = `${API_URL}/api/admin/reports/${reportType}`;
+                let params = [];
+                
+                // Build query params based on report type
+                if (reportType === 'user-activity') {
+                    const startDate = document.getElementById('reportStartDate').value;
+                    const endDate = document.getElementById('reportEndDate').value;
+                    const licenseType = document.getElementById('reportLicenseType').value;
+                    const status = document.getElementById('reportStatus').value;
+                    
+                    if (startDate) params.push(`start_date=${startDate}`);
+                    if (endDate) params.push(`end_date=${endDate}`);
+                    if (licenseType !== 'all') params.push(`license_type=${licenseType}`);
+                    if (status !== 'all') params.push(`status=${status}`);
+                } else if (reportType === 'performance') {
+                    const startDate = document.getElementById('reportStartDate').value;
+                    const endDate = document.getElementById('reportEndDate').value;
+                    const symbol = document.getElementById('reportSymbol').value;
+                    
+                    if (startDate) params.push(`start_date=${startDate}`);
+                    if (endDate) params.push(`end_date=${endDate}`);
+                    if (symbol !== 'all') params.push(`symbol=${symbol}`);
+                } else if (reportType === 'revenue') {
+                    const month = document.getElementById('reportMonth').value;
+                    const year = document.getElementById('reportYear').value;
+                    const licenseType = document.getElementById('reportLicenseType').value;
+                    
+                    params.push(`month=${month}`);
+                    params.push(`year=${year}`);
+                    if (licenseType !== 'all') params.push(`license_type=${licenseType}`);
+                }
+                
+                if (params.length > 0) {
+                    url += '?' + params.join('&');
+                }
+                
+                const response = await fetch(url, {
+                    headers: {
+                        'X-API-Key': ADMIN_API_KEY
+                    }
+                });
+                
+                const data = await response.json();
+                currentReportData = data;
+                
+                // Display results based on report type
+                if (reportType === 'user-activity') {
+                    displayUserActivityReport(data);
+                } else if (reportType === 'revenue') {
+                    displayRevenueReport(data);
+                } else if (reportType === 'performance') {
+                    displayPerformanceReport(data);
+                } else if (reportType === 'retention') {
+                    displayRetentionReport(data);
+                }
+                
+                // Show export button and results
+                document.getElementById('reportResults').style.display = 'block';
+                exportBtn.style.display = 'inline-block';
+                
+            } catch (error) {
+                console.error('Report generation error:', error);
+                alert('Error generating report. Please try again.');
+            } finally {
+                loadingIndicator.style.display = 'none';
+            }
+        }
+        
+        function displayUserActivityReport(data) {
+            const tbody = document.getElementById('userActivityTableBody');
+            const countEl = document.getElementById('userActivityCount');
+            
+            countEl.textContent = `${data.count || 0} users found`;
+            tbody.innerHTML = '';
+            
+            if (!data.data || data.data.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="9" class="empty-state"><div class="empty-state-text">No data found</div></td></tr>';
+            } else {
+                data.data.forEach(row => {
+                    const tr = document.createElement('tr');
+                    const pnlClass = row.total_pnl > 0 ? 'profit' : row.total_pnl < 0 ? 'loss' : '';
+                    tr.innerHTML = `
+                        <td>${row.account_id}</td>
+                        <td>${row.email}</td>
+                        <td>${row.signup_date}</td>
+                        <td>${row.last_active}</td>
+                        <td><span class="badge badge-${row.license_type.toLowerCase()}">${row.license_type}</span></td>
+                        <td><span class="badge badge-${row.status.toLowerCase()}">${row.status}</span></td>
+                        <td>${row.api_calls.toLocaleString()}</td>
+                        <td>${row.trades.toLocaleString()}</td>
+                        <td class="${pnlClass}">$${row.total_pnl.toFixed(2)}</td>
+                    `;
+                    tbody.appendChild(tr);
+                });
+            }
+            
+            document.getElementById('userActivityResults').style.display = 'block';
+        }
+        
+        function displayRevenueReport(data) {
+            document.getElementById('revNewSubs').textContent = data.new_subscriptions || 0;
+            document.getElementById('revNewRev').textContent = `Revenue: $${(data.new_revenue || 0).toFixed(2)}`;
+            document.getElementById('revMRR').textContent = `$${(data.net_mrr || 0).toFixed(2)}`;
+            document.getElementById('revARPU').textContent = `ARPU: $${(data.arpu || 0).toFixed(2)}`;
+            document.getElementById('revCancellations').textContent = data.cancellations || 0;
+            document.getElementById('revLostRev').textContent = `Lost: $${(data.lost_revenue || 0).toFixed(2)}`;
+            document.getElementById('revChurnRate').textContent = `${(data.churn_rate || 0).toFixed(2)}%`;
+            
+            document.getElementById('revenueResults').style.display = 'block';
+        }
+        
+        function displayPerformanceReport(data) {
+            document.getElementById('perfTotalTrades').textContent = (data.total_trades || 0).toLocaleString();
+            document.getElementById('perfWinRate').textContent = `${(data.win_rate || 0).toFixed(2)}%`;
+            
+            const pnl = data.total_pnl || 0;
+            const pnlClass = pnl > 0 ? 'profit' : pnl < 0 ? 'loss' : '';
+            document.getElementById('perfTotalPnL').innerHTML = `<span class="${pnlClass}">$${pnl.toFixed(2)}</span>`;
+            
+            document.getElementById('perfAvgDuration').textContent = `${(data.avg_duration_minutes || 0).toFixed(1)} min`;
+            document.getElementById('perfBestDay').textContent = data.best_day?.date || 'N/A';
+            document.getElementById('perfBestDayPnL').textContent = data.best_day ? `$${data.best_day.pnl.toFixed(2)}` : '';
+            document.getElementById('perfWorstDay').textContent = data.worst_day?.date || 'N/A';
+            document.getElementById('perfWorstDayPnL').textContent = data.worst_day ? `$${data.worst_day.pnl.toFixed(2)}` : '';
+            
+            document.getElementById('performanceResults').style.display = 'block';
+        }
+        
+        function displayRetentionReport(data) {
+            document.getElementById('retActiveUsers').textContent = (data.active_users || 0).toLocaleString();
+            document.getElementById('retExpired').textContent = (data.expired_this_month || 0).toLocaleString();
+            document.getElementById('retRetentionRate').textContent = `${(data.retention_rate || 0).toFixed(2)}%`;
+            document.getElementById('retChurnRate').textContent = `${(data.churn_rate || 0).toFixed(2)}%`;
+            document.getElementById('retAvgDays').textContent = `${Math.round(data.avg_subscription_days || 0)} days`;
+            document.getElementById('retLTV').textContent = `$${(data.lifetime_value || 0).toFixed(2)}`;
+            
+            // Cohort table
+            const cohortTbody = document.getElementById('cohortTableBody');
+            cohortTbody.innerHTML = '';
+            
+            if (data.cohorts && data.cohorts.length > 0) {
+                data.cohorts.forEach(cohort => {
+                    const tr = document.createElement('tr');
+                    tr.innerHTML = `
+                        <td>${cohort.month}</td>
+                        <td>${cohort.users}</td>
+                        <td>${cohort.still_active}</td>
+                        <td>${cohort.retention.toFixed(2)}%</td>
+                    `;
+                    cohortTbody.appendChild(tr);
+                });
+            } else {
+                cohortTbody.innerHTML = '<tr><td colspan="4" class="empty-state"><div class="empty-state-text">No cohort data</div></td></tr>';
+            }
+            
+            document.getElementById('retentionResults').style.display = 'block';
+        }
+        
+        function sortReportTable(columnIndex) {
+            const tbody = document.getElementById('userActivityTableBody');
+            const rows = Array.from(tbody.getElementsByTagName('tr'));
+            
+            rows.sort((a, b) => {
+                const aValue = a.cells[columnIndex].textContent.trim();
+                const bValue = b.cells[columnIndex].textContent.trim();
+                
+                // Try to parse as number
+                const aNum = parseFloat(aValue.replace(/[^0-9.-]/g, ''));
+                const bNum = parseFloat(bValue.replace(/[^0-9.-]/g, ''));
+                
+                if (!isNaN(aNum) && !isNaN(bNum)) {
+                    return bNum - aNum;  // Descending for numbers
+                }
+                
+                return aValue.localeCompare(bValue);  // Ascending for strings
+            });
+            
+            rows.forEach(row => tbody.appendChild(row));
+        }
+        
+        function exportReportCSV() {
+            const reportType = document.getElementById('reportType').value;
+            
+            if (!currentReportData) {
+                alert('No report data to export');
+                return;
+            }
+            
+            let csv = '';
+            let filename = `${reportType}-report-${new Date().toISOString().split('T')[0]}.csv`;
+            
+            if (reportType === 'user-activity' && currentReportData.data) {
+                csv = 'Account ID,Email,Signup Date,Last Active,License Type,Status,API Calls,Trades,Total P&L\n';
+                currentReportData.data.forEach(row => {
+                    csv += `${row.account_id},"${row.email}",${row.signup_date},${row.last_active},${row.license_type},${row.status},${row.api_calls},${row.trades},${row.total_pnl}\n`;
+                });
+            } else if (reportType === 'revenue') {
+                csv = 'Metric,Value\n';
+                csv += `New Subscriptions,${currentReportData.new_subscriptions}\n`;
+                csv += `New Revenue,$${currentReportData.new_revenue}\n`;
+                csv += `Net MRR,$${currentReportData.net_mrr}\n`;
+                csv += `ARPU,$${currentReportData.arpu}\n`;
+                csv += `Cancellations,${currentReportData.cancellations}\n`;
+                csv += `Lost Revenue,$${currentReportData.lost_revenue}\n`;
+                csv += `Churn Rate,${currentReportData.churn_rate}%\n`;
+            } else if (reportType === 'performance') {
+                csv = 'Metric,Value\n';
+                csv += `Total Trades,${currentReportData.total_trades}\n`;
+                csv += `Win Rate,${currentReportData.win_rate}%\n`;
+                csv += `Total P&L,$${currentReportData.total_pnl}\n`;
+                csv += `Avg Confidence,${currentReportData.avg_confidence}\n`;
+                csv += `Avg Duration,${currentReportData.avg_duration_minutes} min\n`;
+                csv += `Best Day,${currentReportData.best_day?.date}\n`;
+                csv += `Best Day P&L,$${currentReportData.best_day?.pnl}\n`;
+                csv += `Worst Day,${currentReportData.worst_day?.date}\n`;
+                csv += `Worst Day P&L,$${currentReportData.worst_day?.pnl}\n`;
+            } else if (reportType === 'retention') {
+                csv = 'Metric,Value\n';
+                csv += `Active Users,${currentReportData.active_users}\n`;
+                csv += `Expired This Month,${currentReportData.expired_this_month}\n`;
+                csv += `Retention Rate,${currentReportData.retention_rate}%\n`;
+                csv += `Churn Rate,${currentReportData.churn_rate}%\n`;
+                csv += `Avg Subscription Days,${currentReportData.avg_subscription_days}\n`;
+                csv += `Lifetime Value,$${currentReportData.lifetime_value}\n\n`;
+                
+                if (currentReportData.cohorts) {
+                    csv += 'Cohort Month,Users,Still Active,Retention %\n';
+                    currentReportData.cohorts.forEach(c => {
+                        csv += `${c.month},${c.users},${c.still_active},${c.retention}%\n`;
+                    });
+                }
+            }
+            
+            // Download
+            const blob = new Blob([csv], { type: 'text/csv' });
+            const url = window.URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = filename;
+            a.click();
+            window.URL.revokeObjectURL(url);
+        }
+        
+        // Initialize report filters on load
+        updateReportFilters();
     </script>
     
     <!-- Chart.js Library (Phase 2) -->

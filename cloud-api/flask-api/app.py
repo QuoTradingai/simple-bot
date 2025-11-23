@@ -2052,6 +2052,369 @@ def admin_chart_confidence_winrate():
     finally:
         conn.close()
 
+# ==================== REPORTS ENDPOINTS ====================
+
+@app.route('/api/admin/reports/user-activity', methods=['GET'])
+def admin_report_user_activity():
+    """Generate user activity report with date range filters"""
+    auth_header = request.headers.get('X-API-Key')
+    if auth_header != ADMIN_API_KEY:
+        return jsonify({"error": "Unauthorized"}), 401
+    
+    # Get query parameters
+    start_date = request.args.get('start_date')
+    end_date = request.args.get('end_date')
+    license_type = request.args.get('license_type', 'all')
+    status = request.args.get('status', 'all')
+    
+    try:
+        conn = psycopg2.connect(
+            host=DB_HOST,
+            database=DB_NAME,
+            user=DB_USER,
+            password=DB_PASSWORD,
+            port=DB_PORT
+        )
+        cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        
+        query = """
+            SELECT 
+                l.account_id,
+                l.email,
+                l.created_at,
+                l.last_active,
+                l.license_type,
+                l.license_status,
+                COUNT(DISTINCT a.id) as api_calls,
+                COUNT(DISTINCT r.id) FILTER (WHERE r.took_trade = TRUE) as trades,
+                COALESCE(SUM(r.pnl), 0) as total_pnl
+            FROM licenses l
+            LEFT JOIN api_logs a ON l.license_key = a.license_key
+            LEFT JOIN rl_experiences r ON l.license_key = r.license_key AND r.took_trade = TRUE
+            WHERE 1=1
+        """
+        params = []
+        
+        if start_date:
+            query += " AND l.created_at >= %s"
+            params.append(start_date)
+        if end_date:
+            query += " AND l.created_at <= %s"
+            params.append(end_date)
+        if license_type != 'all':
+            query += " AND UPPER(l.license_type) = UPPER(%s)"
+            params.append(license_type)
+        if status != 'all':
+            query += " AND UPPER(l.license_status) = UPPER(%s)"
+            params.append(status)
+        
+        query += " GROUP BY l.account_id, l.email, l.created_at, l.last_active, l.license_type, l.license_status"
+        query += " ORDER BY l.created_at DESC LIMIT 500"
+        
+        cursor.execute(query, params)
+        results = cursor.fetchall()
+        
+        # Format results
+        formatted_results = []
+        for r in results:
+            formatted_results.append({
+                "account_id": r['account_id'][:8] + "..." if r['account_id'] else "N/A",
+                "email": r['email'],
+                "signup_date": r['created_at'].strftime('%Y-%m-%d') if r['created_at'] else "N/A",
+                "last_active": r['last_active'].strftime('%Y-%m-%d %H:%M') if r['last_active'] else "Never",
+                "license_type": r['license_type'],
+                "status": r['license_status'],
+                "api_calls": int(r['api_calls']),
+                "trades": int(r['trades']),
+                "total_pnl": round(float(r['total_pnl']), 2)
+            })
+        
+        return jsonify({"data": formatted_results, "count": len(formatted_results)}), 200
+    except Exception as e:
+        logging.error(f"User activity report error: {e}")
+        return jsonify({"error": str(e), "data": [], "count": 0}), 200
+    finally:
+        conn.close()
+
+@app.route('/api/admin/reports/revenue', methods=['GET'])
+def admin_report_revenue():
+    """Generate revenue analysis report"""
+    auth_header = request.headers.get('X-API-Key')
+    if auth_header != ADMIN_API_KEY:
+        return jsonify({"error": "Unauthorized"}), 401
+    
+    month = request.args.get('month', str(datetime.now().month))
+    year = request.args.get('year', str(datetime.now().year))
+    license_type_filter = request.args.get('license_type', 'all')
+    
+    try:
+        conn = psycopg2.connect(
+            host=DB_HOST,
+            database=DB_NAME,
+            user=DB_USER,
+            password=DB_PASSWORD,
+            port=DB_PORT
+        )
+        cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        
+        # Define pricing
+        pricing = {
+            'MONTHLY': 49.99,
+            'ANNUAL': 499.99,
+            'TRIAL': 0.00
+        }
+        
+        # Get new subscriptions
+        query_new = """
+            SELECT COUNT(*) as count, UPPER(license_type) as type
+            FROM licenses
+            WHERE EXTRACT(MONTH FROM created_at) = %s
+              AND EXTRACT(YEAR FROM created_at) = %s
+        """
+        params = [int(month), int(year)]
+        
+        if license_type_filter != 'all':
+            query_new += " AND UPPER(license_type) = UPPER(%s)"
+            params.append(license_type_filter)
+        
+        query_new += " GROUP BY UPPER(license_type)"
+        cursor.execute(query_new, params)
+        new_subs = cursor.fetchall()
+        
+        # Calculate metrics
+        new_count = sum(r['count'] for r in new_subs)
+        new_revenue = sum(r['count'] * pricing.get(r['type'], 0) for r in new_subs)
+        
+        # Get active users
+        cursor.execute("""
+            SELECT COUNT(*) as count
+            FROM licenses
+            WHERE UPPER(license_status) = 'ACTIVE'
+        """)
+        active_users = cursor.fetchone()['count']
+        
+        # Get expired this month
+        cursor.execute("""
+            SELECT COUNT(*) as count
+            FROM licenses
+            WHERE license_expires >= %s
+              AND license_expires < %s
+              AND EXTRACT(MONTH FROM license_expires) = %s
+              AND EXTRACT(YEAR FROM license_expires) = %s
+        """, [
+            f"{year}-{month}-01",
+            f"{year}-{int(month)+1 if int(month) < 12 else 1}-01",
+            int(month),
+            int(year)
+        ])
+        expired = cursor.fetchone()['count']
+        
+        # Calculate MRR (all active monthly licenses)
+        cursor.execute("""
+            SELECT COUNT(*) as count, UPPER(license_type) as type
+            FROM licenses
+            WHERE UPPER(license_status) = 'ACTIVE'
+            GROUP BY UPPER(license_type)
+        """)
+        active_breakdown = cursor.fetchall()
+        
+        mrr = sum(r['count'] * (pricing.get(r['type'], 0) if r['type'] == 'MONTHLY' else pricing.get(r['type'], 0) / 12) for r in active_breakdown)
+        arpu = mrr / active_users if active_users > 0 else 0
+        churn_rate = (expired / active_users * 100) if active_users > 0 else 0
+        
+        return jsonify({
+            "new_subscriptions": new_count,
+            "new_revenue": round(new_revenue, 2),
+            "renewals": 0,  # Would need renewal tracking
+            "renewal_revenue": 0.00,
+            "cancellations": expired,
+            "lost_revenue": round(expired * 49.99, 2),  # Estimate
+            "net_mrr": round(mrr, 2),
+            "churn_rate": round(churn_rate, 2),
+            "arpu": round(arpu, 2),
+            "active_users": active_users
+        }), 200
+    except Exception as e:
+        logging.error(f"Revenue report error: {e}")
+        return jsonify({"error": str(e)}), 200
+    finally:
+        conn.close()
+
+@app.route('/api/admin/reports/performance', methods=['GET'])
+def admin_report_performance():
+    """Generate trading performance report"""
+    auth_header = request.headers.get('X-API-Key')
+    if auth_header != ADMIN_API_KEY:
+        return jsonify({"error": "Unauthorized"}), 401
+    
+    start_date = request.args.get('start_date')
+    end_date = request.args.get('end_date')
+    symbol = request.args.get('symbol', 'all')
+    
+    try:
+        conn = psycopg2.connect(
+            host=DB_HOST,
+            database=DB_NAME,
+            user=DB_USER,
+            password=DB_PASSWORD,
+            port=DB_PORT
+        )
+        cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        
+        query = """
+            SELECT 
+                COUNT(*) as total_trades,
+                AVG(CASE WHEN pnl > 0 THEN 1.0 ELSE 0.0 END) * 100 as win_rate,
+                SUM(pnl) as total_pnl,
+                AVG(confidence) as avg_confidence,
+                AVG(EXTRACT(EPOCH FROM (exit_time - entry_time)) / 60) as avg_duration_minutes
+            FROM rl_experiences
+            WHERE took_trade = TRUE
+        """
+        params = []
+        
+        if start_date:
+            query += " AND timestamp >= %s"
+            params.append(start_date)
+        if end_date:
+            query += " AND timestamp <= %s"
+            params.append(end_date)
+        if symbol != 'all':
+            query += " AND symbol = %s"
+            params.append(symbol)
+        
+        cursor.execute(query, params)
+        result = cursor.fetchone()
+        
+        # Get best and worst days
+        day_query = """
+            SELECT 
+                DATE(timestamp) as trade_date,
+                SUM(pnl) as daily_pnl
+            FROM rl_experiences
+            WHERE took_trade = TRUE
+        """
+        if start_date:
+            day_query += " AND timestamp >= %s"
+        if end_date:
+            day_query += " AND timestamp <= %s"
+        if symbol != 'all':
+            day_query += " AND symbol = %s"
+        
+        day_query += " GROUP BY DATE(timestamp) ORDER BY daily_pnl DESC LIMIT 1"
+        cursor.execute(day_query, params)
+        best_day = cursor.fetchone()
+        
+        day_query = day_query.replace("DESC", "ASC")
+        cursor.execute(day_query, params)
+        worst_day = cursor.fetchone()
+        
+        return jsonify({
+            "total_trades": int(result['total_trades']) if result['total_trades'] else 0,
+            "win_rate": round(float(result['win_rate']), 2) if result['win_rate'] else 0,
+            "total_pnl": round(float(result['total_pnl']), 2) if result['total_pnl'] else 0,
+            "avg_confidence": round(float(result['avg_confidence']), 2) if result['avg_confidence'] else 0,
+            "avg_duration_minutes": round(float(result['avg_duration_minutes']), 2) if result['avg_duration_minutes'] else 0,
+            "best_day": {
+                "date": best_day['trade_date'].strftime('%Y-%m-%d') if best_day else "N/A",
+                "pnl": round(float(best_day['daily_pnl']), 2) if best_day else 0
+            },
+            "worst_day": {
+                "date": worst_day['trade_date'].strftime('%Y-%m-%d') if worst_day else "N/A",
+                "pnl": round(float(worst_day['daily_pnl']), 2) if worst_day else 0
+            }
+        }), 200
+    except Exception as e:
+        logging.error(f"Performance report error: {e}")
+        return jsonify({"error": str(e)}), 200
+    finally:
+        conn.close()
+
+@app.route('/api/admin/reports/retention', methods=['GET'])
+def admin_report_retention():
+    """Generate retention and churn report"""
+    auth_header = request.headers.get('X-API-Key')
+    if auth_header != ADMIN_API_KEY:
+        return jsonify({"error": "Unauthorized"}), 401
+    
+    try:
+        conn = psycopg2.connect(
+            host=DB_HOST,
+            database=DB_NAME,
+            user=DB_USER,
+            password=DB_PASSWORD,
+            port=DB_PORT
+        )
+        cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        
+        # Current active users
+        cursor.execute("SELECT COUNT(*) as count FROM licenses WHERE UPPER(license_status) = 'ACTIVE'")
+        active_users = cursor.fetchone()['count']
+        
+        # Expired this month
+        cursor.execute("""
+            SELECT COUNT(*) as count FROM licenses
+            WHERE license_expires >= DATE_TRUNC('month', NOW())
+              AND license_expires < DATE_TRUNC('month', NOW()) + INTERVAL '1 month'
+        """)
+        expired_this_month = cursor.fetchone()['count']
+        
+        # Average subscription length
+        cursor.execute("""
+            SELECT AVG(EXTRACT(DAY FROM license_expires - created_at)) as avg_days
+            FROM licenses
+            WHERE license_expires IS NOT NULL
+        """)
+        avg_length = cursor.fetchone()['avg_days']
+        
+        # Cohort analysis - users by signup month
+        cursor.execute("""
+            SELECT 
+                TO_CHAR(created_at, 'YYYY-MM') as cohort_month,
+                COUNT(*) as users,
+                COUNT(*) FILTER (WHERE UPPER(license_status) = 'ACTIVE') as still_active
+            FROM licenses
+            WHERE created_at >= NOW() - INTERVAL '12 months'
+            GROUP BY TO_CHAR(created_at, 'YYYY-MM')
+            ORDER BY cohort_month DESC
+            LIMIT 12
+        """)
+        cohorts = cursor.fetchall()
+        
+        # Calculate metrics
+        renewals = active_users - expired_this_month if active_users > 0 else 0
+        retention_rate = (renewals / active_users * 100) if active_users > 0 else 0
+        churn_rate = (expired_this_month / active_users * 100) if active_users > 0 else 0
+        
+        # Lifetime value (average)
+        ltv = (avg_length / 30 * 49.99) if avg_length else 0
+        
+        cohort_data = []
+        for c in cohorts:
+            retention = (c['still_active'] / c['users'] * 100) if c['users'] > 0 else 0
+            cohort_data.append({
+                "month": c['cohort_month'],
+                "users": c['users'],
+                "still_active": c['still_active'],
+                "retention": round(retention, 2)
+            })
+        
+        return jsonify({
+            "active_users": active_users,
+            "expired_this_month": expired_this_month,
+            "renewals": renewals,
+            "retention_rate": round(retention_rate, 2),
+            "churn_rate": round(churn_rate, 2),
+            "avg_subscription_days": round(float(avg_length), 2) if avg_length else 0,
+            "lifetime_value": round(ltv, 2),
+            "cohorts": cohort_data
+        }), 200
+    except Exception as e:
+        logging.error(f"Retention report error: {e}")
+        return jsonify({"error": str(e)}), 200
+    finally:
+        conn.close()
+
 def init_database_if_needed():
     """Initialize database table and indexes if they don't exist"""
     try:
