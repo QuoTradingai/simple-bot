@@ -680,6 +680,10 @@
             <div class="stat-value online" id="onlineUsers">0</div>
         </div>
         <div class="stat-item">
+            <div class="stat-label">MRR</div>
+            <div class="stat-value" style="color: #34a853;" id="mrr">$0.00</div>
+        </div>
+        <div class="stat-item">
             <div class="stat-label">API Calls (24h)</div>
             <div class="stat-value" id="apiCalls">0</div>
         </div>
@@ -1254,6 +1258,12 @@
                 pnlEl.textContent = '$' + pnl.toFixed(2);
                 pnlEl.className = 'stat-value ' + (pnl >= 0 ? 'profit' : 'loss');
                 
+                // Update revenue metrics
+                if (data.revenue) {
+                    const mrrEl = document.getElementById('mrr');
+                    mrrEl.textContent = '$' + (data.revenue.mrr || 0).toFixed(2);
+                }
+                
                 // Update RL experience count from database
                 const dbSignalExp = data.rl_experiences?.total_signal_experiences || 0;
                 
@@ -1825,7 +1835,7 @@
         // Chart loading functions
         async function loadChartData(endpoint) {
             try {
-                const response = await fetch(`${API_URL}/api/admin/charts/${endpoint}?admin_key=${API_KEY}`);
+                const response = await fetch(`${API_URL}/api/admin/charts/${endpoint}?admin_key=${ADMIN_KEY}`);
                 if (!response.ok) throw new Error('Chart data fetch failed');
                 return await response.json();
             } catch (error) {
@@ -1957,7 +1967,7 @@
                 
                 const response = await fetch(url, {
                     headers: {
-                        'X-API-Key': ADMIN_API_KEY
+                        'X-API-Key': ADMIN_KEY
                     }
                 });
                 

@@ -26,6 +26,7 @@ DB_HOST = os.environ.get("DB_HOST", "quotrading-db.postgres.database.azure.com")
 DB_NAME = os.environ.get("DB_NAME", "quotrading")
 DB_USER = os.environ.get("DB_USER", "quotradingadmin")
 DB_PASSWORD = os.environ.get("DB_PASSWORD")
+DB_PORT = os.environ.get("DB_PORT", "5432")
 
 # Stripe configuration
 stripe.api_key = os.environ.get("STRIPE_API_KEY", "")
@@ -782,6 +783,33 @@ def admin_dashboard_stats():
             total_trades = trade_stats['total_trades'] or 0
             total_pnl = float(trade_stats['total_pnl']) if trade_stats['total_pnl'] else 0.0
             
+            # Calculate revenue metrics
+            pricing = {
+                'MONTHLY': 200.00,
+                'ANNUAL': 2000.00,
+                'TRIAL': 0.00,
+                'BETA': 0.00
+            }
+            
+            # Get active subscriptions breakdown
+            cursor.execute("""
+                SELECT COUNT(*) as count, UPPER(license_type) as type
+                FROM users
+                WHERE UPPER(license_status) = 'ACTIVE'
+                GROUP BY UPPER(license_type)
+            """)
+            active_breakdown = cursor.fetchall()
+            
+            # Calculate MRR (Monthly Recurring Revenue)
+            mrr = sum(
+                r['count'] * (pricing.get(r['type'], 0) if r['type'] == 'MONTHLY' 
+                             else pricing.get(r['type'], 0) / 12) 
+                for r in active_breakdown
+            )
+            
+            # Calculate ARR (Annual Recurring Revenue)
+            arr = mrr * 12
+            
             return jsonify({
                 "users": {
                     "total": total_users,
@@ -798,6 +826,11 @@ def admin_dashboard_stats():
                 "rl_experiences": {
                     "total_signal_experiences": signal_exp_total,
                     "signal_experiences_24h": signal_exp_24h
+                },
+                "revenue": {
+                    "mrr": round(mrr, 2),
+                    "arr": round(arr, 2),
+                    "active_subscriptions": active_breakdown
                 }
             }), 200
     except Exception as e:
@@ -1412,7 +1445,7 @@ def analyze_signal():
         try:
             cursor.execute("""
                 SELECT license_key, status, expires_at 
-                FROM licenses 
+                FROM users 
                 WHERE license_key = %s
             """, (license_key,))
             
@@ -1518,7 +1551,7 @@ def submit_outcome():
             cursor = conn.cursor(cursor_factory=RealDictCursor)
             cursor.execute("""
                 SELECT license_key, status, expires_at 
-                FROM licenses 
+                FROM users 
                 WHERE license_key = %s
             """, (license_key,))
             
@@ -1723,7 +1756,7 @@ def admin_chart_user_growth():
                 SELECT 
                     DATE_TRUNC('week', created_at) as week,
                     COUNT(*) as count
-                FROM licenses
+                FROM users
                 WHERE created_at >= NOW() - INTERVAL '12 weeks'
                 GROUP BY week
                 ORDER BY week
@@ -1792,9 +1825,9 @@ def admin_chart_mrr():
             cursor.execute("""
                 SELECT 
                     TO_CHAR(DATE_TRUNC('month', created_at), 'Mon') as month,
-                    COUNT(*) FILTER (WHERE license_type = 'MONTHLY') * 49.99 +
-                    COUNT(*) FILTER (WHERE license_type = 'ANNUAL') * 499.99 as revenue
-                FROM licenses
+                    COUNT(*) FILTER (WHERE license_type = 'MONTHLY') * 200.00 +
+                    COUNT(*) FILTER (WHERE license_type = 'ANNUAL') * 2000.00 as revenue
+                FROM users
                 WHERE created_at >= NOW() - INTERVAL '6 months'
                 AND UPPER(license_status) = 'ACTIVE'
                 GROUP BY DATE_TRUNC('month', created_at)
@@ -2088,7 +2121,7 @@ def admin_report_user_activity():
                 COUNT(DISTINCT a.id) as api_calls,
                 COUNT(DISTINCT r.id) FILTER (WHERE r.took_trade = TRUE) as trades,
                 COALESCE(SUM(r.pnl), 0) as total_pnl
-            FROM licenses l
+            FROM users l
             LEFT JOIN api_logs a ON l.license_key = a.license_key
             LEFT JOIN rl_experiences r ON l.license_key = r.license_key AND r.took_trade = TRUE
             WHERE 1=1
@@ -2159,15 +2192,15 @@ def admin_report_revenue():
         
         # Define pricing
         pricing = {
-            'MONTHLY': 49.99,
-            'ANNUAL': 499.99,
+            'MONTHLY': 200.00,
+            'ANNUAL': 2000.00,
             'TRIAL': 0.00
         }
         
         # Get new subscriptions
         query_new = """
             SELECT COUNT(*) as count, UPPER(license_type) as type
-            FROM licenses
+            FROM users
             WHERE EXTRACT(MONTH FROM created_at) = %s
               AND EXTRACT(YEAR FROM created_at) = %s
         """
@@ -2188,7 +2221,7 @@ def admin_report_revenue():
         # Get active users
         cursor.execute("""
             SELECT COUNT(*) as count
-            FROM licenses
+            FROM users
             WHERE UPPER(license_status) = 'ACTIVE'
         """)
         active_users = cursor.fetchone()['count']
@@ -2196,11 +2229,11 @@ def admin_report_revenue():
         # Get expired this month
         cursor.execute("""
             SELECT COUNT(*) as count
-            FROM licenses
-            WHERE license_expires >= %s
-              AND license_expires < %s
-              AND EXTRACT(MONTH FROM license_expires) = %s
-              AND EXTRACT(YEAR FROM license_expires) = %s
+            FROM users
+            WHERE license_expiration >= %s
+              AND license_expiration < %s
+              AND EXTRACT(MONTH FROM license_expiration) = %s
+              AND EXTRACT(YEAR FROM license_expiration) = %s
         """, [
             f"{year}-{month}-01",
             f"{year}-{int(month)+1 if int(month) < 12 else 1}-01",
@@ -2212,7 +2245,7 @@ def admin_report_revenue():
         # Calculate MRR (all active monthly licenses)
         cursor.execute("""
             SELECT COUNT(*) as count, UPPER(license_type) as type
-            FROM licenses
+            FROM users
             WHERE UPPER(license_status) = 'ACTIVE'
             GROUP BY UPPER(license_type)
         """)
@@ -2228,7 +2261,7 @@ def admin_report_revenue():
             "renewals": 0,  # Would need renewal tracking
             "renewal_revenue": 0.00,
             "cancellations": expired,
-            "lost_revenue": round(expired * 49.99, 2),  # Estimate
+            "lost_revenue": round(expired * 200.00, 2),  # Estimate
             "net_mrr": round(mrr, 2),
             "churn_rate": round(churn_rate, 2),
             "arpu": round(arpu, 2),
@@ -2348,22 +2381,22 @@ def admin_report_retention():
         cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
         
         # Current active users
-        cursor.execute("SELECT COUNT(*) as count FROM licenses WHERE UPPER(license_status) = 'ACTIVE'")
+        cursor.execute("SELECT COUNT(*) as count FROM users WHERE UPPER(license_status) = 'ACTIVE'")
         active_users = cursor.fetchone()['count']
         
         # Expired this month
         cursor.execute("""
-            SELECT COUNT(*) as count FROM licenses
-            WHERE license_expires >= DATE_TRUNC('month', NOW())
-              AND license_expires < DATE_TRUNC('month', NOW()) + INTERVAL '1 month'
+            SELECT COUNT(*) as count FROM users
+            WHERE license_expiration >= DATE_TRUNC('month', NOW())
+              AND license_expiration < DATE_TRUNC('month', NOW()) + INTERVAL '1 month'
         """)
         expired_this_month = cursor.fetchone()['count']
         
         # Average subscription length
         cursor.execute("""
-            SELECT AVG(EXTRACT(DAY FROM license_expires - created_at)) as avg_days
-            FROM licenses
-            WHERE license_expires IS NOT NULL
+            SELECT AVG(EXTRACT(DAY FROM license_expiration - created_at)) as avg_days
+            FROM users
+            WHERE license_expiration IS NOT NULL
         """)
         avg_length = cursor.fetchone()['avg_days']
         
@@ -2373,7 +2406,7 @@ def admin_report_retention():
                 TO_CHAR(created_at, 'YYYY-MM') as cohort_month,
                 COUNT(*) as users,
                 COUNT(*) FILTER (WHERE UPPER(license_status) = 'ACTIVE') as still_active
-            FROM licenses
+            FROM users
             WHERE created_at >= NOW() - INTERVAL '12 months'
             GROUP BY TO_CHAR(created_at, 'YYYY-MM')
             ORDER BY cohort_month DESC
@@ -2387,7 +2420,7 @@ def admin_report_retention():
         churn_rate = (expired_this_month / active_users * 100) if active_users > 0 else 0
         
         # Lifetime value (average)
-        ltv = (avg_length / 30 * 49.99) if avg_length else 0
+        ltv = (avg_length / 30 * 200.00) if avg_length else 0
         
         cohort_data = []
         for c in cohorts:
@@ -2585,8 +2618,8 @@ def admin_bulk_extend():
         for key in license_keys:
             try:
                 cur.execute("""
-                    UPDATE licenses 
-                    SET license_expires = license_expires + INTERVAL '%s days'
+                    UPDATE users 
+                    SET license_expiration = license_expiration + INTERVAL '%s days'
                     WHERE license_key = %s
                 """, (days, key))
                 if cur.rowcount > 0:
@@ -2632,7 +2665,7 @@ def admin_bulk_suspend():
     
     try:
         cur.execute("""
-            UPDATE licenses 
+            UPDATE users 
             SET license_status = 'SUSPENDED'
             WHERE license_key = ANY(%s)
         """, (license_keys,))
@@ -2666,7 +2699,7 @@ def admin_bulk_activate():
     
     try:
         cur.execute("""
-            UPDATE licenses 
+            UPDATE users 
             SET license_status = 'ACTIVE'
             WHERE license_key = ANY(%s)
         """, (license_keys,))
@@ -2700,7 +2733,7 @@ def admin_bulk_delete():
     
     try:
         cur.execute("""
-            DELETE FROM licenses 
+            DELETE FROM users 
             WHERE license_key = ANY(%s)
         """, (license_keys,))
         success_count = cur.rowcount
@@ -2736,8 +2769,8 @@ def admin_retention_metrics():
                 SELECT 
                     COUNT(*) as total_expired,
                     COUNT(*) FILTER (WHERE license_status = 'CANCELLED' OR license_status = 'EXPIRED') as churned
-                FROM licenses
-                WHERE license_expires BETWEEN NOW() - INTERVAL '30 days' AND NOW()
+                FROM users
+                WHERE license_expiration BETWEEN NOW() - INTERVAL '30 days' AND NOW()
             )
             SELECT 
                 CASE WHEN total_expired > 0 
@@ -2752,8 +2785,8 @@ def admin_retention_metrics():
         # Average subscription length in months
         cur.execute("""
             SELECT 
-                AVG(EXTRACT(DAY FROM license_expires - created_at) / 30.0) as avg_months
-            FROM licenses
+                AVG(EXTRACT(DAY FROM license_expiration - created_at) / 30.0) as avg_months
+            FROM users
             WHERE created_at IS NOT NULL
         """)
         avg_sub = cur.fetchone()
@@ -2763,7 +2796,7 @@ def admin_retention_metrics():
         cur.execute("""
             WITH active_licenses AS (
                 SELECT COUNT(*) as total
-                FROM licenses
+                FROM users
                 WHERE license_status = 'ACTIVE'
             ),
             recent_activity AS (
@@ -2787,8 +2820,8 @@ def admin_retention_metrics():
                 SELECT 
                     COUNT(*) as total,
                     COUNT(*) FILTER (WHERE license_status = 'ACTIVE') as renewed
-                FROM licenses
-                WHERE license_expires BETWEEN NOW() - INTERVAL '60 days' AND NOW() - INTERVAL '30 days'
+                FROM users
+                WHERE license_expiration BETWEEN NOW() - INTERVAL '60 days' AND NOW() - INTERVAL '30 days'
             )
             SELECT 
                 CASE WHEN total > 0
@@ -2805,12 +2838,12 @@ def admin_retention_metrics():
             SELECT 
                 AVG(
                     CASE 
-                        WHEN license_type = 'MONTHLY' THEN (EXTRACT(DAY FROM license_expires - created_at) / 30.0) * 49.99
-                        WHEN license_type = 'ANNUAL' THEN (EXTRACT(DAY FROM license_expires - created_at) / 365.0) * 499.99
+                        WHEN license_type = 'MONTHLY' THEN (EXTRACT(DAY FROM license_expiration - created_at) / 30.0) * 200.00
+                        WHEN license_type = 'ANNUAL' THEN (EXTRACT(DAY FROM license_expiration - created_at) / 365.0) * 2000.00
                         ELSE 0
                     END
                 ) as avg_ltv
-            FROM licenses
+            FROM users
             WHERE created_at IS NOT NULL
         """)
         ltv_data = cur.fetchone()
@@ -2823,7 +2856,7 @@ def admin_retention_metrics():
                 l.email,
                 MAX(a.timestamp) as last_active,
                 EXTRACT(DAY FROM NOW() - MAX(a.timestamp)) as days_inactive
-            FROM licenses l
+            FROM users l
             LEFT JOIN api_logs a ON l.license_key = a.license_key
             WHERE l.license_status = 'ACTIVE'
             GROUP BY l.account_id, l.email
@@ -2843,7 +2876,7 @@ def admin_retention_metrics():
                     THEN (COUNT(*) FILTER (WHERE license_status = 'ACTIVE') * 100.0 / COUNT(*))
                     ELSE 0
                 END as retention_pct
-            FROM licenses
+            FROM users
             WHERE created_at >= NOW() - INTERVAL '12 months'
             GROUP BY DATE_TRUNC('month', created_at)
             ORDER BY cohort_month DESC
@@ -2853,11 +2886,11 @@ def admin_retention_metrics():
         # Churn trend (this month vs last month)
         cur.execute("""
             SELECT 
-                DATE_TRUNC('month', license_expires) as month,
+                DATE_TRUNC('month', license_expiration) as month,
                 COUNT(*) FILTER (WHERE license_status = 'CANCELLED' OR license_status = 'EXPIRED') * 100.0 / COUNT(*) as churn
-            FROM licenses
-            WHERE license_expires >= NOW() - INTERVAL '60 days'
-            GROUP BY DATE_TRUNC('month', license_expires)
+            FROM users
+            WHERE license_expiration >= NOW() - INTERVAL '60 days'
+            GROUP BY DATE_TRUNC('month', license_expiration)
             ORDER BY month DESC
             LIMIT 2
         """)
