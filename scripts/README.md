@@ -2,9 +2,67 @@
 
 This directory contains validation and testing scripts to ensure the trading bot and RL system work correctly before going live.
 
+## Quick Start
+
+**For a complete validation before live trading, run:**
+```bash
+./scripts/run_all_validations.sh
+```
+
+This runs all checks in the correct order and provides a comprehensive report.
+
+---
+
 ## Scripts Overview
 
-### 1. JSON File Validation
+### 0. Complete Validation Pipeline (RECOMMENDED)
+**Script:** `run_all_validations.sh`
+
+Runs all validation checks in sequence - the easiest way to ensure everything is ready.
+
+**Usage:**
+```bash
+./scripts/run_all_validations.sh
+```
+
+**What it does:**
+1. Auto-fixes common JSON issues
+2. Validates all JSON files
+3. Tests Cloud RL connection
+4. Runs comprehensive pre-flight check
+5. (Optional) Validates Azure deployment if Azure CLI is available
+
+**Exit codes:**
+- 0: All critical checks passed
+- 1: One or more critical checks failed
+
+---
+
+### 1. JSON File Auto-Fixer
+**Script:** `fix_json_files.py`
+
+Automatically fixes common JSON configuration issues and creates backups.
+
+**Usage:**
+```bash
+python scripts/fix_json_files.py
+```
+
+**What it fixes:**
+- Sets RL exploration rate to 0.0 for live trading
+- Ensures RL confidence threshold is valid (0.0-1.0)
+- Caps max_contracts at safety limit (25)
+- Sets default cloud API URL if missing
+- Adds missing required keys
+- Creates backups before any changes
+
+**Exit codes:**
+- 0: Successfully processed files
+- 1: Error during processing
+
+---
+
+### 3. JSON File Validation
 **Script:** `validate_json_files.py`
 
 Validates all JSON configuration files for structural integrity and correct data types.
@@ -26,7 +84,7 @@ python scripts/validate_json_files.py
 
 ---
 
-### 2. Cloud RL Connection Test
+### 4. Cloud RL Connection Test
 **Script:** `test_cloud_rl_connection.py`
 
 Tests connectivity to the Azure-hosted RL API and validates the reinforcement learning system.
@@ -52,7 +110,7 @@ python scripts/test_cloud_rl_connection.py
 
 ---
 
-### 3. Azure Deployment Validation
+### 5. Azure Deployment Validation
 **Script:** `validate_azure_deployment.sh`
 
 Uses Azure CLI to validate all Azure resources are deployed and configured correctly.
@@ -90,7 +148,7 @@ export POSTGRES_SERVER="quotrading-db"
 
 ---
 
-### 4. Pre-Flight Check (All-in-One)
+### 6. Pre-Flight Check (All-in-One)
 **Script:** `preflight_check.py`
 
 Comprehensive check that runs all validations before starting live trading.
