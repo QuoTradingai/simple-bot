@@ -575,7 +575,6 @@
     <div class="tabs">
         <div class="tab active" onclick="switchTab('users')">👥 Users</div>
         <div class="tab" onclick="switchTab('activity')">📊 Activity</div>
-        <div class="tab" onclick="switchTab('trades')">💰 Trades</div>
         <div class="tab" onclick="switchTab('online')">🟢 Online</div>
         <div class="tab" onclick="switchTab('rl')">🧠 RL Brain</div>
     </div>
@@ -642,42 +641,6 @@
             </table>
         </div>
 
-        <!-- Trades Tab -->
-        <div class="tab-content" id="trades-tab">
-            <!-- RL Experience Stats Box (Top Right) -->
-            <div style="display: flex; justify-content: flex-end; gap: 20px; margin-bottom: 20px;">
-                <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 20px 30px; border-radius: 12px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); min-width: 200px;">
-                    <div style="font-size: 14px; opacity: 0.9; margin-bottom: 5px;">🧠 RL Experiences</div>
-                    <div style="font-size: 32px; font-weight: bold;" id="signalExpCount">6,880</div>
-                    <div style="font-size: 12px; opacity: 0.8; margin-top: 5px;">+<span id="signalExp24h">0</span> today</div>
-                </div>
-            </div>
-            
-            <table class="sheet-table">
-                <thead>
-                    <tr>
-                        <th style="width: 160px">Time</th>
-                        <th style="width: 120px">User</th>
-                        <th style="width: 80px">Symbol</th>
-                        <th style="width: 100px">Side</th>
-                        <th style="width: 100px">Entry</th>
-                        <th style="width: 100px">Exit</th>
-                        <th style="width: 80px">Qty</th>
-                        <th style="width: 100px">P&L</th>
-                        <th style="width: 140px">Exit Reason</th>
-                    </tr>
-                </thead>
-                <tbody id="tradesTableBody">
-                    <tr>
-                        <td colspan="9" class="empty-state">
-                            <div class="empty-state-icon">💰</div>
-                            <div class="empty-state-text">No trades yet</div>
-                        </td>
-                    </tr>
-                </tbody>
-            </table>
-        </div>
-
         <!-- Online Users Tab -->
         <div class="tab-content" id="online-tab">
             <table class="sheet-table">
@@ -709,35 +672,18 @@
                         🧠 Collective RL Brain
                     </h2>
                     
-                    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 24px; margin-bottom: 40px;">
-                        <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 30px; border-radius: 16px; box-shadow: 0 8px 16px rgba(0,0,0,0.1);">
-                            <div style="font-size: 14px; opacity: 0.9; margin-bottom: 8px;">Total Experiences</div>
-                            <div style="font-size: 48px; font-weight: 700;" id="rlTotalCount">-</div>
-                            <div style="font-size: 12px; opacity: 0.8; margin-top: 8px;" id="rlGrowthRate">+0 today</div>
-                        </div>
-                        
-                        <div style="background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%); color: white; padding: 30px; border-radius: 16px; box-shadow: 0 8px 16px rgba(0,0,0,0.1);">
-                            <div style="font-size: 14px; opacity: 0.9; margin-bottom: 8px;">Win Rate</div>
-                            <div style="font-size: 48px; font-weight: 700;" id="rlWinRate">-</div>
-                            <div style="font-size: 12px; opacity: 0.8; margin-top: 8px;">Winning trades</div>
-                        </div>
-                        
-                        <div style="background: linear-gradient(135deg, #fa709a 0%, #fee140 100%); color: white; padding: 30px; border-radius: 16px; box-shadow: 0 8px 16px rgba(0,0,0,0.1);">
-                            <div style="font-size: 14px; opacity: 0.9; margin-bottom: 8px;">Avg Reward</div>
-                            <div style="font-size: 48px; font-weight: 700;" id="rlAvgReward">-</div>
-                            <div style="font-size: 12px; opacity: 0.8; margin-top: 8px;">Per experience</div>
-                        </div>
-                        
-                        <div style="background: linear-gradient(135deg, #30cfd0 0%, #330867 100%); color: white; padding: 30px; border-radius: 16px; box-shadow: 0 8px 16px rgba(0,0,0,0.1);">
-                            <div style="font-size: 14px; opacity: 0.9; margin-bottom: 8px;">Total Reward</div>
-                            <div style="font-size: 48px; font-weight: 700;" id="rlTotalReward">-</div>
-                            <div style="font-size: 12px; opacity: 0.8; margin-top: 8px;">Cumulative P&L</div>
+                    <!-- RL Experience Count Card -->
+                    <div style="display: flex; justify-content: flex-end; gap: 20px; margin-bottom: 30px;">
+                        <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 20px 30px; border-radius: 12px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); min-width: 200px;">
+                            <div style="font-size: 14px; opacity: 0.9; margin-bottom: 5px;">🧠 Total Experiences</div>
+                            <div style="font-size: 32px; font-weight: bold;" id="signalExpCount">6,880</div>
+                            <div style="font-size: 12px; opacity: 0.8; margin-top: 5px;">+<span id="signalExp24h">0</span> today</div>
                         </div>
                     </div>
                     
                     <div style="background: white; border-radius: 16px; padding: 24px; box-shadow: 0 2px 8px rgba(0,0,0,0.08); margin-bottom: 24px;">
                         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
-                            <h3 style="font-size: 20px; margin: 0; color: #202124;">📊 Recent RL Experiences</h3>
+                            <h3 style="font-size: 20px; margin: 0; color: #202124;">📊 Trade Experiences - Real-time Feed</h3>
                             <div>
                                 <button class="filter-btn" onclick="filterRLExperiences('winning')">Winning Only</button>
                                 <button class="filter-btn" onclick="filterRLExperiences('losing')">Losing Only</button>
@@ -1013,29 +959,10 @@
 
         async function loadRLStats() {
             try {
-                const response = await fetch(`${API_URL}/api/admin/rl-stats?admin_key=${ADMIN_KEY}`);
-                const data = await response.json();
-                
-                document.getElementById('rlTotalCount').textContent = data.total_experiences.toLocaleString();
-                document.getElementById('rlWinRate').textContent = data.win_rate.toFixed(1) + '%';
-                document.getElementById('rlAvgReward').textContent = '$' + data.avg_reward.toFixed(2);
-                document.getElementById('rlTotalReward').textContent = '$' + data.total_reward.toFixed(2);
-                document.getElementById('rlLastUpdated').textContent = new Date(data.last_updated).toLocaleString();
-                
-                // Calculate growth (would need historical data for accurate count)
-                const todayGrowth = Math.floor(data.total_experiences * 0.01); // Estimate 1% daily growth
-                document.getElementById('rlGrowthRate').textContent = '+' + todayGrowth.toLocaleString() + ' today';
-                
-                // Load recent experiences
+                // Load recent experiences - the experience count is already displayed from loadStats()
                 await loadRLExperiences();
             } catch (error) {
                 console.error('Failed to load RL stats:', error);
-                // Show placeholder values on error
-                document.getElementById('rlTotalCount').textContent = '7,188';
-                document.getElementById('rlWinRate').textContent = '-';
-                document.getElementById('rlAvgReward').textContent = '-';
-                document.getElementById('rlTotalReward').textContent = '-';
-                document.getElementById('rlLastUpdated').textContent = 'Error loading stats';
             }
         }
 
