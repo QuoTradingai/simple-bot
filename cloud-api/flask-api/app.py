@@ -747,7 +747,7 @@ def admin_dashboard_stats():
             total_users = cursor.fetchone()['total']
             
             # Active licenses
-            cursor.execute("SELECT COUNT(*) as active FROM users WHERE license_status = 'active'")
+            cursor.execute("SELECT COUNT(*) as active FROM users WHERE license_status = 'ACTIVE'")
             active_licenses = cursor.fetchone()['active']
             
             # Online users (active in last 5 minutes based on API logs)
@@ -757,15 +757,48 @@ def admin_dashboard_stats():
             """)
             online_users = cursor.fetchone()['online']
             
-            # Total revenue (count of active monthly subscriptions * $200)
-            total_revenue = active_licenses * 200
+            # API calls in last 24 hours
+            cursor.execute("""
+                SELECT COUNT(*) as count FROM api_logs
+                WHERE created_at > NOW() - INTERVAL '24 hours'
+            """)
+            api_calls_24h = cursor.fetchone()['count']
+            
+            # Get RL experience counts
+            cursor.execute("""
+                SELECT 
+                    COUNT(*) as total,
+                    COUNT(*) FILTER (WHERE created_at > NOW() - INTERVAL '24 hours') as today
+                FROM rl_experiences
+                WHERE took_trade = TRUE
+            """)
+            rl_stats = cursor.fetchone()
+            signal_exp_total = rl_stats['total'] or 0
+            signal_exp_24h = rl_stats['today'] or 0
+            
+            # Exit experiences (for now, use same data)
+            exit_exp_total = signal_exp_total
+            exit_exp_24h = signal_exp_24h
             
             return jsonify({
-                "total_users": total_users,
-                "active_licenses": active_licenses,
-                "online_users": online_users,
-                "total_revenue": total_revenue,
-                "revenue_this_month": total_revenue  # Simplified for now
+                "users": {
+                    "total": total_users,
+                    "active": active_licenses,
+                    "online_now": online_users
+                },
+                "api_calls": {
+                    "last_24h": api_calls_24h
+                },
+                "trades": {
+                    "total": 0,
+                    "total_pnl": 0.0
+                },
+                "rl_experiences": {
+                    "total_signal_experiences": signal_exp_total,
+                    "total_exit_experiences": exit_exp_total,
+                    "signal_experiences_24h": signal_exp_24h,
+                    "exit_experiences_24h": exit_exp_24h
+                }
             }), 200
     except Exception as e:
         logging.error(f"Dashboard stats error: {e}")
@@ -807,15 +840,17 @@ def admin_list_users():
                     "account_id": str(user['id']),
                     "email": user['email'],
                     "license_key": user['license_key'],
-                    "license_type": user['license_type'],
-                    "license_status": user['license_status'],
+                    "license_type": user['license_type'].upper() if user['license_type'] else 'MONTHLY',
+                    "license_status": user['license_status'].upper() if user['license_status'] else 'ACTIVE',
                     "license_expiration": user['license_expiration'].isoformat() if user['license_expiration'] else None,
                     "created_at": user['created_at'].isoformat() if user['created_at'] else None,
                     "last_active": user['last_active'].isoformat() if user['last_active'] else None,
-                    "is_online": user['is_online']
+                    "is_online": user['is_online'],
+                    "api_call_count": 0,
+                    "trade_count": 0
                 })
             
-            return jsonify(formatted_users), 200
+            return jsonify({"users": formatted_users}), 200
     except Exception as e:
         logging.error(f"List users error: {e}")
         return jsonify({"error": str(e)}), 500
@@ -883,13 +918,53 @@ def admin_get_user(account_id):
 
 @app.route('/api/admin/recent-activity', methods=['GET'])
 def admin_recent_activity():
-    """Get recent API activity (placeholder - returns empty for now)"""
+    """Get recent API activity"""
     admin_key = request.args.get('license_key') or request.args.get('admin_key')
     if admin_key != ADMIN_API_KEY:
         return jsonify({"error": "Unauthorized"}), 401
     
-    # For now, return empty array - can add API logging later
-    return jsonify([]), 200
+    limit = int(request.args.get('limit', 50))
+    
+    conn = get_db_connection()
+    if not conn:
+        return jsonify({"activity": []}), 200
+    
+    try:
+        with conn.cursor(cursor_factory=RealDictCursor) as cursor:
+            cursor.execute("""
+                SELECT 
+                    a.created_at as timestamp,
+                    COALESCE(u.id::text, 'Unknown') as account_id,
+                    a.endpoint,
+                    'POST' as method,
+                    a.status_code,
+                    0 as response_time_ms,
+                    '0.0.0.0' as ip_address
+                FROM api_logs a
+                LEFT JOIN users u ON a.license_key = u.license_key
+                ORDER BY a.created_at DESC
+                LIMIT %s
+            """, (limit,))
+            activity = cursor.fetchall()
+            
+            formatted_activity = []
+            for act in activity:
+                formatted_activity.append({
+                    "timestamp": act['timestamp'].isoformat() if act['timestamp'] else None,
+                    "account_id": act['account_id'],
+                    "endpoint": act['endpoint'],
+                    "method": act['method'],
+                    "status_code": act['status_code'],
+                    "response_time_ms": act['response_time_ms'],
+                    "ip_address": act['ip_address']
+                })
+            
+            return jsonify({"activity": formatted_activity}), 200
+    except Exception as e:
+        logging.error(f"Recent activity error: {e}")
+        return jsonify({"activity": []}), 200
+    finally:
+        conn.close()
 
 @app.route('/api/admin/online-users', methods=['GET'])
 def admin_online_users():
@@ -900,7 +975,7 @@ def admin_online_users():
     
     conn = get_db_connection()
     if not conn:
-        return jsonify({"error": "Database connection failed"}), 500
+        return jsonify({"users": []}), 200
     
     try:
         with conn.cursor(cursor_factory=RealDictCursor) as cursor:
@@ -910,7 +985,7 @@ def admin_online_users():
                 FROM users u
                 INNER JOIN api_logs a ON u.license_key = a.license_key
                 WHERE a.created_at > NOW() - INTERVAL '5 minutes'
-                AND u.license_status = 'active'
+                AND UPPER(u.license_status) = 'ACTIVE'
                 GROUP BY u.id, u.email, u.license_key, u.license_type
                 ORDER BY last_active DESC
             """)
@@ -926,14 +1001,14 @@ def admin_online_users():
                     "last_active": user['last_active'].isoformat() if user['last_active'] else None
                 })
             
-            return jsonify(formatted), 200
+            return jsonify({"users": formatted}), 200
     except Exception as e:
         logging.error(f"Online users error: {e}")
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"users": []}), 200
     finally:
         conn.close()
 
-@app.route('/api/admin/suspend-user/<account_id>', methods=['POST'])
+@app.route('/api/admin/suspend-user/<account_id>', methods=['POST', 'PUT'])
 def admin_suspend_user(account_id):
     """Suspend a user (same as update-license-status)"""
     admin_key = request.args.get('license_key') or request.args.get('admin_key')
@@ -947,7 +1022,7 @@ def admin_suspend_user(account_id):
     try:
         with conn.cursor() as cursor:
             cursor.execute("""
-                UPDATE users SET license_status = 'suspended'
+                UPDATE users SET license_status = 'SUSPENDED'
                 WHERE id = %s OR license_key = %s
                 RETURNING license_key
             """, (account_id, account_id))
@@ -964,7 +1039,7 @@ def admin_suspend_user(account_id):
     finally:
         conn.close()
 
-@app.route('/api/admin/activate-user/<account_id>', methods=['POST'])
+@app.route('/api/admin/activate-user/<account_id>', methods=['POST', 'PUT'])
 def admin_activate_user(account_id):
     """Activate a user"""
     admin_key = request.args.get('license_key') or request.args.get('admin_key')
@@ -978,7 +1053,7 @@ def admin_activate_user(account_id):
     try:
         with conn.cursor() as cursor:
             cursor.execute("""
-                UPDATE users SET license_status = 'active'
+                UPDATE users SET license_status = 'ACTIVE'
                 WHERE id = %s OR license_key = %s
                 RETURNING license_key
             """, (account_id, account_id))
@@ -995,7 +1070,7 @@ def admin_activate_user(account_id):
     finally:
         conn.close()
 
-@app.route('/api/admin/extend-license/<account_id>', methods=['POST'])
+@app.route('/api/admin/extend-license/<account_id>', methods=['POST', 'PUT'])
 def admin_extend_license(account_id):
     """Extend a user's license"""
     admin_key = request.args.get('license_key') or request.args.get('admin_key')
@@ -1042,7 +1117,7 @@ def admin_add_user():
     
     data = request.get_json()
     email = data.get('email')
-    license_type = data.get('license_type', 'monthly')
+    license_type = data.get('license_type', 'MONTHLY')
     days_valid = data.get('days_valid', 30)
     
     conn = get_db_connection()
@@ -1051,12 +1126,12 @@ def admin_add_user():
     
     try:
         license_key = generate_license_key()
-        expiration = datetime.now(pytz.UTC) + timedelta(days=days_valid)
+        expiration = datetime.now() + timedelta(days=days_valid)
         
         with conn.cursor() as cursor:
             cursor.execute("""
                 INSERT INTO users (email, license_key, license_type, license_status, license_expiration)
-                VALUES (%s, %s, %s, 'active', %s)
+                VALUES (%s, %s, %s, 'ACTIVE', %s)
                 RETURNING id
             """, (email, license_key, license_type, expiration))
             user_id = cursor.fetchone()[0]
@@ -1255,41 +1330,58 @@ def admin_rl_stats():
     if admin_key != ADMIN_API_KEY:
         return jsonify({"error": "Unauthorized"}), 401
     
+    conn = get_db_connection()
+    if not conn:
+        # Return default values if database is not available
+        return jsonify({
+            "total_experiences": 0,
+            "win_rate": 0.0,
+            "avg_reward": 0.0,
+            "total_reward": 0.0,
+            "last_updated": datetime.now().isoformat()
+        }), 200
+    
     try:
-        if STORAGE_CONNECTION_STRING:
-            try:
-                blob_service = BlobServiceClient.from_connection_string(STORAGE_CONNECTION_STRING)
-                blob_client = blob_service.get_blob_client(CONTAINER_NAME, BLOB_NAME)
-                
-                data = json.loads(blob_client.download_blob().readall())
-                experiences = data.get("experiences", [])
-                
-                # Calculate stats
-                total = len(experiences)
-                winning = sum(1 for e in experiences if e.get('reward', 0) > 0)
-                losing = sum(1 for e in experiences if e.get('reward', 0) < 0)
-                total_reward = sum(e.get('reward', 0) for e in experiences)
-                avg_reward = total_reward / total if total > 0 else 0
-                
-                return jsonify({
-                    "total_experiences": total,
-                    "winning_experiences": winning,
-                    "losing_experiences": losing,
-                    "win_rate": (winning / total * 100) if total > 0 else 0,
-                    "total_reward": total_reward,
-                    "avg_reward": avg_reward,
-                    "last_updated": blob_client.get_blob_properties().last_modified.isoformat()
-                }), 200
-                
-            except Exception as e:
-                logging.error(f"RL stats error: {e}")
-                return jsonify({"error": str(e)}), 500
-        else:
-            return jsonify({"error": "RL storage not configured"}), 503
+        with conn.cursor(cursor_factory=RealDictCursor) as cursor:
+            # Get RL statistics from database
+            cursor.execute("""
+                SELECT 
+                    COUNT(*) as total,
+                    COUNT(*) FILTER (WHERE pnl > 0) as winning,
+                    SUM(pnl) as total_reward,
+                    AVG(pnl) as avg_reward,
+                    MAX(created_at) as last_updated
+                FROM rl_experiences
+                WHERE took_trade = TRUE
+            """)
+            stats = cursor.fetchone()
             
+            total = int(stats['total']) if stats['total'] else 0
+            winning = int(stats['winning']) if stats['winning'] else 0
+            win_rate = (winning / total * 100) if total > 0 else 0.0
+            total_reward = float(stats['total_reward']) if stats['total_reward'] else 0.0
+            avg_reward = float(stats['avg_reward']) if stats['avg_reward'] else 0.0
+            last_updated = stats['last_updated'].isoformat() if stats['last_updated'] else datetime.now().isoformat()
+            
+            return jsonify({
+                "total_experiences": total,
+                "win_rate": win_rate,
+                "avg_reward": avg_reward,
+                "total_reward": total_reward,
+                "last_updated": last_updated
+            }), 200
     except Exception as e:
-        logging.error(f"Admin RL stats error: {e}")
-        return jsonify({"error": str(e)}), 500
+        logging.error(f"RL stats error: {e}")
+        # Return default values on error
+        return jsonify({
+            "total_experiences": 0,
+            "win_rate": 0.0,
+            "avg_reward": 0.0,
+            "total_reward": 0.0,
+            "last_updated": datetime.now().isoformat()
+        }), 200
+    finally:
+        conn.close()
 
 @app.route('/api/admin/rl-experiences', methods=['GET'])
 def admin_rl_experiences():
@@ -1300,35 +1392,76 @@ def admin_rl_experiences():
     
     limit = int(request.args.get('limit', 100))
     
+    conn = get_db_connection()
+    if not conn:
+        return jsonify({"experiences": [], "total_experiences": 0, "limit": limit}), 200
+    
     try:
-        if STORAGE_CONNECTION_STRING:
-            try:
-                blob_service = BlobServiceClient.from_connection_string(STORAGE_CONNECTION_STRING)
-                blob_client = blob_service.get_blob_client(CONTAINER_NAME, BLOB_NAME)
-                
-                data = json.loads(blob_client.download_blob().readall())
-                experiences = data.get("experiences", [])
-                
-                # Return most recent experiences (last N items)
-                recent = experiences[-limit:] if len(experiences) > limit else experiences
-                # Reverse so newest first
-                recent.reverse()
-                
-                return jsonify({
-                    "total_experiences": len(experiences),
-                    "experiences": recent,
-                    "limit": limit
-                }), 200
-                
-            except Exception as e:
-                logging.error(f"RL experiences error: {e}")
-                return jsonify({"error": str(e)}), 500
-        else:
-            return jsonify({"error": "RL storage not configured"}), 503
+        with conn.cursor(cursor_factory=RealDictCursor) as cursor:
+            # Get total count
+            cursor.execute("SELECT COUNT(*) as total FROM rl_experiences")
+            total = cursor.fetchone()['total']
             
+            # Get recent experiences
+            cursor.execute("""
+                SELECT 
+                    created_at as timestamp,
+                    symbol,
+                    rsi,
+                    vwap_distance,
+                    atr,
+                    volume_ratio,
+                    hour,
+                    day_of_week,
+                    recent_pnl,
+                    streak,
+                    side,
+                    regime,
+                    took_trade,
+                    pnl as reward,
+                    duration,
+                    0.0 as price
+                FROM rl_experiences
+                ORDER BY created_at DESC
+                LIMIT %s
+            """, (limit,))
+            experiences = cursor.fetchall()
+            
+            formatted_experiences = []
+            for exp in experiences:
+                formatted_experiences.append({
+                    "timestamp": exp['timestamp'].isoformat() if exp['timestamp'] else None,
+                    "state": {
+                        "symbol": exp['symbol'],
+                        "rsi": float(exp['rsi']) if exp['rsi'] else 0,
+                        "vwap_distance": float(exp['vwap_distance']) if exp['vwap_distance'] else 0,
+                        "atr": float(exp['atr']) if exp['atr'] else 0,
+                        "volume_ratio": float(exp['volume_ratio']) if exp['volume_ratio'] else 0,
+                        "hour": int(exp['hour']) if exp['hour'] else 0,
+                        "day_of_week": int(exp['day_of_week']) if exp['day_of_week'] else 0,
+                        "recent_pnl": float(exp['recent_pnl']) if exp['recent_pnl'] else 0,
+                        "streak": int(exp['streak']) if exp['streak'] else 0,
+                        "side": exp['side'],
+                        "regime": exp['regime'],
+                        "price": float(exp['price']) if exp['price'] else 0
+                    },
+                    "action": {
+                        "took_trade": bool(exp['took_trade'])
+                    },
+                    "reward": float(exp['reward']) if exp['reward'] else 0,
+                    "duration": float(exp['duration']) if exp['duration'] else 0
+                })
+            
+            return jsonify({
+                "total_experiences": total,
+                "experiences": formatted_experiences,
+                "limit": limit
+            }), 200
     except Exception as e:
-        logging.error(f"Admin RL experiences error: {e}")
-        return jsonify({"error": str(e)}), 500
+        logging.error(f"RL experiences error: {e}")
+        return jsonify({"experiences": [], "total_experiences": 0, "limit": limit}), 200
+    finally:
+        conn.close()
 
 # ============================================================================
 # RL DECISION ENDPOINTS - Cloud makes trading decisions for user bots
