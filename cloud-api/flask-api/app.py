@@ -2553,6 +2553,353 @@ def admin_system_health():
     
     return jsonify(health_status), 200
 
+# ============================================================================
+# BULK OPERATIONS ENDPOINTS
+# ============================================================================
+
+@app.route('/api/admin/bulk/extend', methods=['POST'])
+def admin_bulk_extend():
+    """Extend licenses for multiple users"""
+    api_key = request.headers.get('X-Admin-API-Key')
+    if api_key != ADMIN_API_KEY:
+        return jsonify({"error": "Unauthorized"}), 401
+    
+    data = request.get_json()
+    license_keys = data.get('license_keys', [])
+    days = data.get('days', 30)
+    
+    if not license_keys:
+        return jsonify({"error": "No license keys provided"}), 400
+    
+    if len(license_keys) > 100:
+        return jsonify({"error": "Maximum 100 users per bulk operation"}), 400
+    
+    conn = get_db_connection()
+    cur = conn.cursor()
+    
+    success_count = 0
+    failed_count = 0
+    errors = []
+    
+    try:
+        for key in license_keys:
+            try:
+                cur.execute("""
+                    UPDATE licenses 
+                    SET license_expires = license_expires + INTERVAL '%s days'
+                    WHERE license_key = %s
+                """, (days, key))
+                if cur.rowcount > 0:
+                    success_count += 1
+                else:
+                    failed_count += 1
+                    errors.append(f"{key[:8]}... not found")
+            except Exception as e:
+                failed_count += 1
+                errors.append(f"{key[:8]}...: {str(e)}")
+        
+        conn.commit()
+        logging.info(f"Bulk extend: {success_count} succeeded, {failed_count} failed")
+    except Exception as e:
+        conn.rollback()
+        logging.error(f"Bulk extend error: {e}")
+        return jsonify({"error": str(e)}), 500
+    finally:
+        cur.close()
+        conn.close()
+    
+    return jsonify({
+        "success": success_count,
+        "failed": failed_count,
+        "errors": errors[:10]  # Limit error list
+    }), 200
+
+@app.route('/api/admin/bulk/suspend', methods=['POST'])
+def admin_bulk_suspend():
+    """Suspend multiple user licenses"""
+    api_key = request.headers.get('X-Admin-API-Key')
+    if api_key != ADMIN_API_KEY:
+        return jsonify({"error": "Unauthorized"}), 401
+    
+    data = request.get_json()
+    license_keys = data.get('license_keys', [])
+    
+    if not license_keys or len(license_keys) > 100:
+        return jsonify({"error": "Invalid request"}), 400
+    
+    conn = get_db_connection()
+    cur = conn.cursor()
+    
+    try:
+        cur.execute("""
+            UPDATE licenses 
+            SET license_status = 'SUSPENDED'
+            WHERE license_key = ANY(%s)
+        """, (license_keys,))
+        success_count = cur.rowcount
+        conn.commit()
+        logging.info(f"Bulk suspended {success_count} users")
+        return jsonify({"success": success_count, "failed": 0, "errors": []}), 200
+    except Exception as e:
+        conn.rollback()
+        logging.error(f"Bulk suspend error: {e}")
+        return jsonify({"error": str(e)}), 500
+    finally:
+        cur.close()
+        conn.close()
+
+@app.route('/api/admin/bulk/activate', methods=['POST'])
+def admin_bulk_activate():
+    """Activate multiple user licenses"""
+    api_key = request.headers.get('X-Admin-API-Key')
+    if api_key != ADMIN_API_KEY:
+        return jsonify({"error": "Unauthorized"}), 401
+    
+    data = request.get_json()
+    license_keys = data.get('license_keys', [])
+    
+    if not license_keys or len(license_keys) > 100:
+        return jsonify({"error": "Invalid request"}), 400
+    
+    conn = get_db_connection()
+    cur = conn.cursor()
+    
+    try:
+        cur.execute("""
+            UPDATE licenses 
+            SET license_status = 'ACTIVE'
+            WHERE license_key = ANY(%s)
+        """, (license_keys,))
+        success_count = cur.rowcount
+        conn.commit()
+        logging.info(f"Bulk activated {success_count} users")
+        return jsonify({"success": success_count, "failed": 0, "errors": []}), 200
+    except Exception as e:
+        conn.rollback()
+        logging.error(f"Bulk activate error: {e}")
+        return jsonify({"error": str(e)}), 500
+    finally:
+        cur.close()
+        conn.close()
+
+@app.route('/api/admin/bulk/delete', methods=['POST'])
+def admin_bulk_delete():
+    """Delete multiple user licenses"""
+    api_key = request.headers.get('X-Admin-API-Key')
+    if api_key != ADMIN_API_KEY:
+        return jsonify({"error": "Unauthorized"}), 401
+    
+    data = request.get_json()
+    license_keys = data.get('license_keys', [])
+    
+    if not license_keys or len(license_keys) > 100:
+        return jsonify({"error": "Invalid request"}), 400
+    
+    conn = get_db_connection()
+    cur = conn.cursor()
+    
+    try:
+        cur.execute("""
+            DELETE FROM licenses 
+            WHERE license_key = ANY(%s)
+        """, (license_keys,))
+        success_count = cur.rowcount
+        conn.commit()
+        logging.info(f"Bulk deleted {success_count} users")
+        return jsonify({"success": success_count, "failed": 0, "errors": []}), 200
+    except Exception as e:
+        conn.rollback()
+        logging.error(f"Bulk delete error: {e}")
+        return jsonify({"error": str(e)}), 500
+    finally:
+        cur.close()
+        conn.close()
+
+# ============================================================================
+# USER RETENTION METRICS ENDPOINT
+# ============================================================================
+
+@app.route('/api/admin/metrics/retention', methods=['GET'])
+def admin_retention_metrics():
+    """Get comprehensive retention and engagement metrics"""
+    api_key = request.headers.get('X-Admin-API-Key')
+    if api_key != ADMIN_API_KEY:
+        return jsonify({"error": "Unauthorized"}), 401
+    
+    conn = get_db_connection()
+    cur = conn.cursor(cursor_factory=RealDictCursor)
+    
+    try:
+        # Churn rate (last 30 days)
+        cur.execute("""
+            WITH expired_users AS (
+                SELECT 
+                    COUNT(*) as total_expired,
+                    COUNT(*) FILTER (WHERE license_status = 'CANCELLED' OR license_status = 'EXPIRED') as churned
+                FROM licenses
+                WHERE license_expires BETWEEN NOW() - INTERVAL '30 days' AND NOW()
+            )
+            SELECT 
+                CASE WHEN total_expired > 0 
+                    THEN (churned * 100.0 / total_expired)
+                    ELSE 0 
+                END as churn_rate
+            FROM expired_users
+        """)
+        churn_data = cur.fetchone()
+        churn_rate = float(churn_data['churn_rate']) if churn_data else 0.0
+        
+        # Average subscription length in months
+        cur.execute("""
+            SELECT 
+                AVG(EXTRACT(DAY FROM license_expires - created_at) / 30.0) as avg_months
+            FROM licenses
+            WHERE created_at IS NOT NULL
+        """)
+        avg_sub = cur.fetchone()
+        avg_subscription_months = float(avg_sub['avg_months']) if avg_sub and avg_sub['avg_months'] else 0.0
+        
+        # Active usage rate (users with API calls in last 24h)
+        cur.execute("""
+            WITH active_licenses AS (
+                SELECT COUNT(*) as total
+                FROM licenses
+                WHERE license_status = 'ACTIVE'
+            ),
+            recent_activity AS (
+                SELECT COUNT(DISTINCT license_key) as active
+                FROM api_logs
+                WHERE timestamp >= NOW() - INTERVAL '24 hours'
+            )
+            SELECT 
+                CASE WHEN al.total > 0
+                    THEN (ra.active * 100.0 / al.total)
+                    ELSE 0
+                END as usage_rate
+            FROM active_licenses al, recent_activity ra
+        """)
+        usage_data = cur.fetchone()
+        active_usage_rate = float(usage_data['usage_rate']) if usage_data else 0.0
+        
+        # Renewal rate (users who renewed vs expired in last 30 days)
+        cur.execute("""
+            WITH expired_last_month AS (
+                SELECT 
+                    COUNT(*) as total,
+                    COUNT(*) FILTER (WHERE license_status = 'ACTIVE') as renewed
+                FROM licenses
+                WHERE license_expires BETWEEN NOW() - INTERVAL '60 days' AND NOW() - INTERVAL '30 days'
+            )
+            SELECT 
+                CASE WHEN total > 0
+                    THEN (renewed * 100.0 / total)
+                    ELSE 0
+                END as renewal_rate
+            FROM expired_last_month
+        """)
+        renewal_data = cur.fetchone()
+        renewal_rate = float(renewal_data['renewal_rate']) if renewal_data else 0.0
+        
+        # Lifetime value
+        cur.execute("""
+            SELECT 
+                AVG(
+                    CASE 
+                        WHEN license_type = 'MONTHLY' THEN (EXTRACT(DAY FROM license_expires - created_at) / 30.0) * 49.99
+                        WHEN license_type = 'ANNUAL' THEN (EXTRACT(DAY FROM license_expires - created_at) / 365.0) * 499.99
+                        ELSE 0
+                    END
+                ) as avg_ltv
+            FROM licenses
+            WHERE created_at IS NOT NULL
+        """)
+        ltv_data = cur.fetchone()
+        lifetime_value = float(ltv_data['avg_ltv']) if ltv_data and ltv_data['avg_ltv'] else 0.0
+        
+        # Inactive users (no API calls in 7+ days)
+        cur.execute("""
+            SELECT 
+                l.account_id,
+                l.email,
+                MAX(a.timestamp) as last_active,
+                EXTRACT(DAY FROM NOW() - MAX(a.timestamp)) as days_inactive
+            FROM licenses l
+            LEFT JOIN api_logs a ON l.license_key = a.license_key
+            WHERE l.license_status = 'ACTIVE'
+            GROUP BY l.account_id, l.email
+            HAVING MAX(a.timestamp) < NOW() - INTERVAL '7 days' OR MAX(a.timestamp) IS NULL
+            ORDER BY days_inactive DESC NULLS FIRST
+            LIMIT 20
+        """)
+        inactive_users = cur.fetchall()
+        
+        # Cohort retention (last 12 months)
+        cur.execute("""
+            SELECT 
+                TO_CHAR(DATE_TRUNC('month', created_at), 'YYYY-MM') as cohort_month,
+                COUNT(*) as total_signups,
+                COUNT(*) FILTER (WHERE license_status = 'ACTIVE') as still_active,
+                CASE WHEN COUNT(*) > 0
+                    THEN (COUNT(*) FILTER (WHERE license_status = 'ACTIVE') * 100.0 / COUNT(*))
+                    ELSE 0
+                END as retention_pct
+            FROM licenses
+            WHERE created_at >= NOW() - INTERVAL '12 months'
+            GROUP BY DATE_TRUNC('month', created_at)
+            ORDER BY cohort_month DESC
+        """)
+        cohort_retention = cur.fetchall()
+        
+        # Churn trend (this month vs last month)
+        cur.execute("""
+            SELECT 
+                DATE_TRUNC('month', license_expires) as month,
+                COUNT(*) FILTER (WHERE license_status = 'CANCELLED' OR license_status = 'EXPIRED') * 100.0 / COUNT(*) as churn
+            FROM licenses
+            WHERE license_expires >= NOW() - INTERVAL '60 days'
+            GROUP BY DATE_TRUNC('month', license_expires)
+            ORDER BY month DESC
+            LIMIT 2
+        """)
+        churn_trend_data = cur.fetchall()
+        churn_trend = {
+            "this_month": float(churn_trend_data[0]['churn']) if len(churn_trend_data) > 0 else churn_rate,
+            "last_month": float(churn_trend_data[1]['churn']) if len(churn_trend_data) > 1 else churn_rate
+        }
+        
+        return jsonify({
+            "churn_rate": round(churn_rate, 2),
+            "churn_trend": churn_trend,
+            "avg_subscription_months": round(avg_subscription_months, 2),
+            "active_usage_rate": round(active_usage_rate, 2),
+            "renewal_rate": round(renewal_rate, 2),
+            "lifetime_value": round(lifetime_value, 2),
+            "inactive_users": [
+                {
+                    "account_id": user['account_id'][:12] + "..." if user['account_id'] else "N/A",
+                    "email": user['email'],
+                    "last_active": user['last_active'].isoformat() if user['last_active'] else "Never",
+                    "days_inactive": int(user['days_inactive']) if user['days_inactive'] else 999
+                }
+                for user in inactive_users
+            ],
+            "cohort_retention": [
+                {
+                    "month": cohort['cohort_month'],
+                    "signups": cohort['total_signups'],
+                    "still_active": cohort['still_active'],
+                    "retention": round(float(cohort['retention_pct']), 1)
+                }
+                for cohort in cohort_retention
+            ]
+        }), 200
+    except Exception as e:
+        logging.error(f"Retention metrics error: {e}")
+        return jsonify({"error": str(e)}), 500
+    finally:
+        cur.close()
+        conn.close()
+
 if __name__ == '__main__':
     init_database_if_needed()
     port = int(os.environ.get('PORT', 5000))
