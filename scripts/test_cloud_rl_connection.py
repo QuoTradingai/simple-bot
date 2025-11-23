@@ -225,7 +225,7 @@ class CloudRLTester:
         print("=" * 80)
         print("CLOUD RL CONNECTION TEST FOR LIVE TRADING")
         print("=" * 80)
-        print("\nAPI URL: {self.api_url}")
+        print(f"\nAPI URL: {self.api_url}")
         if self.license_key:
             print(f"License Key: CONFIGURED")
         else:
