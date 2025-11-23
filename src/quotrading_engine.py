@@ -7176,8 +7176,6 @@ def handle_time_check_event(data: Dict[str, Any]) -> None:
         check_daily_reset(symbol, current_time)
         
         # Check for delayed license expiration stop conditions
-        from datetime import time as datetime_time
-        
         # If license expired and we're waiting for market close (Friday)
         if bot_status.get("stop_at_market_close", False):
             maintenance_start = CONFIG.get("forced_flatten_time", datetime_time(17, 0))  # 5:00 PM ET
@@ -7416,8 +7414,6 @@ def handle_license_check_event(data: Dict[str, Any]) -> None:
                 eastern_time = current_time.astimezone(eastern_tz)
                 weekday = eastern_time.weekday()  # 0=Monday, 6=Sunday
                 current_time_only = eastern_time.time()
-                
-                from datetime import time as datetime_time
                 
                 # Check if we're approaching maintenance or end of week
                 flatten_time = CONFIG.get("flatten_time", datetime_time(16, 45))  # 4:45 PM ET
