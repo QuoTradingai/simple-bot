@@ -91,7 +91,6 @@ class BotConfiguration:
     tick_timeout_seconds: int = 999999  # Disabled for testing
     proactive_stop_buffer_ticks: int = 2
     flatten_buffer_ticks: int = 2  # Buffer for flatten price calculation
-    recovery_mode: bool = False  # USER CONFIGURABLE - Enable recovery mode (continue trading when approaching daily loss limit)
     
     def get_daily_loss_limit(self, account_balance: float) -> float:
         """
@@ -306,16 +305,10 @@ class BotConfiguration:
     rl_min_exploration_rate: float = 0.05  # Minimum exploration after decay
     rl_exploration_decay: float = 0.995  # Decay rate per signal
     rl_confidence_threshold: float = 0.5  # Minimum confidence to take signal (USER CONFIGURABLE via GUI)
-    rl_min_contracts: int = 1  # Minimum contracts (low confidence)
-    rl_medium_contracts: int = 2  # Medium contracts (moderate confidence)
-    rl_max_contracts: int = 3  # Maximum contracts (high confidence)
+    # NOTE: Contracts are FIXED at user's max_contracts setting (no dynamic scaling)
     # NOTE: For production, RL is cloud-based. Local files only for backtesting/development.
     rl_experience_file: str = None  # Path to local RL experience file (None = cloud-based RL)
     rl_save_frequency: int = 5  # Save experiences every N trades
-    
-    # Dynamic AI Features (USER CONFIGURABLE via GUI)
-    dynamic_confidence: bool = False  # USER CONFIGURABLE - Auto-increase confidence when approaching limits
-    dynamic_contracts: bool = False  # USER CONFIGURABLE - Use signal confidence to scale contracts dynamically
     
     # Broker Configuration (only for live trading)
     api_token: Optional[str] = None
@@ -465,11 +458,7 @@ class BotConfiguration:
             "rl_exploration_rate": self.rl_exploration_rate,
             "rl_min_exploration_rate": self.rl_min_exploration_rate,
             "rl_exploration_decay": self.rl_exploration_decay,
-            # Dynamic AI Features (from GUI)
-            "dynamic_confidence": self.dynamic_confidence,
-            "dynamic_contracts": self.dynamic_contracts,
-            # Recovery Mode and Account Settings
-            "recovery_mode": self.recovery_mode,
+            # Account Settings
             "account_size": self.account_size,
         }
 
@@ -524,11 +513,7 @@ def load_from_env() -> BotConfiguration:
     elif os.getenv("BOT_USE_TOPSTEP_RULES"):  # Legacy support
         config.auto_calculate_limits = os.getenv("BOT_USE_TOPSTEP_RULES").lower() in ("true", "1", "yes")
     
-    # Recovery Mode (All Account Types)
-    if os.getenv("BOT_RECOVERY_MODE"):
-        config.recovery_mode = os.getenv("BOT_RECOVERY_MODE").lower() in ("true", "1", "yes")
-    
-    # Account Size (for risk calculations and recovery mode initial balance tracking)
+    # Account Size (for risk calculations)
     if os.getenv("ACCOUNT_SIZE"):
         # Handle both numeric and string formats (e.g., "50000", "50k", "50K")
         account_size_str = os.getenv("ACCOUNT_SIZE")
@@ -557,19 +542,6 @@ def load_from_env() -> BotConfiguration:
         if threshold > 1.0:
             threshold = threshold / 100.0
         config.rl_confidence_threshold = threshold
-    
-    # Dynamic Risk Management - combines contract sizing + confidence adjustments
-    if os.getenv("BOT_DYNAMIC_RISK"):
-        dynamic_risk_enabled = os.getenv("BOT_DYNAMIC_RISK").lower() in ("true", "1", "yes")
-        config.dynamic_confidence = dynamic_risk_enabled
-        config.dynamic_contracts = dynamic_risk_enabled
-    
-    # Legacy support for separate settings (overrides dynamic_risk if specified)
-    if os.getenv("BOT_DYNAMIC_CONFIDENCE"):
-        config.dynamic_confidence = os.getenv("BOT_DYNAMIC_CONFIDENCE").lower() in ("true", "1", "yes")
-    
-    if os.getenv("BOT_DYNAMIC_CONTRACTS"):
-        config.dynamic_contracts = os.getenv("BOT_DYNAMIC_CONTRACTS").lower() in ("true", "1", "yes")
     
     if os.getenv("BOT_TICK_SIZE"):
         config.tick_size = float(os.getenv("BOT_TICK_SIZE"))
@@ -722,21 +694,10 @@ def load_config(environment: Optional[str] = None, backtest_mode: bool = False) 
         env_vars_set.add("daily_loss_percent")
     if os.getenv("BOT_AUTO_CALCULATE_LIMITS") or os.getenv("BOT_USE_TOPSTEP_RULES"):
         env_vars_set.add("auto_calculate_limits")
-    if os.getenv("BOT_RECOVERY_MODE"):
-        env_vars_set.add("recovery_mode")
     if os.getenv("ACCOUNT_SIZE"):
         env_vars_set.add("account_size")
     if os.getenv("BOT_CONFIDENCE_THRESHOLD"):
         env_vars_set.add("rl_confidence_threshold")
-    # Dynamic Risk Management combines both features
-    if os.getenv("BOT_DYNAMIC_RISK"):
-        env_vars_set.add("dynamic_confidence")
-        env_vars_set.add("dynamic_contracts")
-    # Legacy support for separate settings
-    if os.getenv("BOT_DYNAMIC_CONFIDENCE"):
-        env_vars_set.add("dynamic_confidence")
-    if os.getenv("BOT_DYNAMIC_CONTRACTS"):
-        env_vars_set.add("dynamic_contracts")
     if os.getenv("BOT_TICK_SIZE"):
         env_vars_set.add("tick_size")
     if os.getenv("BOT_TICK_VALUE"):

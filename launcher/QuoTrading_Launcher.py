@@ -1384,29 +1384,16 @@ class QuoTradingLauncher:
         modes_section = tk.Frame(symbols_modes_container, bg=self.colors['card'])
         modes_section.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         
-        # Confidence Trading
+        # Confidence Trading (Fixed - no dynamic contracts)
         conf_mode_frame = tk.Frame(modes_section, bg=self.colors['card'])
         conf_mode_frame.pack(fill=tk.X, pady=(0, 5))
         
         self.confidence_trading_var = tk.BooleanVar(value=self.config.get("confidence_trading", False))
         
-        def on_confidence_trading_toggle():
-            """Disable Recovery Mode if Confidence Trading is enabled."""
-            if self.confidence_trading_var.get():
-                # Confidence Trading enabled - disable Recovery Mode
-                if self.recovery_mode_var.get():
-                    messagebox.showinfo(
-                        "Mode Conflict",
-                        "Confidence Trading and Recovery Mode cannot be enabled at the same time.\n\n"
-                        "Recovery Mode has been automatically disabled."
-                    )
-                    self.recovery_mode_var.set(False)
-        
         tk.Checkbutton(
             conf_mode_frame,
             text="⚖️ Confidence Trading",
             variable=self.confidence_trading_var,
-            command=on_confidence_trading_toggle,
             font=("Segoe UI", 8, "bold"),
             bg=self.colors['card'],
             fg=self.colors['text'],
@@ -1418,7 +1405,7 @@ class QuoTradingLauncher:
         
         tk.Label(
             conf_mode_frame,
-            text="Smart position sizing by risk level",
+            text="Filter trades by confidence threshold",
             font=("Segoe UI", 7, "bold"),
             bg=self.colors['card'],
             fg=self.colors['text_light']
@@ -1450,73 +1437,6 @@ class QuoTradingLauncher:
             fg=self.colors['text_light']
         ).pack(anchor=tk.W, padx=(20, 0))
         
-        # Recovery Mode
-        recovery_mode_frame = tk.Frame(modes_section, bg=self.colors['card'])
-        recovery_mode_frame.pack(fill=tk.X)
-        
-        self.recovery_mode_var = tk.BooleanVar(value=self.config.get("recovery_mode", False))
-        
-        def on_recovery_mode_toggle():
-            """Show warning when enabling Recovery Mode."""
-            if self.recovery_mode_var.get():
-                # Check if Confidence Trading is enabled
-                if self.confidence_trading_var.get():
-                    messagebox.showinfo(
-                        "Mode Conflict",
-                        "Confidence Trading and Recovery Mode cannot be enabled at the same time.\n\n"
-                        "Confidence Trading has been automatically disabled."
-                    )
-                    self.confidence_trading_var.set(False)
-                
-                # User is trying to enable it - show warning
-                warning_msg = (
-                    "⚠️ RECOVERY MODE WARNING ⚠️\n\n"
-                    "Recovery Mode is designed for advanced traders who understand the risks.\n\n"
-                    "What Recovery Mode Does:\n"
-                    "• Automatically reduces contract size when your account is losing money\n"
-                    "• Continues trading even AFTER hitting your daily loss limit\n"
-                    "• Attempts to recover losses by taking smaller positions\n\n"
-                    "IMPORTANT RISKS:\n"
-                    "• Can exceed your daily loss limit significantly\n"
-                    "• May violate broker/prop firm rules that require stopping at daily limit\n"
-                    "• Could result in account termination or larger losses\n"
-                    "• Not recommended for funded/prop accounts with strict rules\n\n"
-                    "⚠️ Use Recovery Mode at your own risk ⚠️\n\n"
-                    "Do you want to enable Recovery Mode?"
-                )
-                
-                response = messagebox.askyesno(
-                    "Recovery Mode Warning",
-                    warning_msg,
-                    icon='warning'
-                )
-                
-                if not response:
-                    # User clicked No - disable it
-                    self.recovery_mode_var.set(False)
-        
-        recovery_checkbox = tk.Checkbutton(
-            recovery_mode_frame,
-            text="🔄 Recovery Mode",
-            variable=self.recovery_mode_var,
-            command=on_recovery_mode_toggle,
-            font=("Segoe UI", 8, "bold"),
-            bg=self.colors['card'],
-            fg=self.colors['text'],
-            selectcolor=self.colors['secondary'],
-            activebackground=self.colors['card'],
-            activeforeground=self.colors['success'],
-            cursor="hand2"
-        )
-        recovery_checkbox.pack(anchor=tk.W)
-        
-        tk.Label(
-            recovery_mode_frame,
-            text="Reduces size when losing, trades past limit",
-            font=("Segoe UI", 7, "bold"),
-            bg=self.colors['card'],
-            fg=self.colors['text_light']
-        ).pack(anchor=tk.W, padx=(20, 0))
         
         # Account Settings Row - COMPACT
         settings_row = tk.Frame(content, bg=self.colors['card'])
@@ -2335,8 +2255,6 @@ class QuoTradingLauncher:
                 )
                 return
         
-        self.config["recovery_mode"] = self.recovery_mode_var.get()
-        
         # Auto-enable alerts if email is configured
         self.config["alerts_enabled"] = bool(self.config.get("alert_email") and self.config.get("alert_email_password"))
         
@@ -2364,11 +2282,7 @@ class QuoTradingLauncher:
         
         if self.confidence_trading_var.get():
             confirmation_text += f"✓ Confidence Trading: ENABLED\n"
-            confirmation_text += f"  → Auto-adjusts contracts + confidence based on performance\n"
-        
-        if self.recovery_mode_var.get():
-            confirmation_text += f"✓ Recovery Mode: ENABLED\n"
-            confirmation_text += f"  → Scales down when approaching daily limits\n"
+            confirmation_text += f"  → Filters signals by confidence threshold\n"
         
         confirmation_text += f"\nThis will open a PowerShell terminal with live logs.\n"
         confirmation_text += f"Use the window's close button to stop the bot.\n\n"
@@ -3386,15 +3300,8 @@ BOT_DAILY_LOSS_LIMIT={self.loss_entry.get()}
 BOT_CONFIDENCE_THRESHOLD={self.confidence_var.get()}
 # Bot only takes signals above this confidence threshold (user's minimum)
 BOT_CONFIDENCE_TRADING={'true' if self.confidence_trading_var.get() else 'false'}
-# When approaching daily limit (80%+): SCALES DOWN (higher confidence thresholds + fewer contracts)
-# When limit HIT (100%): STOPS trading until daily reset at 6 PM ET
-# When moving away from limit: Returns to user's initial settings
-
-# Recovery Mode (All Account Types)
-BOT_RECOVERY_MODE={'true' if self.recovery_mode_var.get() else 'false'}
-# When approaching daily limit (80%+): SCALES DOWN (higher confidence thresholds + fewer contracts)
-# When limit HIT (100%): CONTINUES trading with scaled-down settings (does NOT stop)
-# When moving away from limit: Returns to user's initial settings
+# When enabled: Filters trades by confidence threshold only
+# Contracts are FIXED at user's max_contracts setting (no dynamic scaling)
 
 # Trading Mode (Signal-Only Mode for manual trading)
 BOT_SHADOW_MODE={'true' if self.shadow_mode_var.get() else 'false'}

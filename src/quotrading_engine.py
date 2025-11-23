@@ -190,15 +190,8 @@ except Exception as e:
 MSG_LIVE_TRADING_NOT_IMPLEMENTED = "Live trading not implemented - SDK integration required"
 SEPARATOR_LINE = "=" * 60
 
-# Recovery Mode Constants - Dynamic Risk Management
-RECOVERY_APPROACHING_THRESHOLD = 0.80  # Trigger recovery mode at 80% of limits
-RECOVERY_DEFAULT_SEVERITY = 0.80  # Default severity if not set
-RECOVERY_SIZE_CRITICAL = 0.95  # At 95%+ of limits
-RECOVERY_SIZE_HIGH = 0.90  # At 90-95% of limits
-RECOVERY_SIZE_MODERATE = 0.80  # At 80-90% of limits
-RECOVERY_MULTIPLIER_CRITICAL = 0.20  # Reduce to 20% of position at critical (was 33%)
-RECOVERY_MULTIPLIER_HIGH = 0.40  # Reduce to 40% of position at high severity (was 50%)
-RECOVERY_MULTIPLIER_MODERATE = 0.65  # Reduce to 65% of position at moderate severity (was 75%)
+# Daily Loss Limit Threshold
+DAILY_LOSS_APPROACHING_THRESHOLD = 0.80  # Stop trading at 80% of daily loss limit
 
 # Regime Detection Constants
 DEFAULT_FALLBACK_ATR = 5.0  # Default ATR when calculation not possible (ES futures typical value)
@@ -249,10 +242,6 @@ bot_status: Dict[str, Any] = {
     # PRODUCTION: Track trading costs
     "total_slippage_cost": 0.0,  # Total slippage costs across all trades
     "total_commission": 0.0,  # Total commissions across all trades
-    # Recovery Mode: Dynamic risk management when approaching limits
-    "recovery_confidence_threshold": None,  # Set when in recovery mode (higher confidence required)
-    "recovery_severity": None,  # Severity level (0.8-1.0) indicating proximity to failure
-    "aggressive_exit_mode": False,  # Set when at critical severity to aggressively manage positions
 }
 
 
@@ -2750,21 +2739,6 @@ def check_for_signals(symbol: str) -> None:
         # Ask cloud RL API for decision (or local RL as fallback)
         take_signal, confidence, reason = get_ml_confidence(rl_state, "long")
         
-        # Check if in recovery mode and need higher confidence
-        if take_signal and bot_status.get("recovery_confidence_threshold"):
-            recovery_threshold = bot_status["recovery_confidence_threshold"]
-            if confidence < recovery_threshold:
-                logger.info(f" RECOVERY MODE REJECTED LONG signal: confidence {confidence:.1%} below recovery threshold {recovery_threshold:.1%}")
-                logger.info(f"   Bot is in recovery mode - only taking high-confidence signals")
-                state[symbol]["last_rejected_signal"] = {
-                    "time": get_current_time(),
-                    "state": rl_state,
-                    "side": "long",
-                    "confidence": confidence,
-                    "reason": f"Recovery mode: {confidence:.1%} < {recovery_threshold:.1%}"
-                }
-                return
-        
         if not take_signal:
             logger.info(f"❌ RL REJECTED LONG: {reason} (conf: {confidence:.0%})")
             if not is_backtest_mode():
@@ -2804,21 +2778,6 @@ def check_for_signals(symbol: str) -> None:
         
         # Ask cloud RL API for decision (or local RL as fallback)
         take_signal, confidence, reason = get_ml_confidence(rl_state, "short")
-        
-        # Check if in recovery mode and need higher confidence
-        if take_signal and bot_status.get("recovery_confidence_threshold"):
-            recovery_threshold = bot_status["recovery_confidence_threshold"]
-            if confidence < recovery_threshold:
-                logger.info(f" RECOVERY MODE REJECTED SHORT signal: confidence {confidence:.1%} below recovery threshold {recovery_threshold:.1%}")
-                logger.info(f"   Bot is in recovery mode - only taking high-confidence signals")
-                state[symbol]["last_rejected_signal"] = {
-                    "time": get_current_time(),
-                    "state": rl_state,
-                    "side": "short",
-                    "confidence": confidence,
-                    "reason": f"Recovery mode: {confidence:.1%} < {recovery_threshold:.1%}"
-                }
-                return
         
         if not take_signal:
             logger.info(f"❌ RL REJECTED SHORT: {reason} (conf: {confidence:.0%})")
@@ -2860,16 +2819,16 @@ def calculate_position_size(symbol: str, side: str, entry_price: float, rl_confi
     """
     Calculate position size based on risk management rules.
     
-    USER SETS MAX LIMIT → RL Confidence dynamically chooses contracts within that limit!
+    FIXED CONTRACTS: User's max_contracts setting determines position size.
     - User configures max_contracts (e.g., 3 contracts)
-    - RL confidence scales: LOW = 1 contract, MEDIUM = 2 contracts, HIGH = 3 contracts
-    - User with max_contracts=10 gets: LOW = 3, MEDIUM = 6, HIGH = 10
+    - Position size is ALWAYS fixed at this value (no dynamic scaling)
+    - Risk-based calculation ensures we don't exceed risk tolerance
     
     Args:
         symbol: Instrument symbol
         side: 'long' or 'short'
         entry_price: Expected entry price
-        rl_confidence: Optional RL confidence (0-1) to adjust position size
+        rl_confidence: Optional RL confidence (not used for position sizing)
     
     Returns:
         Tuple of (contracts, stop_price, target_price)
@@ -2938,88 +2897,11 @@ def calculate_position_size(symbol: str, side: str, entry_price: float, rl_confi
     else:
         contracts = 0
     
-    # Get user's max contracts limit
+    # Get user's max contracts limit and apply it (FIXED - no dynamic scaling)
     user_max_contracts = CONFIG["max_contracts"]
+    contracts = min(contracts, user_max_contracts)
     
-    # Apply RL confidence to dynamically scale WITHIN user's limit
-    # Check if dynamic contracts feature is enabled (GUI setting)
-    dynamic_contracts_enabled = CONFIG.get("dynamic_contracts", False)
-    
-    if rl_confidence is not None and dynamic_contracts_enabled:
-        global rl_brain
-        if rl_brain is not None:
-            size_multiplier = rl_brain.get_position_size_multiplier(rl_confidence)
-        else:
-            size_multiplier = 1.0
-            
-        # Calculate RL-scaled max contracts
-        # DYNAMIC SCALING: Works with ANY max_contracts setting (1-25)
-        # Examples:
-        #   max=3, conf=50%  -> 2 contracts
-        #   max=10, conf=50% -> 5 contracts  
-        #   max=25, conf=50% -> 13 contracts
-        #   max=25, conf=90% -> 23 contracts
-        rl_scaled_max = max(1, int(round(user_max_contracts * size_multiplier)))
-        
-        # Use MINIMUM of risk-based calculation and RL-scaled max
-        # This ensures we respect BOTH the risk management AND user's max limit
-        contracts = min(contracts, rl_scaled_max)
-        
-        # Detailed confidence level logging
-        if rl_confidence < 0.3:
-            confidence_level = "VERY LOW"
-        elif rl_confidence < 0.5:
-            confidence_level = "LOW"
-        elif rl_confidence < 0.7:
-            confidence_level = "MEDIUM"
-        elif rl_confidence < 0.85:
-            confidence_level = "HIGH"
-        else:
-            confidence_level = "VERY HIGH"
-            
-        logger.info(f"[DYNAMIC CONTRACTS] {confidence_level} confidence ({rl_confidence:.1%}) × Max {user_max_contracts} = {rl_scaled_max} contracts (capped at {contracts} by risk)")
-    else:
-        # No RL confidence or dynamic contracts disabled - use fixed max
-        contracts = min(contracts, user_max_contracts)
-        # Only log once when dynamic contracts are first disabled (avoid spamming logs)
-        if not dynamic_contracts_enabled and rl_confidence is not None:
-            if not hasattr(calculate_position_size, '_logged_fixed_mode'):
-                logger.info(f"[FIXED CONTRACTS] Using fixed max of {user_max_contracts} contracts (dynamic contracts disabled)")
-                calculate_position_size._logged_fixed_mode = True
-    
-    # RECOVERY MODE: Further reduce position size when approaching limits
-    if bot_status.get("recovery_confidence_threshold") is not None:
-        severity = bot_status.get("recovery_severity", RECOVERY_DEFAULT_SEVERITY)
-        # Dynamically scale position size based on proximity to failure
-        # CONSERVATIVE SCALING - more aggressive reductions at higher severity
-        # As bot gets FURTHER from failure, INCREASE contracts back to original
-        # At 95%+ severity: 20% of normal size (was 33%)
-        # At 90% severity: 40% of normal size (was 50%)
-        # At 80% severity: 65% of normal size (was 75%)
-        # At 70% severity: 80% of normal size (scaling back up)
-        # At 60% severity: 90% of normal size (almost back to normal)
-        # Below 50% severity: 100% of normal size (fully restored)
-        if severity >= RECOVERY_SIZE_CRITICAL:
-            recovery_multiplier = RECOVERY_MULTIPLIER_CRITICAL  # 20%
-        elif severity >= RECOVERY_SIZE_HIGH:
-            recovery_multiplier = RECOVERY_MULTIPLIER_HIGH  # 40%
-        elif severity >= RECOVERY_SIZE_MODERATE:
-            recovery_multiplier = RECOVERY_MULTIPLIER_MODERATE  # 65%
-        elif severity >= 0.70:
-            recovery_multiplier = 0.80  # Scaling back up - 80%
-        elif severity >= 0.60:
-            recovery_multiplier = 0.90  # Almost back to normal - 90%
-        else:
-            recovery_multiplier = 1.0  # Fully restored - 100%
-        
-        original_contracts = contracts
-        contracts = max(1, int(round(contracts * recovery_multiplier)))
-        
-        if contracts != original_contracts:
-            if recovery_multiplier < 1.0:
-                logger.warning(f"[RECOVERY MODE] Position size adjusted: {original_contracts} → {contracts} contracts (severity: {severity*100:.0f}%, multiplier: {recovery_multiplier*100:.0f}%)")
-            else:
-                logger.info(f"[RECOVERY MODE] Position size restored: {original_contracts} → {contracts} contracts (severity: {severity*100:.0f}%, safe zone)")
+    logger.info(f"[FIXED CONTRACTS] Using fixed max of {user_max_contracts} contracts")
     
     if contracts == 0:
         logger.warning(f"Position size too small: risk=${risk_per_contract:.2f}, allowance=${risk_dollars:.2f}")
@@ -6209,19 +6091,18 @@ def check_daily_loss_limit(symbol: str) -> Tuple[bool, Optional[str]]:
 def check_approaching_failure(symbol: str) -> Tuple[bool, Optional[str], Optional[float]]:
     """
     Check if bot is approaching daily loss limit.
-    Used for Recovery Mode and Confidence Trading.
     
     Args:
         symbol: Instrument symbol
     
     Returns:
         Tuple of (is_approaching, reason, severity_level)
-        - is_approaching: True if at RECOVERY_APPROACHING_THRESHOLD (80%) or more of daily loss limit
+        - is_approaching: True if at DAILY_LOSS_APPROACHING_THRESHOLD (80%) or more of daily loss limit
         - reason: Description of what limit is being approached
         - severity_level: 0.0-1.0 indicating how close to failure (0.8 = at 80%, 1.0 = at 100%)
     """
     daily_loss_limit = CONFIG.get("daily_loss_limit", 1000.0)
-    if daily_loss_limit > 0 and state[symbol]["daily_pnl"] <= -daily_loss_limit * RECOVERY_APPROACHING_THRESHOLD:
+    if daily_loss_limit > 0 and state[symbol]["daily_pnl"] <= -daily_loss_limit * DAILY_LOSS_APPROACHING_THRESHOLD:
         daily_loss_severity = abs(state[symbol]["daily_pnl"]) / daily_loss_limit
         reason = f"Daily loss at {daily_loss_severity*100:.1f}% of limit (${state[symbol]['daily_pnl']:.2f}/${-daily_loss_limit:.2f})"
         
@@ -6238,51 +6119,6 @@ def check_approaching_failure(symbol: str) -> Tuple[bool, Optional[str], Optiona
         return True, reason, daily_loss_severity
     
     return False, None, 0.0
-
-
-def get_recovery_confidence_threshold(severity_level: float) -> float:
-    """
-    Calculate required confidence threshold for recovery mode.
-    Higher severity = higher confidence requirement.
-    Confidence NEVER goes below user's initial threshold - it only increases.
-    
-    Uses percentage-based scaling to work with any user setting (50%-90%).
-    CONSERVATIVE: At critical levels (95%+), uses nearly all headroom for maximum selectivity.
-    
-    Args:
-        severity_level: How close to failure (0.8 = at 80%, 1.0 = at 100%)
-    
-    Returns:
-        Required confidence threshold (0.0-1.0), never below user's initial setting
-    """
-    # Base threshold is user's setting - this is the MINIMUM
-    base_threshold = CONFIG.get("rl_confidence_threshold", 0.65)
-    
-    # Calculate how much headroom we have to increase (distance to 100%)
-    headroom = 1.0 - base_threshold
-    
-    # Scale confidence based on severity using percentage of headroom
-    # CONSERVATIVE SCALING - uses more headroom as danger increases
-    # At 80% severity: use 30% of headroom (moderate increase)
-    # At 90% severity: use 60% of headroom (significant increase)
-    # At 95% severity: use 85% of headroom (very selective)
-    # At 98%+ severity: use 95% of headroom (maximum selectivity - only absolute best signals)
-    if severity_level >= 0.98:
-        increase_multiplier = 0.95  # Use 95% of headroom - extremely selective
-    elif severity_level >= 0.95:
-        increase_multiplier = 0.85  # Use 85% of headroom - very selective
-    elif severity_level >= 0.90:
-        increase_multiplier = 0.60  # Use 60% of headroom - selective
-    elif severity_level >= 0.80:
-        increase_multiplier = 0.30  # Use 30% of headroom - moderately selective
-    else:
-        increase_multiplier = 0.0  # Normal operation - no increase
-    
-    # Calculate new threshold: base + (percentage of available headroom)
-    dynamic_threshold = base_threshold + (headroom * increase_multiplier)
-    
-    # Cap at 0.98 (never require 100% - impossible to achieve)
-    return min(0.98, dynamic_threshold)
 
 
 def check_tick_timeout(current_time: datetime) -> Tuple[bool, Optional[str]]:
@@ -6389,186 +6225,74 @@ def check_safety_conditions(symbol: str) -> Tuple[bool, Optional[str]]:
     # if not is_safe:
     #     return False, reason
     
-    # Check if approaching failure (Confidence Trading & Recovery Mode)
+    # Check if approaching daily loss limit (SIMPLIFIED - no recovery mode or dynamic scaling)
     is_approaching, approach_reason, severity = check_approaching_failure(symbol)
     if is_approaching:
-        # Check which safety mode is enabled
-        confidence_trading_enabled = CONFIG.get("confidence_trading", False)
-        recovery_mode_enabled = CONFIG.get("recovery_mode", False)
+        # SIMPLIFIED: Just stop trading when approaching limit
+        # No dynamic scaling, no recovery mode
         
-        # BOTH MODES USE SAME SCALING LOGIC (higher confidence + fewer contracts as approaching limit)
-        # DIFFERENCE: Confidence Trading STOPS at limit, Recovery Mode CONTINUES
-        
-        if confidence_trading_enabled or recovery_mode_enabled:
-            # AUTO-SCALE confidence based on severity (same for both modes)
-            required_confidence = get_recovery_confidence_threshold(severity)
-            
-            # Determine which mode is active for logging
-            mode_name = "RECOVERY MODE" if recovery_mode_enabled else "CONFIDENCE TRADING"
-            stop_reason = "recovery_mode" if recovery_mode_enabled else "confidence_trading"
-            
-            if bot_status.get("stop_reason") != stop_reason:
-                logger.warning("=" * 80)
-                logger.warning(f"{mode_name}: APPROACHING LIMITS - SCALING DOWN")
-                logger.warning(f"Reason: {approach_reason}")
-                logger.warning(f"Severity: {severity*100:.1f}%")
-                logger.warning(f"Required confidence DYNAMICALLY increased to {required_confidence*100:.1f}%")
-                logger.warning("Bot will ONLY take highest-confidence signals")
-                logger.warning("Position size will be dynamically reduced")
-                if recovery_mode_enabled:
-                    logger.warning("⚠️ RECOVERY MODE: Will continue trading even if limit hit")
-                else:
-                    logger.warning("⚠️ CONFIDENCE TRADING: Will STOP trading if limit hit")
-                logger.warning("=" * 80)
-                bot_status["stop_reason"] = stop_reason
-                
-                # Send recovery/confidence mode activation alert
-                try:
-                    notifier = get_notifier()
-                    notifier.send_error_alert(
-                        error_message=f"{mode_name} ACTIVATED. Severity: {severity*100:.1f}%. {approach_reason}. Trading scaled down to highest-confidence signals only.",
-                        error_type=mode_name
-                    )
-                except Exception as e:
-                    logger.debug(f"Failed to send {mode_name} alert: {e}")
-            
-            # Store threshold and severity for use in signal evaluation and position sizing
-            bot_status["recovery_confidence_threshold"] = required_confidence
-            bot_status["recovery_severity"] = severity
-            
-            # CRITICAL: Check if daily limit actually HIT (severity >= 1.0)
-            # Confidence Trading STOPS, Recovery Mode CONTINUES
-            if severity >= 1.0 and confidence_trading_enabled and not recovery_mode_enabled:
-                logger.error("=" * 80)
-                logger.error("🛑 CONFIDENCE TRADING: DAILY LIMIT HIT - STOPPING TRADING")
-                logger.error(f"Daily Loss: ${state[symbol]['daily_pnl']:.2f}")
-                logger.error(f"Daily Limit: ${-CONFIG.get('daily_loss_limit', 1000):.2f}")
-                logger.error("Bot will STOP making new trades until daily reset at 6 PM ET")
-                logger.error("Bot continues running and monitoring - will resume after maintenance hour")
-                logger.error("=" * 80)
-                bot_status["trading_enabled"] = False
-                bot_status["stop_reason"] = "confidence_trading_limit_hit"
-                
-                # Close any active position when limit hit
-                if state[symbol]["position"]["active"]:
-                    position = state[symbol]["position"]
-                    entry_price = position.get("entry_price", 0)
-                    side = position.get("side", "long")
-                    current_price = state[symbol]["bars"][-1]["close"] if state[symbol]["bars"] else entry_price
-                    
-                    logger.error("=" * 80)
-                    logger.error("CONFIDENCE TRADING: Closing active position due to daily limit")
-                    logger.error(f"Position: {side.upper()} {position['quantity']} @ ${entry_price:.2f}")
-                    logger.error(f"Current Price: ${current_price:.2f}")
-                    logger.error("=" * 80)
-                    
-                    # Get smart flatten price
-                    flatten_price = get_flatten_price(symbol, side, current_price)
-                    
-                    # Close the position
-                    handle_exit_orders(symbol, position, flatten_price, "confidence_trading_limit_protection")
-                    
-                    logger.info(f"Position closed at ${flatten_price:.2f} - Confidence Trading limit hit")
-                
-                return False, "Confidence Trading: Daily limit hit - trading stopped until next session (6 PM ET reset)"
-            
-            # SMART POSITION MANAGEMENT: If severity is critical (95%+), consider closing losing positions
-            if severity >= 0.95 and state[symbol]["position"]["active"]:
-                position = state[symbol]["position"]
-                entry_price = position.get("entry_price", 0)
-                current_price = state[symbol]["bars"][-1]["close"] if state[symbol]["bars"] else entry_price
-                
-                # Check if position is losing
-                is_losing = (
-                    (position["side"] == "long" and current_price < entry_price) or
-                    (position["side"] == "short" and current_price > entry_price)
-                )
-                
-                if is_losing:
-                    # Calculate how much the position is losing
-                    side = position.get("side", "long")
-                    if side == "long":
-                        position_pnl = (current_price - entry_price) * position["quantity"]
-                    else:
-                        position_pnl = (entry_price - current_price) * position["quantity"]
-                    
-                    logger.warning("=" * 80)
-                    logger.warning("SMART POSITION MANAGEMENT: Critical severity (95%+) with losing position")
-                    logger.warning(f"Position: {side.upper()} {position['quantity']} @ ${entry_price:.2f}")
-                    logger.warning(f"Current Price: ${current_price:.2f}")
-                    logger.warning(f"Position Loss: ${position_pnl:.2f}")
-                    logger.warning("Closing position to prevent account failure")
-                    logger.warning("=" * 80)
-                    
-                    # Get smart flatten price
-                    flatten_price = get_flatten_price(symbol, side, current_price)
-                    
-                    # Close the losing position immediately
-                    handle_exit_orders(symbol, position, flatten_price, "critical_loss_protection")
-                    
-                    logger.info(f"Losing position closed at ${flatten_price:.2f} in safety mode")
-                else:
-                    # Position is winning, just flag for aggressive management
-                    logger.info("Position is profitable - maintaining with aggressive exit management")
-                    bot_status["aggressive_exit_mode"] = True
-            
-            # Don't stop trading - both modes continue with scaled-down logic
-        else:
-            # NEITHER MODE ENABLED: STOP trading until next session (after maintenance)
-            # Bot stays running but doesn't execute new trades until daily reset at 6 PM ET
+        if bot_status.get("stop_reason") != "daily_limits_reached":
             logger.warning("=" * 80)
-            logger.warning("⚠️ LIMITS REACHED - STOPPING TRADING UNTIL NEXT SESSION")
+            logger.warning("⚠️ APPROACHING DAILY LOSS LIMIT - STOPPING TRADING")
             logger.warning(f"Reason: {approach_reason}")
             logger.warning(f"Severity: {severity*100:.1f}%")
             logger.warning("Bot will STOP making new trades until daily reset at 6 PM ET")
             logger.warning("Bot continues running and monitoring - will resume after maintenance hour")
-            logger.warning("To scale down when approaching limits, enable Confidence Trading or Recovery Mode")
             logger.warning("=" * 80)
-            bot_status["trading_enabled"] = False
             bot_status["stop_reason"] = "daily_limits_reached"
             
-            # SMART POSITION CLOSING: Close any active position when daily limit reached
-            if state[symbol]["position"]["active"]:
-                position = state[symbol]["position"]
-                entry_price = position.get("entry_price", 0)
-                side = position.get("side", "long")
-                current_price = state[symbol]["bars"][-1]["close"] if state[symbol]["bars"] else entry_price
-                
-                # Calculate current P&L for the position
-                if side == "long":
-                    position_pnl = (current_price - entry_price) * position["quantity"]
-                else:
-                    position_pnl = (entry_price - current_price) * position["quantity"]
-                
-                logger.warning("=" * 80)
-                logger.warning("SMART POSITION MANAGEMENT: Closing active position due to daily limit")
-                logger.warning(f"Position: {side.upper()} {position['quantity']} @ ${entry_price:.2f}")
-                logger.warning(f"Current Price: ${current_price:.2f}")
-                logger.warning(f"Position P&L: ${position_pnl:.2f}")
-                logger.warning("Executing smart exit to minimize additional losses")
-                logger.warning("=" * 80)
-                
-                # Get smart flatten price (includes buffer to ensure fill)
-                flatten_price = get_flatten_price(symbol, side, current_price)
-                
-                # Close the position
-                handle_exit_orders(symbol, position, flatten_price, "daily_limit_protection")
-                
-                logger.info(f"Position closed at ${flatten_price:.2f} to protect from further losses")
+            # Send limit warning alert
+            try:
+                notifier = get_notifier()
+                notifier.send_error_alert(
+                    error_message=f"Daily loss limit reached. Severity: {severity*100:.1f}%. {approach_reason}. Trading stopped.",
+                    error_type="DAILY_LIMIT_REACHED"
+                )
+            except Exception as e:
+                logger.debug(f"Failed to send daily limit alert: {e}")
+        
+        bot_status["trading_enabled"] = False
+        
+        # Close any active position when limit reached
+        if state[symbol]["position"]["active"]:
+            position = state[symbol]["position"]
+            entry_price = position.get("entry_price", 0)
+            side = position.get("side", "long")
+            current_price = state[symbol]["bars"][-1]["close"] if state[symbol]["bars"] else entry_price
             
-            return False, "Daily limits reached - trading stopped until next session (6 PM ET reset)"
+            # Calculate current P&L for the position
+            if side == "long":
+                position_pnl = (current_price - entry_price) * position["quantity"]
+            else:
+                position_pnl = (entry_price - current_price) * position["quantity"]
+            
+            logger.warning("=" * 80)
+            logger.warning("POSITION MANAGEMENT: Closing active position due to daily limit")
+            logger.warning(f"Position: {side.upper()} {position['quantity']} @ ${entry_price:.2f}")
+            logger.warning(f"Current Price: ${current_price:.2f}")
+            logger.warning(f"Position P&L: ${position_pnl:.2f}")
+            logger.warning("Executing exit to protect account")
+            logger.warning("=" * 80)
+            
+            # Get smart flatten price (includes buffer to ensure fill)
+            flatten_price = get_flatten_price(symbol, side, current_price)
+            
+            # Close the position
+            handle_exit_orders(symbol, position, flatten_price, "daily_limit_protection")
+            
+            logger.info(f"Position closed at ${flatten_price:.2f} to protect from further losses")
+        
+        return False, "Daily limits reached - trading stopped until next session (6 PM ET reset)"
     else:
         # Not approaching failure - clear any safety mode that was set
-        if bot_status.get("stop_reason") in ["daily_limits_reached", "recovery_mode", "confidence_trading", "confidence_trading_limit_hit"]:
+        if bot_status.get("stop_reason") == "daily_limits_reached":
             logger.info("=" * 80)
             logger.info("SAFE ZONE: Back to normal operation")
             logger.info("Bot has moved away from failure thresholds")
-            logger.info("Returning to user's initial settings")
+            logger.info("Resuming normal trading")
             logger.info("=" * 80)
             bot_status["trading_enabled"] = True
             bot_status["stop_reason"] = None
-            bot_status["recovery_confidence_threshold"] = None
-            bot_status["recovery_severity"] = None
     
     # Check tick timeout
     is_safe, reason = check_tick_timeout(current_time)
