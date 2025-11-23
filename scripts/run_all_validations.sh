@@ -28,7 +28,7 @@ echo ""
 
 # Step 1: Auto-fix JSON files
 echo "================================================================================"
-echo "[1/4] Auto-fixing JSON files..."
+echo "[1/5] Auto-fixing JSON files..."
 echo "================================================================================"
 python3 "$PROJECT_ROOT/scripts/fix_json_files.py"
 RESULT=$?
@@ -40,7 +40,7 @@ echo ""
 
 # Step 2: Validate JSON files
 echo "================================================================================"
-echo "[2/4] Validating JSON files..."
+echo "[2/5] Validating JSON files..."
 echo "================================================================================"
 python3 "$PROJECT_ROOT/scripts/validate_json_files.py"
 RESULT=$?
@@ -50,9 +50,21 @@ if [ $RESULT -ne 0 ]; then
 fi
 echo ""
 
-# Step 3: Test Cloud RL connection
+# Step 3: Validate RL execution data
 echo "================================================================================"
-echo "[3/4] Testing Cloud RL connection..."
+echo "[3/5] Validating RL execution data..."
+echo "================================================================================"
+python3 "$PROJECT_ROOT/scripts/validate_rl_execution_data.py"
+RESULT=$?
+if [ $RESULT -ne 0 ]; then
+    echo -e "${RED}❌ RL execution data validation failed${NC}"
+    exit 1
+fi
+echo ""
+
+# Step 4: Test Cloud RL connection
+echo "================================================================================"
+echo "[4/5] Testing Cloud RL connection..."
 echo "================================================================================"
 python3 "$PROJECT_ROOT/scripts/test_cloud_rl_connection.py"
 RESULT=$?
@@ -63,9 +75,9 @@ if [ $RESULT -ne 0 ]; then
 fi
 echo ""
 
-# Step 4: Run comprehensive pre-flight check
+# Step 5: Run comprehensive pre-flight check
 echo "================================================================================"
-echo "[4/4] Running comprehensive pre-flight check..."
+echo "[5/5] Running comprehensive pre-flight check..."
 echo "================================================================================"
 python3 "$PROJECT_ROOT/scripts/preflight_check.py"
 RESULT=$?
@@ -103,10 +115,12 @@ echo -e "${GREEN}✅ All critical checks passed!${NC}"
 echo ""
 echo "Next steps:"
 echo "  1. Review any warnings above"
-echo "  2. Ensure environment variables are set:"
+echo "  2. Deploy database migration (if not already done):"
+echo "     cloud-api/flask-api/migrations/add_execution_data_to_rl_experiences.sql"
+echo "  3. Ensure environment variables are set:"
 echo "     export BOT_ENVIRONMENT=production"
 echo "     export CONFIRM_LIVE_TRADING=1"
-echo "  3. Start live trading:"
+echo "  4. Start live trading:"
 echo "     python src/main.py"
 echo ""
 echo "================================================================================"

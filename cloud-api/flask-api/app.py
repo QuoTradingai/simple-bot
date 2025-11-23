@@ -1457,7 +1457,15 @@ def submit_outcome():
         "state": {...},  // Same state sent to analyze-signal
         "took_trade": true,
         "pnl": 125.50,
-        "duration": 1800  // seconds
+        "duration": 1800,  // seconds
+        "execution_data": {  // Optional: execution quality metrics for RL learning
+            "order_type_used": "passive",  // "passive", "aggressive", "mixed"
+            "entry_slippage_ticks": 1.5,  // Actual slippage in ticks
+            "partial_fill": false,  // Whether partial fill occurred
+            "fill_ratio": 1.0,  // Percentage filled (0.66 = 2 of 3)
+            "exit_reason": "target_reached",  // How trade closed
+            "held_full_duration": true  // Whether hit target/stop vs time exit
+        }
     }
     
     Response:
@@ -1474,6 +1482,7 @@ def submit_outcome():
         took_trade = data.get('took_trade', False)
         pnl = data.get('pnl', 0.0)
         duration = data.get('duration', 0.0)
+        execution_data = data.get('execution_data', {})  # Get execution quality metrics
         
         # Validate license key
         if not license_key:
@@ -1517,8 +1526,14 @@ def submit_outcome():
                     took_trade,
                     pnl,
                     duration,
+                    order_type_used,
+                    entry_slippage_ticks,
+                    partial_fill,
+                    fill_ratio,
+                    exit_reason,
+                    held_full_duration,
                     created_at
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
             """, (
                 license_key,
                 state.get('symbol', 'ES'),  # Default to ES if not provided
@@ -1534,7 +1549,14 @@ def submit_outcome():
                 state.get('regime', 'NORMAL'),
                 took_trade,
                 pnl,
-                duration
+                duration,
+                # Execution quality metrics for RL learning
+                execution_data.get('order_type_used'),
+                execution_data.get('entry_slippage_ticks'),
+                execution_data.get('partial_fill', False),
+                execution_data.get('fill_ratio', 1.0),
+                execution_data.get('exit_reason'),
+                execution_data.get('held_full_duration', True)
             ))
             
             # Get total experiences and win rate for this symbol
