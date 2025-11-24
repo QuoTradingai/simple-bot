@@ -20,6 +20,9 @@ pandas==2.2.3
 # HTTP Requests
 requests==2.32.3
 
+# Web Scraping (for economic calendar)
+beautifulsoup4==4.12.3
+
 # Date/Time
 pytz==2024.2
 python-dateutil==2.9.0
