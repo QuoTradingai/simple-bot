@@ -2045,11 +2045,14 @@ def calculate_atr(symbol: str, period: int = 14) -> Optional[float]:
 
 def calculate_atr_1min(symbol: str, period: int = 14) -> Optional[float]:
     """
-    Calculate Average True Range (ATR) using 1-minute bars for regime detection.
+    Calculate Average True Range (ATR) using 1-minute bars.
     
-    This function uses 1-minute bars to provide higher-resolution volatility data
-    for accurate regime detection. The regime detector needs ATR calculated from
-    the same timeframe as the bars it analyzes (1-minute bars).
+    NOTE: This is NOT used for regime detection or trading decisions.
+    For trading decisions (regime detection, position sizing), use calculate_atr()
+    which uses 15-minute bars to reduce noise.
+    
+    This function exists for potential future use cases that need high-resolution
+    volatility data (e.g., intraday volatility spikes, tick-level analysis).
     
     Args:
         symbol: Instrument symbol
@@ -2865,14 +2868,16 @@ def calculate_position_size(symbol: str, side: str, entry_price: float, rl_confi
     vwap = state[symbol]["vwap"]
     tick_size = CONFIG["tick_size"]
     
-    # Detect current regime for entry
+    # Detect current regime for entry using 15-minute bars (less noise)
     regime_detector = get_regime_detector()
-    bars = state[symbol]["bars_1min"]
-    atr = calculate_atr_1min(symbol, CONFIG.get("atr_period", 14))
+    bars_15min = state[symbol]["bars_15min"]
+    
+    # Use 15-minute bars for ATR calculation (smoother, less noise)
+    atr = calculate_atr(symbol, CONFIG.get("atr_period", 14))
     
     if atr is None:
         # Fallback to fixed stops if ATR can't be calculated
-        logger.warning("ATR calculation failed, using fixed stops as fallback")
+        logger.warning("ATR calculation failed (need 15-min bars), using fixed stops as fallback")
         max_stop_ticks = 11
         if side == "long":
             stop_price = entry_price - (max_stop_ticks * tick_size)
@@ -2883,12 +2888,12 @@ def calculate_position_size(symbol: str, side: str, entry_price: float, rl_confi
         stop_price = round_to_tick(stop_price)
         target_price = round_to_tick(target_price)
     else:
-        # Use regime-based stop loss calculation
-        entry_regime = regime_detector.detect_regime(bars, atr, CONFIG.get("atr_period", 14))
+        # Use regime-based stop loss calculation with 15-minute bars
+        entry_regime = regime_detector.detect_regime(bars_15min, atr, CONFIG.get("atr_period", 14))
         
         # Calculate stop using regime multiplier (pure regime-based, no confidence scaling)
         stop_multiplier = entry_regime.stop_mult
-        logger.info(f"Regime-based stop: {entry_regime.name}, multiplier {stop_multiplier:.2f}x")
+        logger.info(f"Regime-based stop: {entry_regime.name}, multiplier {stop_multiplier:.2f}x, ATR from 15-min: {atr:.2f}")
         
         # Use fixed target multiplier (can be made regime-based in future)
         target_multiplier = CONFIG.get("profit_target_atr_multiplier", 4.75)
@@ -3627,15 +3632,18 @@ def execute_entry(symbol: str, side: str, entry_price: float) -> None:
     # Calculate initial risk in ticks
     stop_distance_ticks = abs(actual_fill_price - stop_price) / CONFIG["tick_size"]
     
-    # Detect entry regime
+    # Detect entry regime using 15-minute bars (less noise, more accurate)
     regime_detector = get_regime_detector()
-    bars = state[symbol]["bars_1min"]
-    atr = calculate_atr_1min(symbol, CONFIG.get("atr_period", 14))
+    bars_15min = state[symbol]["bars_15min"]
+    
+    # Use 15-minute ATR for regime detection
+    atr = calculate_atr(symbol, CONFIG.get("atr_period", 14))
     if atr is None:
         atr = DEFAULT_FALLBACK_ATR  # Use constant instead of magic number
-        logger.warning(f"ATR not calculable, using fallback value: {DEFAULT_FALLBACK_ATR}")
+        logger.warning(f"ATR not calculable from 15-min bars, using fallback value: {DEFAULT_FALLBACK_ATR}")
     
-    entry_regime = regime_detector.detect_regime(bars, atr, CONFIG.get("atr_period", 14))
+    # Detect regime from 15-minute bars
+    entry_regime = regime_detector.detect_regime(bars_15min, atr, CONFIG.get("atr_period", 14))
     logger.info(f"")
     logger.info(f"  📊 PROFESSIONAL RISK MANAGEMENT")
     logger.info(f"  Entry Regime: {entry_regime.name}")
@@ -4819,26 +4827,35 @@ def update_current_regime(symbol: str) -> None:
     Update the current regime for the symbol based on latest bars.
     This is called after each bar completion to keep regime detection current.
     
+    CRITICAL: Uses 15-minute bars for ATR calculation (less noise) as per strategy design.
+    Regime detection requires 114 bars total (100 for baseline + 14 for current ATR).
+    
     Args:
         symbol: Instrument symbol
     """
     regime_detector = get_regime_detector()
-    bars = state[symbol]["bars_1min"]
     
-    # Need enough bars for regime detection (114 = 100 baseline + 14 current)
-    if len(bars) < 114:
+    # Use 15-minute bars for regime detection (less noise, more accurate)
+    bars_15min = state[symbol]["bars_15min"]
+    
+    # Need enough 15-min bars for regime detection (114 = 100 baseline + 14 current)
+    # This translates to ~28.5 hours of data (114 * 15 min = 1710 minutes)
+    if len(bars_15min) < 114:
         state[symbol]["current_regime"] = "NORMAL"
+        logger.debug(f"[REGIME] Insufficient 15-min bars ({len(bars_15min)}/114) - using NORMAL")
         return
     
-    current_atr = calculate_atr_1min(symbol, CONFIG.get("atr_period", 14))
+    # Calculate ATR from 15-minute bars (smoother, less noise)
+    current_atr = calculate_atr(symbol, CONFIG.get("atr_period", 14))
     if current_atr is None:
         state[symbol]["current_regime"] = "NORMAL"
+        logger.debug(f"[REGIME] ATR calculation failed - using NORMAL")
         return
     
-    # Detect and store current regime
-    detected_regime = regime_detector.detect_regime(bars, current_atr, CONFIG.get("atr_period", 14))
+    # Detect and store current regime using 15-min bars
+    detected_regime = regime_detector.detect_regime(bars_15min, current_atr, CONFIG.get("atr_period", 14))
     state[symbol]["current_regime"] = detected_regime.name
-    logger.debug(f"[REGIME] Updated to {detected_regime.name} (ATR: {current_atr:.2f})")
+    logger.debug(f"[REGIME] Updated to {detected_regime.name} (ATR from 15-min: {current_atr:.2f})")
 
 
 def check_regime_change(symbol: str, current_price: float) -> None:
@@ -4846,7 +4863,7 @@ def check_regime_change(symbol: str, current_price: float) -> None:
     Check if market regime has changed during an active trade and adjust parameters.
     
     This function:
-    1. Detects current regime from last 20 bars
+    1. Detects current regime from 15-minute bars (less noise)
     2. Compares to entry regime
     3. If changed, updates stop loss and trailing parameters based on new regime
     4. Uses pure regime multipliers (no confidence scaling)
@@ -4866,16 +4883,19 @@ def check_regime_change(symbol: str, current_price: float) -> None:
     # Get entry regime
     entry_regime_name = position.get("entry_regime", "NORMAL")
     
-    # Detect current regime
+    # Detect current regime using 15-minute bars (less noise, more accurate)
     regime_detector = get_regime_detector()
-    bars = state[symbol]["bars_1min"]
-    current_atr = calculate_atr_1min(symbol, CONFIG.get("atr_period", 14))
+    bars_15min = state[symbol]["bars_15min"]
+    
+    # Use 15-minute ATR for regime detection
+    current_atr = calculate_atr(symbol, CONFIG.get("atr_period", 14))
     
     if current_atr is None:
         logger.debug("ATR not calculable, skipping regime change check")
         return  # Can't detect regime without ATR
     
-    current_regime = regime_detector.detect_regime(bars, current_atr, CONFIG.get("atr_period", 14))
+    # Detect regime from 15-minute bars
+    current_regime = regime_detector.detect_regime(bars_15min, current_atr, CONFIG.get("atr_period", 14))
     
     # Check if regime has changed
     has_changed, new_regime = regime_detector.check_regime_change(
