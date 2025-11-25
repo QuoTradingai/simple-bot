@@ -488,6 +488,12 @@ def main():
             elif 'RL REJECTED' in msg:
                 reporter.record_signal(approved=False)
                 return True  # Show rejections for debugging
+            elif 'Exploring' in msg:
+                # Show exploration messages
+                return True
+            elif 'LONG SIGNAL' in msg or 'SHORT SIGNAL' in msg:
+                # Show when signals are detected (before RL decision)
+                return True
             # Allow WARNING and above
             return record.levelno >= logging.WARNING
     
