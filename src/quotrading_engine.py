@@ -3863,10 +3863,16 @@ def check_target_reached(symbol: str, current_bar: Dict[str, Any], position: Dic
         if side == "long":
             tightened_target = entry_price + tightened_target_distance
             if current_bar["high"] >= tightened_target:
+                # Enhanced logging for backtesting
+                if is_backtest_mode():
+                    logger.info(f"[EXIT] TIGHTENED TARGET (3 PM+): 1:1 R/R target @ ${tightened_target:.2f} hit")
                 return True, tightened_target
         else:  # short
             tightened_target = entry_price - tightened_target_distance
             if current_bar["low"] <= tightened_target:
+                # Enhanced logging for backtesting
+                if is_backtest_mode():
+                    logger.info(f"[EXIT] TIGHTENED TARGET (3 PM+): 1:1 R/R target @ ${tightened_target:.2f} hit")
                 return True, tightened_target
     
     return False, None
@@ -4010,6 +4016,9 @@ def check_time_based_exits(symbol: str, current_bar: Dict[str, Any], position: D
             if current_loss_distance > 0:  # In a loss
                 loss_percent = current_loss_distance / stop_distance
                 if loss_percent < 0.75:  # Less than 75% of stop distance
+                    # Enhanced logging for backtesting
+                    if is_backtest_mode():
+                        logger.info(f"[EXIT] EARLY LOSS CUT (3:30 PM+): Loss at {loss_percent*100:.1f}% of stop distance")
                     return "early_loss_cut", current_bar["close"]
         else:  # short
             current_loss_distance = current_bar["close"] - entry_price
@@ -4017,6 +4026,9 @@ def check_time_based_exits(symbol: str, current_bar: Dict[str, Any], position: D
             if current_loss_distance > 0:  # In a loss
                 loss_percent = current_loss_distance / stop_distance
                 if loss_percent < 0.75:  # Less than 75% of stop distance
+                    # Enhanced logging for backtesting
+                    if is_backtest_mode():
+                        logger.info(f"[EXIT] EARLY LOSS CUT (3:30 PM+): Loss at {loss_percent*100:.1f}% of stop distance")
                     return "early_loss_cut", current_bar["close"]
     
     return None, None
@@ -4393,17 +4405,30 @@ def check_sideways_timeout(symbol: str, current_price: float, current_time: date
     
     if price_range_ticks < stagnant_range_threshold_ticks:
         # Price stuck in narrow range and timeout exceeded
-        logger.warning("=" * 60)
-        logger.warning("SIDEWAYS TIMEOUT - EXITING STAGNANT POSITION")
-        logger.warning("=" * 60)
-        logger.warning(f"  Regime: {current_regime_name}")
-        logger.warning(f"  Timeout: {sideways_timeout_minutes} minutes")
-        logger.warning(f"  Time Elapsed: {time_elapsed_minutes:.1f} minutes")
-        logger.warning(f"  Price Range: {price_range_ticks:.1f} ticks (High: ${position['sideways_high']:.2f}, Low: ${position['sideways_low']:.2f})")
-        logger.warning(f"  Entry: ${entry_price:.2f}, Current: ${current_price:.2f}")
-        logger.warning(f"  Current P&L: {pnl_ticks:+.1f} ticks (profitable)")
-        logger.warning(f"  Reason: Position stuck in narrow range - not developing momentum")
-        logger.warning("=" * 60)
+        # Enhanced logging for backtesting
+        if is_backtest_mode():
+            logger.info("=" * 60)
+            logger.info("[EXIT] SIDEWAYS TIMEOUT - EXITING STAGNANT POSITION")
+            logger.info("=" * 60)
+            logger.info(f"  Regime: {current_regime_name}")
+            logger.info(f"  Timeout: {sideways_timeout_minutes} minutes")
+            logger.info(f"  Time Elapsed: {time_elapsed_minutes:.1f} minutes")
+            logger.info(f"  Price Range: {price_range_ticks:.1f} ticks")
+            logger.info(f"  Entry: ${entry_price:.2f}, Current: ${current_price:.2f}")
+            logger.info(f"  Current P&L: {pnl_ticks:+.1f} ticks (profitable)")
+            logger.info("=" * 60)
+        else:
+            logger.warning("=" * 60)
+            logger.warning("SIDEWAYS TIMEOUT - EXITING STAGNANT POSITION")
+            logger.warning("=" * 60)
+            logger.warning(f"  Regime: {current_regime_name}")
+            logger.warning(f"  Timeout: {sideways_timeout_minutes} minutes")
+            logger.warning(f"  Time Elapsed: {time_elapsed_minutes:.1f} minutes")
+            logger.warning(f"  Price Range: {price_range_ticks:.1f} ticks (High: ${position['sideways_high']:.2f}, Low: ${position['sideways_low']:.2f})")
+            logger.warning(f"  Entry: ${entry_price:.2f}, Current: ${current_price:.2f}")
+            logger.warning(f"  Current P&L: {pnl_ticks:+.1f} ticks (profitable)")
+            logger.warning(f"  Reason: Position stuck in narrow range - not developing momentum")
+            logger.warning("=" * 60)
         
         return True, current_price
     
@@ -4476,15 +4501,27 @@ def check_underwater_timeout(symbol: str, current_price: float, current_time: da
         tick_value = CONFIG["tick_value"]
         loss_dollars = pnl_ticks * tick_value * position["quantity"]
         
-        logger.warning("=" * 60)
-        logger.warning("UNDERWATER TIMEOUT - CUTTING LOSS")
-        logger.warning("=" * 60)
-        logger.warning(f"  Regime: {current_regime_name}")
-        logger.warning(f"  Timeout: {underwater_timeout_minutes} minutes")
-        logger.warning(f"  Total Elapsed Time: {total_elapsed_minutes:.1f} minutes (since entry)")
-        logger.warning(f"  Current Loss: {abs(pnl_ticks):.1f} ticks (${loss_dollars:.2f})")
-        logger.warning(f"  Entry: ${entry_price:.2f}, Current: ${current_price:.2f}")
-        logger.warning("=" * 60)
+        # Enhanced logging for backtesting
+        if is_backtest_mode():
+            logger.info("=" * 60)
+            logger.info("[EXIT] UNDERWATER TIMEOUT - CUTTING LOSS")
+            logger.info("=" * 60)
+            logger.info(f"  Regime: {current_regime_name}")
+            logger.info(f"  Timeout: {underwater_timeout_minutes} minutes")
+            logger.info(f"  Total Elapsed Time: {total_elapsed_minutes:.1f} minutes (since entry)")
+            logger.info(f"  Current Loss: {abs(pnl_ticks):.1f} ticks (${loss_dollars:.2f})")
+            logger.info(f"  Entry: ${entry_price:.2f}, Current: ${current_price:.2f}")
+            logger.info("=" * 60)
+        else:
+            logger.warning("=" * 60)
+            logger.warning("UNDERWATER TIMEOUT - CUTTING LOSS")
+            logger.warning("=" * 60)
+            logger.warning(f"  Regime: {current_regime_name}")
+            logger.warning(f"  Timeout: {underwater_timeout_minutes} minutes")
+            logger.warning(f"  Total Elapsed Time: {total_elapsed_minutes:.1f} minutes (since entry)")
+            logger.warning(f"  Current Loss: {abs(pnl_ticks):.1f} ticks (${loss_dollars:.2f})")
+            logger.warning(f"  Entry: ${entry_price:.2f}, Current: ${current_price:.2f}")
+            logger.warning("=" * 60)
         
         return True, current_price
     
@@ -4830,10 +4867,20 @@ def update_current_regime(symbol: str) -> None:
         state[symbol]["current_regime"] = "NORMAL"
         return
     
+    # Store previous regime to detect changes
+    prev_regime = state[symbol].get("current_regime", "NORMAL")
+    
     # Detect and store current regime
     detected_regime = regime_detector.detect_regime(bars, current_atr, CONFIG.get("atr_period", 14))
     state[symbol]["current_regime"] = detected_regime.name
-    logger.debug(f"[REGIME] Updated to {detected_regime.name} (ATR: {current_atr:.2f})")
+    
+    # Enhanced logging for backtesting - log regime changes explicitly
+    if is_backtest_mode() and prev_regime != detected_regime.name:
+        logger.info(f"[REGIME CHANGE] {prev_regime} → {detected_regime.name} (ATR: {current_atr:.2f})")
+        logger.info(f"  Stop Mult: {detected_regime.stop_mult:.2f}x | Trailing: {detected_regime.trailing_mult:.2f}x")
+        logger.info(f"  Timeouts: Sideways={detected_regime.sideways_timeout}min, Underwater={detected_regime.underwater_timeout}min")
+    else:
+        logger.debug(f"[REGIME] Updated to {detected_regime.name} (ATR: {current_atr:.2f})")
 
 
 def check_regime_change(symbol: str, current_price: float) -> None:
