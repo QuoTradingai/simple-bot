@@ -6436,10 +6436,10 @@ def check_safety_conditions(symbol: str) -> Tuple[bool, Optional[str]]:
     if not is_safe:
         return False, reason
     
-    # Daily loss limit DISABLED for backtesting
-    # is_safe, reason = check_daily_loss_limit(symbol)
-    # if not is_safe:
-    #     return False, reason
+    # Check daily loss limit (CRITICAL for realistic backtesting)
+    is_safe, reason = check_daily_loss_limit(symbol)
+    if not is_safe:
+        return False, reason
     
     # Check if approaching daily loss limit (SIMPLIFIED - no recovery mode or dynamic scaling)
     is_approaching, approach_reason, severity = check_approaching_failure(symbol)
