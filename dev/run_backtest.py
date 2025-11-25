@@ -179,9 +179,9 @@ def initialize_rl_brains_for_backtest(bot_config) -> Tuple[Any, ModuleType]:
         logger.warning("   Make sure your local data/signal_experience.json has your full experience database")
     logger.info("=" * 60)
     
-    # Set it on the bot module if it has rl_brain attribute
-    if hasattr(bot_module, 'rl_brain'):
-        bot_module.rl_brain = rl_brain
+    # CRITICAL: Set the global rl_brain variable in the bot module
+    # This is what get_ml_confidence() checks when deciding signals
+    bot_module.rl_brain = rl_brain
     
     return rl_brain, bot_module
 
@@ -342,6 +342,15 @@ def run_backtest(args: argparse.Namespace) -> Dict[str, Any]:
         # Pre-load all 15-minute bars before processing 1-minute bars
         # This ensures indicators (RSI, MACD, trend) are ready
         print(f"Pre-loading {len(bars_15min)} 15-minute bars for indicators...")
+        
+        # CRITICAL: Verify we have enough 15-min bars for regime detection
+        # Need 114 bars minimum (100 for baseline + 14 for current ATR)
+        if len(bars_15min) < 114:
+            print(f"⚠️  WARNING: Only {len(bars_15min)} 15-min bars loaded (need 114 for regime detection)")
+            print(f"   Regime detection will use fallback 'NORMAL' until 114 bars accumulated")
+            print(f"   This may affect accuracy of early trades")
+            print(f"   Consider extending backtest date range to get more historical data")
+        
         for bar_15min in bars_15min:
             inject_complete_bar_15min(symbol, bar_15min)
         print(f"15-minute bars loaded, indicators ready")
