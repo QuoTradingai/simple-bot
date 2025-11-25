@@ -2536,6 +2536,12 @@ def check_long_signal_conditions(symbol: str, prev_bar: Dict[str, Any],
                 return False
             logger.debug(f"Volume spike: {current_volume} >= {avg_volume * volume_mult:.0f} ")
     
+    # FILTER 4: Bullish bar confirmation - current bar must be bullish (close > open)
+    # This ensures the reversal is happening with buying pressure, not selling into the bounce
+    if current_bar["close"] <= current_bar["open"]:
+        logger.debug(f"Long rejected - not a bullish bar: close {current_bar['close']:.2f} <= open {current_bar['open']:.2f}")
+        return False
+    
     logger.info(f" LONG SIGNAL: Price reversal at {current_bar['close']:.2f} (entry zone: {vwap_bands['lower_2']:.2f})")
     return True
 
@@ -2604,6 +2610,12 @@ def check_short_signal_conditions(symbol: str, prev_bar: Dict[str, Any],
                 logger.debug(f"Short rejected - no volume spike: {current_volume} < {avg_volume * volume_mult:.0f}")
                 return False
             logger.debug(f"Volume spike: {current_volume} >= {avg_volume * volume_mult:.0f} ")
+    
+    # FILTER 4: Bearish bar confirmation - current bar must be bearish (close < open)
+    # This ensures the reversal is happening with selling pressure, not buying into the drop
+    if current_bar["close"] >= current_bar["open"]:
+        logger.debug(f"Short rejected - not a bearish bar: close {current_bar['close']:.2f} >= open {current_bar['open']:.2f}")
+        return False
     
     logger.info(f" SHORT SIGNAL: Price reversal at {current_bar['close']:.2f} (entry zone: {vwap_bands['upper_2']:.2f})")
     return True
