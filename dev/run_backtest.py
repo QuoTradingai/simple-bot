@@ -207,6 +207,8 @@ def run_backtest(args: argparse.Namespace) -> Dict[str, Any]:
     if args.start and args.end:
         start_date = datetime.strptime(args.start, '%Y-%m-%d')
         end_date = datetime.strptime(args.end, '%Y-%m-%d')
+        # Extend end_date to include the full day (23:59:59)
+        end_date = end_date.replace(hour=23, minute=59, second=59)
     elif args.days:
         end_date = datetime.now(tz)
         start_date = end_date - timedelta(days=args.days)
@@ -314,12 +316,17 @@ def run_backtest(args: argparse.Namespace) -> Dict[str, Any]:
         nonlocal prev_position_active, bars_processed, total_bars, last_exit_reason
         total_bars = len(bars_1min)
         
+        if len(bars_1min) == 0:
+            print("WARNING: No 1-minute bars loaded!")
+            return
+        
         # Pre-load all 15-minute bars before processing 1-minute bars
         # This ensures indicators (RSI, MACD, trend) are ready
-        logger.info(f"Pre-loading {len(bars_15min)} 15-minute bars for indicators...")
+        print(f"Pre-loading {len(bars_15min)} 15-minute bars for indicators...")
         for bar_15min in bars_15min:
             inject_complete_bar_15min(symbol, bar_15min)
-        logger.info(f"15-minute bars loaded, indicators ready")
+        print(f"15-minute bars loaded, indicators ready")
+        print(f"Processing {len(bars_1min)} 1-minute bars...")
         
         for bar_idx, bar in enumerate(bars_1min):
             bars_processed = bar_idx + 1
