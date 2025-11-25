@@ -5739,8 +5739,7 @@ def execute_exit(symbol: str, exit_price: float, reason: str) -> None:
     # Log time-based exits with detailed audit trail
     time_based_reasons = [
         "flatten_mode_exit", "emergency_forced_flatten",
-        "proactive_stop", "early_profit_lock", "friday_weekend_protection",
-        "friday_profit_protection", "trailing_stop_failure_emergency"
+        "proactive_stop"
     ]
     
     if reason in time_based_reasons:
