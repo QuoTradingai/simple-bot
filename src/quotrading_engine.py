@@ -5754,11 +5754,7 @@ def execute_exit(symbol: str, exit_price: float, reason: str) -> None:
         reason_descriptions = {
             "flatten_mode_exit": "Flatten mode aggressive exit",
             "emergency_forced_flatten": "4:45 PM flatten before maintenance",
-            "proactive_stop": "Proactive stop (within 2 ticks)",
-            "early_profit_lock": "Early profit lock in flatten mode",
-            "friday_weekend_protection": "Friday 3 PM weekend protection",
-            "friday_profit_protection": "Friday 2 PM profit protection",
-            "trailing_stop_failure_emergency": "Trailing stop update failed - emergency exit"
+            "proactive_stop": "Proactive stop (within 2 ticks)"
         }
         
         log_time_based_action(
