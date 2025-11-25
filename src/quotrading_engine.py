@@ -2529,36 +2529,23 @@ def check_long_signal_conditions(symbol: str, prev_bar: Dict[str, Any],
     if not (touched_lower and bounced_back):
         return False
     
-    # FILTER 1: VWAP Direction - price should be BELOW VWAP (discount/oversold)
-    use_vwap_direction = CONFIG.get("use_vwap_direction_filter", False)
-    if use_vwap_direction and vwap is not None:
-        if current_bar["close"] >= vwap:
-            logger.debug(f"Long rejected - price above VWAP: {current_bar['close']:.2f} >= {vwap:.2f}")
-            return False
-        logger.debug(f"Price below VWAP: {current_bar['close']:.2f} < {vwap:.2f} ")
+    # FILTER 1: VWAP Direction - disabled (not used in RL training)
+    # The RL brain learns which VWAP positions work best
     
-    # FILTER 2: RSI - extreme oversold (ITERATION 3)
-    use_rsi = CONFIG.get("use_rsi_filter", True)
-    rsi_oversold = CONFIG.get("rsi_oversold", 35.0)  # Iteration 3 - selective entry
+    # FILTER 2: RSI - loose filter to avoid trading in neutral zone
+    # Use 45 threshold based on RL training data (median RSI ~35 for longs)
+    use_rsi = CONFIG.get("use_rsi_filter", False)
+    rsi_oversold = CONFIG.get("rsi_oversold", 45.0)  # Looser than original 35
     if use_rsi:
         rsi = state[symbol]["rsi"]
         if rsi is not None:
             if rsi >= rsi_oversold:
-                logger.debug(f"Long rejected - RSI not extreme: {rsi:.2f} >= {rsi_oversold}")
+                logger.debug(f"Long rejected - RSI not oversold: {rsi:.2f} >= {rsi_oversold}")
                 return False
-            logger.debug(f"RSI extreme oversold: {rsi:.2f} < {rsi_oversold} ")
+            logger.debug(f"RSI oversold: {rsi:.2f} < {rsi_oversold} ")
     
-    # FILTER 3: Volume spike - confirmation of interest
-    use_volume = CONFIG.get("use_volume_filter", True)
-    volume_mult = CONFIG.get("volume_spike_multiplier", 1.5)
-    if use_volume:
-        avg_volume = state[symbol]["avg_volume"]
-        if avg_volume is not None and avg_volume > 0:
-            current_volume = current_bar["volume"]
-            if current_volume < avg_volume * volume_mult:
-                logger.debug(f"Long rejected - no volume spike: {current_volume} < {avg_volume * volume_mult:.0f}")
-                return False
-            logger.debug(f"Volume spike: {current_volume} >= {avg_volume * volume_mult:.0f} ")
+    # FILTER 3: Volume spike - disabled (not used in RL training)
+    # RL training data shows median volume ratio of 0.11, not requiring spikes
     
     logger.info(f" LONG SIGNAL: Price reversal at {current_bar['close']:.2f} (entry zone: {vwap_bands['lower_2']:.2f})")
     return True
@@ -2606,28 +2593,20 @@ def check_short_signal_conditions(symbol: str, prev_bar: Dict[str, Any],
             return False
         logger.debug(f"Price above VWAP: {current_bar['close']:.2f} > {vwap:.2f} ")
     
-    # FILTER 2: RSI - extreme overbought (ITERATION 3)
-    use_rsi = CONFIG.get("use_rsi_filter", True)
-    rsi_overbought = CONFIG.get("rsi_overbought", 65.0)  # Iteration 3 - selective entry
+    # FILTER 2: RSI - loose filter to avoid trading in neutral zone
+    # Use 55 threshold based on RL training data (median RSI ~70 for shorts)
+    use_rsi = CONFIG.get("use_rsi_filter", False)
+    rsi_overbought = CONFIG.get("rsi_overbought", 55.0)  # Looser than original 65
     if use_rsi:
         rsi = state[symbol]["rsi"]
         if rsi is not None:
             if rsi <= rsi_overbought:
-                logger.debug(f"Short rejected - RSI not extreme: {rsi:.2f} <= {rsi_overbought}")
+                logger.debug(f"Short rejected - RSI not overbought: {rsi:.2f} <= {rsi_overbought}")
                 return False
-            logger.debug(f"RSI extreme overbought: {rsi:.2f} > {rsi_overbought} ")
+            logger.debug(f"RSI overbought: {rsi:.2f} > {rsi_overbought} ")
     
-    # FILTER 3: Volume spike - confirmation of interest
-    use_volume = CONFIG.get("use_volume_filter", True)
-    volume_mult = CONFIG.get("volume_spike_multiplier", 1.5)
-    if use_volume:
-        avg_volume = state[symbol]["avg_volume"]
-        if avg_volume is not None and avg_volume > 0:
-            current_volume = current_bar["volume"]
-            if current_volume < avg_volume * volume_mult:
-                logger.debug(f"Short rejected - no volume spike: {current_volume} < {avg_volume * volume_mult:.0f}")
-                return False
-            logger.debug(f"Volume spike: {current_volume} >= {avg_volume * volume_mult:.0f} ")
+    # FILTER 3: Volume spike - disabled (not used in RL training)
+    # RL training data shows median volume ratio of 0.11, not requiring spikes
     
     logger.info(f" SHORT SIGNAL: Price reversal at {current_bar['close']:.2f} (entry zone: {vwap_bands['upper_2']:.2f})")
     return True
