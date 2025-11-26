@@ -7,6 +7,7 @@ Verifies that the RL brain can still read old nested format experiences.
 import json
 import os
 import sys
+import tempfile
 from datetime import datetime
 
 # Add src to path
@@ -20,8 +21,8 @@ def test_backward_compatibility():
     print("TEST: Backward Compatibility with Nested Format")
     print("=" * 70)
     
-    # Create a test file with OLD nested format
-    test_file = "/tmp/test_old_format.json"
+    # Create a test file with OLD nested format using tempfile
+    test_file = tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False).name
     
     old_format_data = {
         "experiences": [

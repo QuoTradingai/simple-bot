@@ -488,7 +488,11 @@ class SignalConfidenceRL:
         """
         # FLAT FORMAT: Merge all fields at top level
         # Start with market state (16 fields from capture_market_state)
-        experience = state.copy() if isinstance(state, dict) else {}
+        if not isinstance(state, dict):
+            logger.error(f"Invalid state type: {type(state)}. Expected dict, skipping experience recording.")
+            return
+        
+        experience = state.copy()
         
         # Add outcome fields at top level (not nested)
         experience['pnl'] = pnl

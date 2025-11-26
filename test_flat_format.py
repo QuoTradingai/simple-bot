@@ -7,6 +7,7 @@ Tests that record_outcome() saves experiences in the new flat format.
 import json
 import os
 import sys
+import tempfile
 from datetime import datetime
 
 # Add src to path
@@ -20,10 +21,8 @@ def test_flat_format():
     print("TEST: Flat Format Experience Saving")
     print("=" * 70)
     
-    # Create a test experience file
-    test_file = "/tmp/test_experiences.json"
-    if os.path.exists(test_file):
-        os.remove(test_file)
+    # Create a test experience file using tempfile
+    test_file = tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False).name
     
     # Create RL brain with test file
     rl_brain = SignalConfidenceRL(
