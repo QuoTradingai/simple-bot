@@ -229,7 +229,7 @@ class SignalConfidenceRL:
             return 0.65, f"≡ƒåò Limited experience ({len(self.experiences)} trades) - optimistic"
         
         # Find similar past situations
-        similar = self.find_similar_states(current_state, max_results=10)
+        similar = self.find_similar_states(current_state, max_results=20)
         
         if not similar:
             return 0.5, " No similar situations - neutral confidence"
@@ -260,7 +260,7 @@ class SignalConfidenceRL:
         
         return confidence, reason
     
-    def find_similar_states(self, current: Dict, max_results: int = 10) -> list:
+    def find_similar_states(self, current: Dict, max_results: int = 20) -> list:
         """
         Find past experiences with similar market states.
         UPDATED for FLAT FORMAT: experiences have fields at top level (no nested 'state').

@@ -5752,6 +5752,16 @@ def execute_exit(symbol: str, exit_price: float, reason: str) -> None:
             # Get the side from position
             trade_side = position.get("side", "unknown")
             
+            # Get execution quality metrics for RL learning
+            order_type_used = position.get("order_type_used", "unknown")
+            
+            # Calculate entry slippage if we have the data
+            entry_slippage_ticks = 0
+            if position.get("actual_entry_price") and position.get("original_entry_price"):
+                entry_slippage = abs(position.get("actual_entry_price", 0) - position.get("original_entry_price", 0))
+                tick_size = CONFIG.get("tick_size", 0.25)
+                entry_slippage_ticks = entry_slippage / tick_size if tick_size > 0 else 0
+            
             # Record market state + outcomes to local RL brain (backtest) or cloud (live)
             save_trade_experience(
                 rl_state=market_state,  # Market state (flat structure)
@@ -5761,7 +5771,9 @@ def execute_exit(symbol: str, exit_price: float, reason: str) -> None:
                 execution_data={
                     "mfe": mfe,
                     "mae": mae,
-                    "exit_reason": reason  # CRITICAL: How trade closed
+                    "exit_reason": reason,  # CRITICAL: How trade closed
+                    "order_type_used": order_type_used,  # IMPORTANT: Order type for execution optimization
+                    "entry_slippage_ticks": entry_slippage_ticks  # IMPORTANT: Slippage tracking
                 }
             )
             
