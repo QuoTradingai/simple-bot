@@ -2800,7 +2800,7 @@ def check_for_signals(symbol: str) -> None:
 # PHASE EIGHT: Position Sizing
 # ============================================================================
 
-def calculate_position_size(symbol: str, side: str, entry_price: float, rl_confidence: Optional[float] = None) -> Tuple[int, float]:
+def calculate_position_size(symbol: str, side: str, entry_price: float) -> Tuple[int, float]:
     """
     Calculate position size based on risk management rules.
     
@@ -2813,7 +2813,7 @@ def calculate_position_size(symbol: str, side: str, entry_price: float, rl_confi
         symbol: Instrument symbol
         side: 'long' or 'short'
         entry_price: Expected entry price
-        rl_confidence: Optional RL confidence (not used for position sizing)
+
     
     Returns:
         Tuple of (contracts, stop_price, target_price)
@@ -3356,11 +3356,8 @@ def execute_entry(symbol: str, side: str, entry_price: float) -> None:
     logger.info(f"  [OK] Price validation passed: ${entry_price:.2f} -> ${current_market_price:.2f}")
     entry_price = current_market_price
     
-    # Get RL confidence if available
-    rl_confidence = state[symbol].get("entry_rl_confidence")
-    
-    # Calculate position size (with RL adjustment if confidence available)
-    contracts, stop_price = calculate_position_size(symbol, side, entry_price, rl_confidence)
+    # Calculate position size
+    contracts, stop_price = calculate_position_size(symbol, side, entry_price)
     
     if contracts == 0:
         logger.warning("Cannot enter trade - position size is zero")
@@ -3618,8 +3615,8 @@ def execute_entry(symbol: str, side: str, entry_price: float) -> None:
         "order_id": order.get("order_id"),
         "order_type_used": order_type_used,  # Track for exit optimization
         # Signal & RL Information - Preserved for partial fills and exits
-        "entry_rl_confidence": rl_confidence,  # RL confidence at entry
-        "entry_rl_state": state[symbol].get("entry_rl_state"),  # RL market state
+
+
         "original_entry_price": entry_price,  # Original signal price (before validation)
         "actual_entry_price": actual_fill_price,  # Actual fill price
         # Regime Information - For dynamic exit management
@@ -5520,8 +5517,7 @@ def execute_exit(symbol: str, exit_price: float, reason: str) -> None:
             
             # Clean up state
             del state[symbol]["entry_rl_state"]
-            if "entry_rl_confidence" in state[symbol]:
-                del state[symbol]["entry_rl_confidence"]
+
         
     except Exception as e:
         logger.debug(f"RL outcome recording failed: {e}")
