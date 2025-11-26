@@ -195,11 +195,9 @@ class BacktestReporter:
         print(f"  Max Drawdown:      ${max_dd:,.2f} ({max_dd_pct:.2f}%)")
         
         print(f"\nSignal Performance:")
-        print(f"  Signals Approved:  {self.signals_approved}")
-        print(f"  Signals Rejected:  {self.signals_rejected}")
-        if self.signals_approved > 0:
-            signal_to_trade = (len(self.trades) / self.signals_approved * 100)
-            print(f"  Signal→Trade Rate: {signal_to_trade:.1f}%")
+        total_signals = self.signals_approved + self.signals_rejected
+        print(f"  Total Signals:     {total_signals}")
+        print(f"  Trades Taken:      {len(self.trades)}")
         
         print(f"\nExecution:")
         print(f"  Total Bars:        {self.total_bars:,}")

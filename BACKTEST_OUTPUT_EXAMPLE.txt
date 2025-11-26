@@ -46,8 +46,8 @@ Risk Metrics:
   Max Drawdown:      $590.00 (1.18%)
 
 Signal Performance:
-  Signals Approved:  2
-  Signals Rejected:  0
+  Total Signals:     2
+  Trades Taken:      2
 
 Execution:
   Total Bars:        3,196
