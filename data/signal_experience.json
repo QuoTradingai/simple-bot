@@ -1119,43 +1119,15 @@
       "order_type_used": "market",
       "entry_slippage_ticks": 0.0,
       "exit_reason": "stop_loss"
-    },
-    {
-      "timestamp": "2025-11-21T02:10:00-05:00",
-      "symbol": "ES",
-      "price": 6579.25,
-      "returns": -7.599072913104601e-05,
-      "vwap_distance": 0.07692252102704301,
-      "vwap_slope": 0.0,
-      "atr": 4.05,
-      "atr_slope": 0.0,
-      "rsi": 50,
-      "macd_hist": 0.0,
-      "stoch_k": 50.0,
-      "volume_ratio": 1.0,
-      "volume_slope": 0.0,
-      "hour": 2,
-      "session": "ETH",
-      "regime": "NORMAL",
-      "volatility_regime": "MEDIUM",
-      "pnl": -252.5,
-      "duration": 2.0,
-      "took_trade": true,
-      "exploration_rate": 1.0,
-      "mfe": 0.0,
-      "mae": 275.0,
-      "order_type_used": "market",
-      "entry_slippage_ticks": 0.0,
-      "exit_reason": "stop_loss"
     }
   ],
   "stats": {
-    "total_signals": 1,
-    "taken": 1,
+    "total_signals": 41,
+    "taken": 41,
     "skipped": 0,
     "take_rate": 100.0,
-    "recent_pnl": -252.5,
-    "recent_win_rate": 0.0,
+    "recent_pnl": 487.5,
+    "recent_win_rate": 40.0,
     "exploration_rate": 100.0
   }
 }
