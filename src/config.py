@@ -297,6 +297,14 @@ class BotConfiguration:
     partial_exit_3_percentage: float = 0.20  # 20% exit at third level
     partial_exit_3_r_multiple: float = 5.0  # Exit at 5.0R
     
+    # Reinforcement Learning Parameters
+    # RL confidence filtering - uses RL experience to filter out low-confidence signals
+    # USER CONFIGURABLE - threshold determines which signals to take
+    rl_enabled: bool = True  # ENABLED - RL layer filters signals based on confidence
+    rl_exploration_rate: float = 0.30  # 30% exploration (for learning)
+    rl_min_exploration_rate: float = 0.05  # Minimum exploration after decay
+    rl_exploration_decay: float = 0.995  # Decay rate per signal
+    rl_confidence_threshold: float = 0.5  # USER CONFIGURABLE via GUI - minimum confidence to take signal
     # NOTE: Contracts are FIXED at user's max_contracts setting (no dynamic scaling)
     # NOTE: For production, RL is cloud-based. Local files only for backtesting/development.
     rl_experience_file: str = None  # Path to local RL experience file (None = cloud-based RL)
