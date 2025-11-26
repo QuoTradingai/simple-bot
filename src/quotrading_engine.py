@@ -1787,11 +1787,8 @@ def update_15min_bar(symbol: str, price: float, volume: int, dt: datetime) -> No
         # Finalize previous bar if exists
         if current_bar is not None:
             state[symbol]["bars_15min"].append(current_bar)
-            # Update all indicators after new bar is added
+            # Update trend filter only (RSI/MACD/Volume now on 1-min, updated after 1-min bars)
             update_trend_filter(symbol)
-            update_rsi(symbol)
-            update_macd(symbol)
-            update_volume_average(symbol)
         
         # Start new bar
         state[symbol]["current_15min_bar"] = {
