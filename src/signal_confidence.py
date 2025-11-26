@@ -263,6 +263,33 @@ class SignalConfidenceRL:
     def find_similar_states(self, current: Dict, max_results: int = 20) -> list:
         """
         Find past experiences with similar market states.
+        
+        PATTERN MATCHING STRATEGY (15 features):
+        ========================================
+        Continuous Features (12):
+          - rsi (15% weight)
+          - vwap_distance (15% weight)
+          - atr (10% weight)
+          - volume_ratio (10% weight)
+          - macd_hist (10% weight)
+          - stoch_k (10% weight)
+          - returns (8% weight)
+          - vwap_slope (5% weight)
+          - atr_slope (5% weight)
+          - volume_slope (5% weight)
+          - hour (4% weight)
+          - streak (3% weight)
+        
+        Categorical Features (3):
+          - regime (binary match)
+          - volatility_regime (binary match)
+          - session (binary match)
+        
+        EXCLUDED (outcomes/metadata):
+          ❌ timestamp, symbol, price, pnl, duration, took_trade,
+          ❌ exploration_rate, mfe, mae, order_type_used,
+          ❌ entry_slippage_ticks, exit_reason
+        
         UPDATED for FLAT FORMAT: experiences have fields at top level (no nested 'state').
         """
         if not self.experiences:
@@ -280,26 +307,45 @@ class SignalConfidenceRL:
                 # New flat format - use exp directly
                 past = exp
             
-            # Calculate distance in each dimension (with safety checks for missing keys)
-            rsi_diff = abs(current.get('rsi', 50) - past.get('rsi', 50)) / 100
-            vwap_diff = abs(current.get('vwap_distance', 0) - past.get('vwap_distance', 0)) / 5
-            atr_diff = abs(current.get('atr', 1) - past.get('atr', 1)) / 20
-            volume_diff = abs(current.get('volume_ratio', 1) - past.get('volume_ratio', 1)) / 3
-            hour_diff = abs(current.get('hour', 12) - past.get('hour', 12)) / 24
-            streak_diff = abs(current.get('streak', 0) - past.get('streak', 0)) / 10
+            # Calculate distance for continuous features (normalized to 0-1 range)
+            # 12 continuous features with proper normalization
+            rsi_diff = abs(current.get('rsi', 50) - past.get('rsi', 50)) / 100  # 0-100 scale
+            vwap_distance_diff = abs(current.get('vwap_distance', 0) - past.get('vwap_distance', 0)) / 5  # Typical range ±5
+            atr_diff = abs(current.get('atr', 1) - past.get('atr', 1)) / 20  # Normalize to typical ATR range
+            volume_ratio_diff = abs(current.get('volume_ratio', 1) - past.get('volume_ratio', 1)) / 3  # Typical range 0-3
+            macd_hist_diff = abs(current.get('macd_hist', 0) - past.get('macd_hist', 0)) / 10  # Typical MACD range
+            stoch_k_diff = abs(current.get('stoch_k', 50) - past.get('stoch_k', 50)) / 100  # 0-100 scale
+            returns_diff = abs(current.get('returns', 0) - past.get('returns', 0)) / 0.02  # Typical return range ±2%
+            vwap_slope_diff = abs(current.get('vwap_slope', 0) - past.get('vwap_slope', 0)) / 0.01  # Slope range
+            atr_slope_diff = abs(current.get('atr_slope', 0) - past.get('atr_slope', 0)) / 2  # ATR slope range
+            volume_slope_diff = abs(current.get('volume_slope', 0) - past.get('volume_slope', 0)) / 5  # Volume slope range
+            hour_diff = abs(current.get('hour', 12) - past.get('hour', 12)) / 24  # 0-23 hour range
+            streak_diff = abs(current.get('streak', 0) - past.get('streak', 0)) / 10  # Streak range
             
-            # Regime matching (0 if same regime, 1 if different)
-            regime_diff = 0.0 if current.get('regime', 'NORMAL') == past.get('regime', 'NORMAL') else 1.0
+            # Categorical features - binary match (0 if same, 1 if different)
+            regime_match = 0.0 if current.get('regime', 'NORMAL') == past.get('regime', 'NORMAL') else 1.0
+            volatility_regime_match = 0.0 if current.get('volatility_regime', 'NORMAL') == past.get('volatility_regime', 'NORMAL') else 1.0
+            session_match = 0.0 if current.get('session', 'RTH') == past.get('session', 'RTH') else 1.0
             
             # Weighted similarity score (lower is more similar)
+            # Total weights: 15% + 15% + 10% + 10% + 10% + 10% + 8% + 5% + 5% + 5% + 4% + 3% = 100%
+            # Plus categorical features weighted in calculation
             similarity = (
-                rsi_diff * 0.20 +
-                vwap_diff * 0.20 +
-                atr_diff * 0.15 +
-                volume_diff * 0.15 +
-                hour_diff * 0.08 +
-                streak_diff * 0.05 +
-                regime_diff * 0.17  # Regime is important - similar weight to RSI/VWAP
+                rsi_diff * 0.15 +           # 15% weight
+                vwap_distance_diff * 0.15 + # 15% weight
+                atr_diff * 0.10 +           # 10% weight
+                volume_ratio_diff * 0.10 +  # 10% weight
+                macd_hist_diff * 0.10 +     # 10% weight
+                stoch_k_diff * 0.10 +       # 10% weight
+                returns_diff * 0.08 +       # 8% weight
+                vwap_slope_diff * 0.05 +    # 5% weight
+                atr_slope_diff * 0.05 +     # 5% weight
+                volume_slope_diff * 0.05 +  # 5% weight
+                hour_diff * 0.04 +          # 4% weight
+                streak_diff * 0.03 +        # 3% weight
+                regime_match * 0.15 +       # Categorical: regime match
+                volatility_regime_match * 0.10 +  # Categorical: volatility regime match
+                session_match * 0.05        # Categorical: session match
             )
             
             scored.append((similarity, exp))
