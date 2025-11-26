@@ -476,14 +476,23 @@ class SignalConfidenceRL:
             took_trade: Whether we took the trade
             pnl: Profit/loss (0 if skipped)
             duration_minutes: How long trade lasted
-            execution_data: Optional execution quality metrics (for live trading learning)
-                - mfe: Max Favorable Excursion (dollars)
-                - mae: Max Adverse Excursion (dollars)
+            execution_data: Execution quality metrics (CRITICAL for RL learning)
+                CRITICAL FIELDS (must always include):
+                - exit_reason: How trade closed (target_hit/stop_hit/time_exit/regime_change)
+                  * RL learns: "Was this a good exit or did we panic?"
+                  * Pattern example: "When RSI=70 + regime=RANGING → time exits win 60%"
                 - order_type_used: "passive", "aggressive", "mixed"
+                  * RL learns: "When volatility is HIGH → use limit orders"
+                  * Helps optimize entry execution strategy
                 - entry_slippage_ticks: Actual slippage in ticks
+                  * RL learns: "Avoid trading during high slippage times"
+                  * Critical for live P&L vs theoretical P&L analysis
+                
+                IMPORTANT FIELDS:
+                - mfe: Max Favorable Excursion (dollars) - execution quality
+                - mae: Max Adverse Excursion (dollars) - risk management
                 - partial_fill: Whether partial fill occurred
                 - fill_ratio: Percentage filled (0.66 = 2 of 3)
-                - exit_reason: How trade closed
                 - held_full_duration: Whether hit target/stop vs time exit
         """
         # FLAT FORMAT: Merge all fields at top level

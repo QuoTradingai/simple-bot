@@ -2878,95 +2878,6 @@ def capture_market_state(symbol: str, current_price: float) -> Dict[str, Any]:
     return market_state
 
 
-def capture_rl_state(symbol: str, side: str, current_price: float) -> Dict[str, Any]:
-    """
-    DEPRECATED: Use capture_market_state() instead.
-    Kept for backward compatibility with existing code.
-    
-    Args:
-        symbol: Instrument symbol
-        side: 'long' or 'short'
-        current_price: Current market price
-    
-    Returns:
-        Dictionary with state features for RL brain
-    """
-    vwap = state[symbol].get("vwap", current_price)
-    vwap_bands = state[symbol].get("vwap_bands", {})
-    rsi = state[symbol].get("rsi", 50)
-    
-    # Calculate VWAP standard deviation
-    vwap_std = 0
-    if vwap_bands:
-        # Calculate std from bands
-        upper = vwap_bands.get("upper_1", vwap)
-        vwap_std = abs(upper - vwap) if upper != vwap else 0
-    
-    # Calculate VWAP distance in standard deviations
-    vwap_distance = abs(current_price - vwap) / vwap_std if vwap_std > 0 else 0
-    
-    # Get ATR (use 1min bars for consistency with regime detection)
-    atr = calculate_atr_1min(symbol, CONFIG.get("atr_period", 14))
-    if atr is None or atr == 0:
-        # Fallback to 15min ATR if 1min not available yet
-        atr = calculate_atr(symbol, CONFIG.get("atr_period", 14))
-        if atr is None:
-            atr = 0
-    
-    # Calculate volume ratio (compare current 1min bar to avg of recent 1min bars)
-    bars_1min = state[symbol]["bars_1min"]
-    if len(bars_1min) >= 20:
-        # Use average of last 20 1-min bars for comparison
-        recent_volumes = [bar["volume"] for bar in list(bars_1min)[-20:]]
-        avg_volume_1min = sum(recent_volumes) / len(recent_volumes)
-        current_bar = bars_1min[-1]
-        volume_ratio = current_bar["volume"] / avg_volume_1min if avg_volume_1min > 0 else 1.0
-    else:
-        # Not enough data yet
-        volume_ratio = 1.0
-    
-    # Get current time
-    current_time = get_current_time()
-    hour = current_time.hour
-    day_of_week = current_time.weekday()
-    
-    # Calculate recent P&L from trade history
-    recent_pnl = 0
-    if "trade_history" in state[symbol] and len(state[symbol]["trade_history"]) > 0:
-        recent_trades = state[symbol]["trade_history"][-3:]  # Last 3 trades
-        recent_pnl = sum(t.get("pnl", 0) for t in recent_trades)
-    
-    # Calculate win/loss streak
-    streak = 0
-    if "trade_history" in state[symbol] and len(state[symbol]["trade_history"]) > 0:
-        for trade in reversed(state[symbol]["trade_history"]):
-            pnl = trade.get("pnl", 0)
-            if pnl > 0:
-                streak += 1
-            elif pnl < 0:
-                streak -= 1
-            else:
-                break  # Stop at breakeven
-    
-    # Get current regime for RL decision making
-    regime = state[symbol].get("current_regime", "NORMAL")
-    
-    rl_state = {
-        "symbol": symbol,  # CRITICAL: Symbol for multi-instrument RL brains
-        "rsi": rsi if rsi is not None else 50,
-        "vwap_distance": vwap_distance,
-        "atr": atr,
-        "volume_ratio": volume_ratio,
-        "hour": hour,
-        "day_of_week": day_of_week,
-        "recent_pnl": recent_pnl,
-        "streak": streak,
-        "side": side,
-        "price": current_price,
-        "regime": regime  # Include regime for better decision making
-    }
-    
-    return rl_state
 
 
 def check_for_signals(symbol: str) -> None:
@@ -3012,37 +2923,22 @@ def check_for_signals(symbol: str) -> None:
     # Check for long signal
     if check_long_signal_conditions(symbol, prev_bar, current_bar):
         # MARKET STATE CAPTURE - Record comprehensive market conditions
-        # Capture current market state (flat structure with all indicators)
+        # Capture current market state (flat structure with all 16 indicators)
         market_state = capture_market_state(symbol, current_bar["close"])
         
-        # For backward compatibility with RL brain, convert to old format
-        rl_state = {
-            "symbol": symbol,
-            "rsi": market_state["rsi"],
-            "vwap_distance": market_state["vwap_distance"],
-            "atr": market_state["atr"],
-            "volume_ratio": market_state["volume_ratio"],
-            "hour": market_state["hour"],
-            "day_of_week": get_current_time().weekday(),
-            "recent_pnl": 0,  # Will be updated from trade history
-            "streak": 0,  # Will be updated from trade history
-            "side": "long",
-            "price": current_bar["close"],
-            "regime": market_state["regime"]
-        }
-        
         # Ask cloud RL API for decision (or local RL as fallback)
-        take_signal, confidence, reason = get_ml_confidence(rl_state, "long")
+        # Market state has all fields needed: rsi, vwap_distance, atr, volume_ratio, etc.
+        take_signal, confidence, reason = get_ml_confidence(market_state, "long")
         
         if not take_signal:
             logger.info(f"Γ¥î RL REJECTED LONG: {reason} (conf: {confidence:.0%})")
             # Always show details (for debugging)
-            logger.info(f"   RSI: {rl_state['rsi']:.1f}, VWAP dist: {rl_state['vwap_distance']:.2f}, "
-                      f"Vol ratio: {rl_state['volume_ratio']:.2f}x")
+            logger.info(f"   RSI: {market_state['rsi']:.1f}, VWAP dist: {market_state['vwap_distance']:.2f}, "
+                      f"Vol ratio: {market_state['volume_ratio']:.2f}x")
             # Store the rejected signal state for potential future learning
             state[symbol]["last_rejected_signal"] = {
                 "time": get_current_time(),
-                "state": rl_state,
+                "state": market_state,
                 "side": "long",
                 "confidence": confidence,
                 "reason": reason
@@ -3050,16 +2946,15 @@ def check_for_signals(symbol: str) -> None:
             return
         
         # RL approved - adjust position size based on confidence
-        regime = rl_state.get('regime', 'NORMAL')
+        regime = market_state.get('regime', 'NORMAL')
         logger.info(f"Γ£à RL APPROVED LONG: {reason} (conf: {confidence:.0%}) | {regime}")
         if not is_backtest_mode():
             # Only show details in live mode
-            logger.info(f"   RSI: {rl_state['rsi']:.1f}, VWAP dist: {rl_state['vwap_distance']:.2f}, "
-                      f"Vol ratio: {rl_state['volume_ratio']:.2f}x, Streak: {rl_state['streak']:+d}")
+            logger.info(f"   RSI: {market_state['rsi']:.1f}, VWAP dist: {market_state['vwap_distance']:.2f}, "
+                      f"Vol ratio: {market_state['volume_ratio']:.2f}x")
         
-        # Store BOTH states: market state (new) and rl state (for compatibility)
-        state[symbol]["entry_market_state"] = market_state  # NEW: Full market state
-        state[symbol]["entry_rl_state"] = rl_state  # OLD: For backward compatibility
+        # Store market state for outcome recording
+        state[symbol]["entry_market_state"] = market_state
         state[symbol]["entry_rl_confidence"] = confidence
         
         execute_entry(symbol, "long", current_bar["close"])
@@ -3068,37 +2963,22 @@ def check_for_signals(symbol: str) -> None:
     # Check for short signal
     if check_short_signal_conditions(symbol, prev_bar, current_bar):
         # MARKET STATE CAPTURE - Record comprehensive market conditions
-        # Capture current market state (flat structure with all indicators)
+        # Capture current market state (flat structure with all 16 indicators)
         market_state = capture_market_state(symbol, current_bar["close"])
         
-        # For backward compatibility with RL brain, convert to old format
-        rl_state = {
-            "symbol": symbol,
-            "rsi": market_state["rsi"],
-            "vwap_distance": market_state["vwap_distance"],
-            "atr": market_state["atr"],
-            "volume_ratio": market_state["volume_ratio"],
-            "hour": market_state["hour"],
-            "day_of_week": get_current_time().weekday(),
-            "recent_pnl": 0,  # Will be updated from trade history
-            "streak": 0,  # Will be updated from trade history
-            "side": "short",
-            "price": current_bar["close"],
-            "regime": market_state["regime"]
-        }
-        
         # Ask cloud RL API for decision (or local RL as fallback)
-        take_signal, confidence, reason = get_ml_confidence(rl_state, "short")
+        # Market state has all fields needed: rsi, vwap_distance, atr, volume_ratio, etc.
+        take_signal, confidence, reason = get_ml_confidence(market_state, "short")
         
         if not take_signal:
             logger.info(f"Γ¥î RL REJECTED SHORT: {reason} (conf: {confidence:.0%})")
             # Always show details (for debugging)
-            logger.info(f"   RSI: {rl_state['rsi']:.1f}, VWAP dist: {rl_state['vwap_distance']:.2f}, "
-                      f"Vol ratio: {rl_state['volume_ratio']:.2f}x")
+            logger.info(f"   RSI: {market_state['rsi']:.1f}, VWAP dist: {market_state['vwap_distance']:.2f}, "
+                      f"Vol ratio: {market_state['volume_ratio']:.2f}x")
             # Store the rejected signal state for potential future learning
             state[symbol]["last_rejected_signal"] = {
                 "time": get_current_time(),
-                "state": rl_state,
+                "state": market_state,
                 "side": "short",
                 "confidence": confidence,
                 "reason": reason
@@ -3106,16 +2986,15 @@ def check_for_signals(symbol: str) -> None:
             return
         
         # RL approved - adjust position size based on confidence
-        regime = rl_state.get('regime', 'NORMAL')
+        regime = market_state.get('regime', 'NORMAL')
         logger.info(f"Γ£à RL APPROVED SHORT: {reason} (conf: {confidence:.0%}) | {regime}")
         if not is_backtest_mode():
             # Only show details in live mode
-            logger.info(f"   RSI: {rl_state['rsi']:.1f}, VWAP dist: {rl_state['vwap_distance']:.2f}, "
-                      f"Vol ratio: {rl_state['volume_ratio']:.2f}x, Streak: {rl_state['streak']:+d}")
+            logger.info(f"   RSI: {market_state['rsi']:.1f}, VWAP dist: {market_state['vwap_distance']:.2f}, "
+                      f"Vol ratio: {market_state['volume_ratio']:.2f}x")
         
-        # Store BOTH states: market state (new) and rl state (for compatibility)
-        state[symbol]["entry_market_state"] = market_state  # NEW: Full market state
-        state[symbol]["entry_rl_state"] = rl_state  # OLD: For backward compatibility
+        # Store market state for outcome recording
+        state[symbol]["entry_market_state"] = market_state
         state[symbol]["entry_rl_confidence"] = confidence
         
         execute_entry(symbol, "short", current_bar["close"])
@@ -5887,45 +5766,6 @@ def execute_exit(symbol: str, exit_price: float, reason: str) -> None:
             # Clean up state
             if "entry_market_state" in state[symbol]:
                 del state[symbol]["entry_market_state"]
-            if "entry_rl_state" in state[symbol]:
-                del state[symbol]["entry_rl_state"]
-            if "entry_rl_confidence" in state[symbol]:
-                del state[symbol]["entry_rl_confidence"]
-        
-        # Fallback: Check for old RL state format (backward compatibility)
-        elif "entry_rl_state" in state[symbol]:
-            entry_state = state[symbol]["entry_rl_state"]
-            entry_side = state[symbol]["position"]["side"]  # Get the trade side
-            
-            # Calculate trade duration in minutes
-            entry_time = position.get("entry_time")
-            duration_minutes = 0
-            if entry_time:
-                duration = exit_time - entry_time
-                duration_minutes = duration.total_seconds() / 60
-            
-            # Record the outcome to cloud API for shared learning
-            save_trade_experience(
-                rl_state=entry_state,
-                side=entry_side,
-                pnl=pnl,
-                duration_minutes=duration_minutes,
-                execution_data={
-                    # Execution quality metrics for RL learning
-                    "order_type_used": position.get("order_type_used", "unknown"),
-                    "entry_slippage_ticks": abs(position.get("actual_entry_price", 0) - position.get("original_entry_price", 0)) / CONFIG.get("tick_size", 0.25) if position.get("actual_entry_price") and position.get("original_entry_price") else 0,
-                    "partial_fill": position.get("quantity", 0) < position.get("original_quantity", 0),
-                    "fill_ratio": position.get("quantity", 0) / position.get("original_quantity", 1) if position.get("original_quantity") else 1.0,
-                    "exit_reason": reason,
-                    "held_full_duration": reason in ["target_hit", "stop_hit"]
-                }
-            )
-            
-            logger.info(f" [CLOUD RL] Recorded outcome ${pnl:+.2f} in {duration_minutes:.1f}min to shared learning pool")
-            
-            # Clean up state
-            if "entry_rl_state" in state[symbol]:
-                del state[symbol]["entry_rl_state"]
             if "entry_rl_confidence" in state[symbol]:
                 del state[symbol]["entry_rl_confidence"]
         
