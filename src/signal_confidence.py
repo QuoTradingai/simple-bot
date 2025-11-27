@@ -596,29 +596,28 @@ class SignalConfidenceRL:
             if exp_key in self.experience_keys:
                 logger.debug(f"⚠️  Duplicate experience detected and skipped: {exp_key}")
                 logger.debug(f"   Skipped duplicate at {experience.get('timestamp')}")
-                # Don't update recent_trades or streaks for duplicates
+                # Early return - don't update any state for duplicates
+                # Duplicates should not affect recent_trades, streaks, or trigger saves
                 return
             
-            # Not a duplicate - add to experiences
+            # Not a duplicate - add to experiences and update all related state
             self.experience_keys.add(exp_key)
             self.experiences.append(experience)
             self.recent_trades.append(pnl)
-        
-        # Update win/loss streaks
-        if took_trade:
+            
+            # Update win/loss streaks for non-duplicate trades
             if pnl > 0:
                 self.current_win_streak += 1
                 self.current_loss_streak = 0
             else:
                 self.current_loss_streak += 1
                 self.current_win_streak = 0
-        
-        # Save every 5 trades (auto-save enabled)
-        if len(self.experiences) % 5 == 0:
-            self.save_experience()
-        
-        # Log learning progress with execution details
-        if took_trade:
+            
+            # Save every 5 unique trades (auto-save enabled)
+            if len(self.experiences) % 5 == 0:
+                self.save_experience()
+            
+            # Log learning progress with execution details
             outcome = "WIN" if pnl > 0 else "LOSS"
             log_msg = f"πΎ [FLAT FORMAT] Recorded {outcome}: ${pnl:.2f} in {duration_minutes}min | Streak: W{self.current_win_streak}/L{self.current_loss_streak}"
             
