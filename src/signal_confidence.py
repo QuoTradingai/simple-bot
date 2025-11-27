@@ -56,6 +56,7 @@ class SignalConfidenceRL:
         else:
             self.experience_file = experience_file
         self.experiences = []  # All past (state, action, reward) tuples
+        self.experience_keys = set()  # Set for O(1) duplicate detection
         self.recent_trades = deque(maxlen=20)  # Last 20 outcomes
         self.backtest_mode = backtest_mode
         self.freeze_learning = False  # LEARNING ENABLED - Brain 2 learns during backtests
@@ -120,6 +121,33 @@ class SignalConfidenceRL:
             logger.debug(f" BACKTEST MODE: {self.exploration_rate*100:.1f}% exploration enabled (learning mode)")
         else:
             logger.debug(f" LIVE MODE: 0% exploration (pure exploitation - NO RANDOM TRADES!)")
+    
+    def _generate_experience_key(self, experience: Dict, execution_data: Optional[Dict] = None) -> Tuple:
+        """
+        Generate a unique key for duplicate detection.
+        
+        Args:
+            experience: The experience dictionary with market state and outcome data
+            execution_data: Optional execution data dict (used during record_outcome)
+        
+        Returns:
+            Tuple of (timestamp, symbol, rounded_pnl, exit_reason) for O(1) duplicate detection
+        """
+        # Get exit_reason from either execution_data or experience dict
+        # During record_outcome: exit_reason is in execution_data (before being merged into experience)
+        # During load_experience: exit_reason is already in experience dict
+        exit_reason = None
+        if execution_data and 'exit_reason' in execution_data:
+            exit_reason = execution_data['exit_reason']
+        elif 'exit_reason' in experience:
+            exit_reason = experience['exit_reason']
+        
+        return (
+            experience.get('timestamp'),
+            experience.get('symbol'),
+            round(experience.get('pnl', 0), 2),  # Round to 2 decimals for floating point safety
+            exit_reason
+        )
     
     def capture_signal_state(self, rsi: float, vwap_distance: float, 
                             atr: float, volume_ratio: float,
@@ -231,7 +259,7 @@ class SignalConfidenceRL:
             return 0.65, f"≡ƒåò Limited experience ({len(self.experiences)} trades) - optimistic"
         
         # Find similar past situations
-        similar = self.find_similar_states(current_state, max_results=20)
+        similar = self.find_similar_states(current_state, max_results=10)
         
         if not similar:
             return 0.5, " No similar situations - neutral confidence"
@@ -581,24 +609,36 @@ class SignalConfidenceRL:
         # Add to memory (learning enabled)
         # USER REQUEST: Only save trades that were actually taken
         if took_trade:
+            # DUPLICATE PREVENTION: Check if this experience already exists
+            # Use helper method to generate consistent key
+            exp_key = self._generate_experience_key(experience, execution_data)
+            
+            # Check if this exact experience already exists (O(1) lookup with set)
+            if exp_key in self.experience_keys:
+                logger.debug(f"⚠️  Duplicate experience detected and skipped: {exp_key}")
+                logger.debug(f"   Skipped duplicate at {experience.get('timestamp')}")
+                # Early return - don't update any state for duplicates
+                # Duplicates should not affect recent_trades, streaks, or trigger saves
+                return
+            
+            # Not a duplicate - add to experiences and update all related state
+            self.experience_keys.add(exp_key)
             self.experiences.append(experience)
             self.recent_trades.append(pnl)
-        
-        # Update win/loss streaks
-        if took_trade:
+            
+            # Update win/loss streaks for non-duplicate trades
             if pnl > 0:
                 self.current_win_streak += 1
                 self.current_loss_streak = 0
             else:
                 self.current_loss_streak += 1
                 self.current_win_streak = 0
-        
-        # Save every 5 trades (auto-save enabled)
-        if len(self.experiences) % 5 == 0:
-            self.save_experience()
-        
-        # Log learning progress with execution details
-        if took_trade:
+            
+            # Save every 5 unique trades (auto-save enabled)
+            if len(self.experiences) % 5 == 0:
+                self.save_experience()
+            
+            # Log learning progress with execution details
             outcome = "WIN" if pnl > 0 else "LOSS"
             log_msg = f"πΎ [FLAT FORMAT] Recorded {outcome}: ${pnl:.2f} in {duration_minutes}min | Streak: W{self.current_win_streak}/L{self.current_loss_streak}"
             
@@ -666,6 +706,14 @@ class SignalConfidenceRL:
                     data = json.load(f)
                     logger.debug(f"[DEBUG] JSON loaded successfully. Keys: {list(data.keys())}")
                     self.experiences = data.get('experiences', [])
+                    
+                    # Populate experience_keys set for O(1) duplicate detection
+                    # Use helper method to ensure consistency with record_outcome
+                    self.experience_keys = set()
+                    for exp in self.experiences:
+                        exp_key = self._generate_experience_key(exp)
+                        self.experience_keys.add(exp_key)
+                    
                     logger.debug(f"Γ£ô Loaded {len(self.experiences)} past signal experiences")
             except Exception as e:
                 logger.error(f"Failed to load experiences: {e}")
