@@ -4718,15 +4718,16 @@ def execute_partial_exit(symbol: str, contracts: int, exit_price: float, r_multi
     
     if order:
         # Verify actual fill in live mode (not backtest)
-        import time
         if not is_backtest_mode():
-            time.sleep(1)  # Brief wait for fill confirmation
+            time_module.sleep(1)  # Brief wait for fill confirmation
             
             # Check actual position to verify fill
             current_position = abs(get_position_quantity(symbol))
             expected_remaining = position["remaining_quantity"] - contracts
             
-            if abs(current_position - expected_remaining) > 0:
+            # Check if fill doesn't match expected (allow for small broker reporting delays)
+            actual_remaining_diff = abs(current_position - expected_remaining)
+            if actual_remaining_diff > 0:
                 # Partial fill detected
                 actual_filled = position["remaining_quantity"] - current_position
                 logger.warning(f"  [PARTIAL FILL] Only {actual_filled} of {contracts} contracts filled")
@@ -5478,8 +5479,7 @@ def handle_exit_orders(symbol: str, position: Dict[str, Any], exit_price: float,
                 
                 # In backtesting, position closes immediately
                 # In live trading, wait briefly and verify
-                import time
-                time.sleep(1)
+                time_module.sleep(1)
                 
                 # Verify position actually closed or partially filled
                 current_position = get_position_quantity(symbol)
