@@ -5591,12 +5591,12 @@ def handle_exit_orders(symbol: str, position: Dict[str, Any], exit_price: float,
                         filled = abs(position["quantity"]) - current_position
                         logger.warning(f"  [PARTIAL FILL] {filled} of {contracts} contracts filled")
                         logger.warning(f"  [REMAINING] {current_position} contracts - using aggressive for remainder")
-                        contracts = current_position
+                        remaining_contracts = current_position
                         # Place aggressive order for remaining
                         if 'fallback_price' in strategy:
-                            order = place_limit_order(symbol, order_side, contracts, strategy['fallback_price'])
+                            order = place_limit_order(symbol, order_side, remaining_contracts, strategy['fallback_price'])
                         else:
-                            order = place_market_order(symbol, order_side, contracts)
+                            order = place_market_order(symbol, order_side, remaining_contracts)
                     else:
                         # Not filled at all, use fallback
                         logger.warning("✗ Passive exit not filled, using aggressive")
@@ -5620,7 +5620,7 @@ def handle_exit_orders(symbol: str, position: Dict[str, Any], exit_price: float,
                 logger.info(f"Exit order placed: {order.get('order_id')}")
                 
                 # For aggressive/market orders, verify fill in live mode
-                if not is_backtest_mode() and strategy['order_type'] == 'aggressive':
+                if not is_backtest_mode() and strategy.get('order_type') == 'aggressive':
                     time_module.sleep(1)  # Brief wait for fill
                     final_position = abs(get_position_quantity(symbol))
                     if final_position > 0:
