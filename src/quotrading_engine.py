@@ -4732,6 +4732,9 @@ def execute_partial_exit(symbol: str, contracts: int, exit_price: float, r_multi
             # Mark position as inactive
             position["active"] = False
             
+            # CRITICAL: Save position state to disk - bot must never forget it closed the position
+            save_position_state(symbol)
+            
             # Update daily P&L
             state[symbol]["daily_pnl"] += profit_dollars
             
