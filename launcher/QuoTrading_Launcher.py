@@ -1304,17 +1304,8 @@ class QuoTradingLauncher:
         self.symbol_vars = {}
         symbols = [
             ("ES", "E-mini S&P 500"),
-            ("NQ", "E-mini Nasdaq 100"),
-            ("YM", "E-mini Dow"),
-            ("RTY", "E-mini Russell 2000"),
-            ("CL", "Crude Oil"),
-            ("GC", "Gold"),
-            ("NG", "Natural Gas"),
-            ("6E", "Euro FX"),
-            ("ZN", "10-Year Treasury Note"),
-            ("MES", "Micro E-mini S&P 500"),
             ("MNQ", "Micro E-mini Nasdaq 100"),
-            ("MBTX", "Micro Bitcoin")
+            ("NQ", "E-mini Nasdaq 100")
         ]
         
         saved_symbols = self.config.get("symbols", ["ES"])
