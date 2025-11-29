@@ -50,6 +50,10 @@ BOT_DOWNLOAD_URL = os.environ.get("BOT_DOWNLOAD_URL", "https://quotradingfiles.b
 _db_pool = None
 
 def send_license_email(email, license_key):
+    logging.info(f"🔍 send_license_email() called for {email}, license {license_key}")
+    logging.info(f"🔍 SENDGRID_API_KEY present: {bool(SENDGRID_API_KEY)}")
+    logging.info(f"🔍 FROM_EMAIL: {FROM_EMAIL}")
+    
     try:
         subject = "Your QuoTrading AI License Key"
         
@@ -97,31 +101,42 @@ def send_license_email(email, license_key):
         
         # Try SendGrid first (preferred), fall back to SMTP
         if SENDGRID_API_KEY:
+            logging.info(f"🔍 Attempting SendGrid email to {email}")
             try:
+                payload = {
+                    "personalizations": [{"to": [{"email": email}]}],
+                    "from": {"email": FROM_EMAIL, "name": "QuoTrading"},
+                    "subject": subject,
+                    "content": [{"type": "text/html", "value": html_body}]
+                }
+                logging.info(f"🔍 SendGrid payload: {payload}")
+                
                 response = requests.post(
                     "https://api.sendgrid.com/v3/mail/send",
                     headers={
                         "Authorization": f"Bearer {SENDGRID_API_KEY}",
                         "Content-Type": "application/json"
                     },
-                    json={
-                        "personalizations": [{"to": [{"email": email}]}],
-                        "from": {"email": FROM_EMAIL, "name": "QuoTrading"},
-                        "subject": subject,
-                        "content": [{"type": "text/html", "value": html_body}]
-                    },
+                    json=payload,
                     timeout=10
                 )
+                logging.info(f"🔍 SendGrid response: status={response.status_code}, body={response.text}")
+                
                 if response.status_code == 202:
-                    logging.info(f"📧 SendGrid email sent to {email}")
+                    logging.info(f"✅ SendGrid email sent successfully to {email}")
                     return True
                 else:
-                    logging.warning(f"SendGrid failed ({response.status_code}), trying SMTP fallback")
+                    logging.error(f"❌ SendGrid failed: {response.status_code} - {response.text}")
+                    logging.warning(f"Trying SMTP fallback")
             except Exception as e:
-                logging.warning(f"SendGrid error: {e}, trying SMTP fallback")
+                logging.error(f"❌ SendGrid exception: {type(e).__name__}: {str(e)}")
+                logging.warning(f"Trying SMTP fallback")
+        else:
+            logging.warning(f"⚠️ SENDGRID_API_KEY not configured")
         
         # Fallback to SMTP (Gmail, etc.)
         if SMTP_USERNAME and SMTP_PASSWORD:
+            logging.info(f"🔍 Attempting SMTP email to {email}")
             msg = MIMEMultipart('alternative')
             msg['Subject'] = subject
             msg['From'] = FROM_EMAIL
@@ -132,11 +147,17 @@ def send_license_email(email, license_key):
                 server.starttls()
                 server.login(SMTP_USERNAME, SMTP_PASSWORD)
                 server.send_message(msg)
-            logging.info(f"📧 SMTP email sent to {email}")
+            logging.info(f"✅ SMTP email sent successfully to {email}")
             return True
         else:
-            logging.warning(f"⚠️ Email not configured - would send license {license_key} to {email}")
+            logging.error(f"❌ No email method configured - SMTP credentials missing")
             return False
+            
+    except Exception as e:
+        logging.error(f"❌ CRITICAL ERROR in send_license_email: {type(e).__name__}: {str(e)}")
+        import traceback
+        logging.error(f"Traceback: {traceback.format_exc()}")
+        return False
             
     except Exception as e:
         logging.error(f"❌ Failed to send email: {e}")
@@ -676,7 +697,12 @@ def whop_webhook():
                             logging.info(f"🎉 License created from Whop: {license_key} for {email}")
                             
                             # Send email
-                            send_license_email(email, license_key)
+                            email_sent = send_license_email(email, license_key)
+                            if email_sent:
+                                logging.info(f"✅ Email successfully sent to {email}")
+                            else:
+                                logging.error(f"❌ Email failed to send to {email}")
+                        
                         
                         conn.commit()
 
