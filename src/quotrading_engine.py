@@ -230,6 +230,13 @@ SEPARATOR_LINE = "=" * 60
 # Daily Loss Limit Threshold
 DAILY_LOSS_APPROACHING_THRESHOLD = 0.80  # Stop trading at 80% of daily loss limit
 
+# Idle Mode Configuration
+IDLE_STATUS_MESSAGE_INTERVAL = 300  # Show status message every 5 minutes (300 seconds) during idle
+
+# Profit-Based Trade Limit Configuration
+PROFIT_PER_BONUS_TRADE = 100.0  # Dollars of profit required to earn 1 bonus trade
+MAX_BONUS_TRADE_PERCENTAGE = 0.5  # Maximum bonus trades as percentage of base limit (50%)
+
 # Regime Detection Constants
 DEFAULT_FALLBACK_ATR = 5.0  # Default ATR when calculation not possible (ES futures typical value)
 
@@ -793,7 +800,7 @@ def check_broker_connection() -> None:
         idle_type = bot_status.get("idle_type", "MAINTENANCE")
         
         # Show status message every 5 minutes
-        if last_msg_time is None or (eastern_time - last_msg_time).total_seconds() >= 300:
+        if last_msg_time is None or (eastern_time - last_msg_time).total_seconds() >= IDLE_STATUS_MESSAGE_INTERVAL:
             logger.info(f"[IDLE] {idle_type} IN PROGRESS - Bot idle, will resume when market reopens")
             bot_status["last_idle_message_time"] = eastern_time
         return  # Skip broker health check during idle period
@@ -2389,10 +2396,10 @@ def validate_signal_requirements(symbol: str, bar_time: datetime) -> Tuple[bool,
         current_pnl = state[symbol]["daily_pnl"]
         
         # Calculate bonus trades based on profit
-        # For every $100 in profit, allow 1 additional trade (capped at 50% more trades)
+        # For every $X in profit, allow 1 additional trade (capped at Y% more trades)
         if current_pnl > 0:
-            profit_bonus_trades = int(current_pnl / 100.0)  # 1 trade per $100 profit
-            max_bonus = int(base_trade_limit * 0.5)  # Cap at 50% more trades
+            profit_bonus_trades = int(current_pnl / PROFIT_PER_BONUS_TRADE)
+            max_bonus = int(base_trade_limit * MAX_BONUS_TRADE_PERCENTAGE)
             bonus_trades = min(profit_bonus_trades, max_bonus)
             effective_trade_limit = base_trade_limit + bonus_trades
             
