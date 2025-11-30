@@ -2007,50 +2007,53 @@ def admin_delete_user(account_id):
     if not conn:
         return jsonify({"error": "Database connection failed"}), 500
     
+    cursor = None
     try:
-        with conn.cursor() as cursor:
-            # First check if user exists
-            cursor.execute("SELECT account_id, email, license_key FROM users WHERE account_id = %s", (account_id,))
-            user = cursor.fetchone()
-            
-            if not user:
-                return jsonify({"error": "User not found"}), 404
-            
-            user_license_key = user[2]
-            
-            # Delete user's RL experiences (uses license_key, not account_id)
-            cursor.execute("DELETE FROM rl_experiences WHERE license_key = %s", (user_license_key,))
-            deleted_experiences = cursor.rowcount
-            
-            # Delete user's activity logs (if this table exists and uses account_id)
-            try:
-                cursor.execute("DELETE FROM activity_logs WHERE account_id = %s", (account_id,))
-                deleted_logs = cursor.rowcount
-            except Exception:
-                deleted_logs = 0  # Table might not exist
-            
-            # Delete the user
-            cursor.execute("DELETE FROM users WHERE account_id = %s", (account_id,))
-            
-            conn.commit()
-            
-            logging.info(f"Admin deleted user: {account_id} (email: {user[1]}) - {deleted_experiences} experiences, {deleted_logs} activity logs")
-            
-            return jsonify({
-                "status": "success",
-                "message": f"User {account_id} permanently deleted",
-                "deleted": {
-                    "account_id": account_id,
-                    "email": user[1],
-                    "experiences": deleted_experiences,
-                    "activity_logs": deleted_logs
-                }
-            }), 200
-            
+        cursor = conn.cursor()
+        
+        # First check if user exists
+        cursor.execute("SELECT account_id, email, license_key FROM users WHERE account_id = %s", (account_id,))
+        user = cursor.fetchone()
+        
+        if not user:
+            return jsonify({"error": "User not found"}), 404
+        
+        user_license_key = user[2]
+        
+        # Delete user's RL experiences (uses license_key, not account_id)
+        cursor.execute("DELETE FROM rl_experiences WHERE license_key = %s", (user_license_key,))
+        deleted_experiences = cursor.rowcount
+        
+        # Delete user's API logs
+        cursor.execute("DELETE FROM api_logs WHERE license_key = %s", (user_license_key,))
+        deleted_logs = cursor.rowcount
+        
+        # Delete the user
+        cursor.execute("DELETE FROM users WHERE account_id = %s", (account_id,))
+        
+        conn.commit()
+        
+        logging.info(f"Admin deleted user: {account_id} (email: {user[1]}) - {deleted_experiences} experiences, {deleted_logs} api logs")
+        
+        return jsonify({
+            "status": "success",
+            "message": f"User {account_id} permanently deleted",
+            "deleted": {
+                "account_id": account_id,
+                "email": user[1],
+                "experiences": deleted_experiences,
+                "api_logs": deleted_logs
+            }
+        }), 200
+        
     except Exception as e:
+        if conn:
+            conn.rollback()
         logging.error(f"Delete user error: {e}")
         return jsonify({"error": str(e)}), 500
     finally:
+        if cursor:
+            cursor.close()
         return_connection(conn)
 
 @app.route('/api/admin/add-user', methods=['POST'])

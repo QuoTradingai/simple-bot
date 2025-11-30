@@ -2136,7 +2136,8 @@
             if (search) {
                 filtered = filtered.filter(u => 
                     u.account_id.toLowerCase().includes(search) ||
-                    u.email.toLowerCase().includes(search)
+                    u.email.toLowerCase().includes(search) ||
+                    (u.license_key && u.license_key.toLowerCase().includes(search))
                 );
             }
             
