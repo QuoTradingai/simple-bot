@@ -1584,12 +1584,14 @@ class QuoTradingLauncher:
         
         # MAX LOSS PER TRADE: 15% of daily limit (allows ~6-7 losing trades)
         # More conservative than 20% to give more buffer
-        max_loss_per_trade = daily_loss_limit * 0.15
+        PER_TRADE_RISK_PCT = 0.15  # 15% of daily limit
+        max_loss_per_trade = daily_loss_limit * PER_TRADE_RISK_PCT
         
         # MAX CONTRACTS: Very conservative scaling
         # Formula: 1 contract per $800 of daily loss limit (was $500)
         # This reduces position sizes for safety
-        max_contracts = min(self.max_contracts_allowed, max(1, int(daily_loss_limit / 800)))
+        DOLLARS_PER_CONTRACT = 800
+        max_contracts = min(self.max_contracts_allowed, max(1, int(daily_loss_limit / DOLLARS_PER_CONTRACT)))
         
         # MAX TRADES PER DAY: Conservative scaling
         # Fewer trades = less risk of hitting daily limit
