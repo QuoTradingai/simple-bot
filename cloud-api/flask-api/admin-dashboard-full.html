@@ -921,8 +921,8 @@
                                 <input type="text" id="rlExpSearch" placeholder="Filter..." onkeyup="filterRLTable()" 
                                     style="padding: 8px 12px; border: 1px solid #dadce0; border-radius: 4px; margin-right: 10px;">
                                 <button class="filter-btn" onclick="loadSelectedTable()">🔄 Refresh</button>
-                                <button class="filter-btn" onclick="exportRLData()">📥 Export CSV</button>
-                                <button class="filter-btn" onclick="exportAndClearAllRLData()" style="background: linear-gradient(135deg, #ff6b6b 0%, #ee5a52 100%); color: white; border: none; font-weight: 600;">🗑️ Export & Clear All</button>
+                                <button class="filter-btn" onclick="showExportOptions()">📥 Export CSV ▼</button>
+                                <button class="filter-btn" onclick="showDeleteOptions()" style="background: linear-gradient(135deg, #ff6b6b 0%, #ee5a52 100%); color: white; border: none; font-weight: 600;">🗑️ Delete Data ▼</button>
                             </div>
                         </div>
                         <div style="margin-bottom: 16px; color: #5f6368; font-size: 14px;">
@@ -3378,28 +3378,173 @@
             }
         }
         
-        function exportRLData() {
-            const data = databaseData['rl_experiences'];
-            if (!data || data.length === 0) {
-                alert('No data to export');
-                return;
+        function showExportOptions() {
+            const symbol = document.getElementById('symbolFilter').value;
+            const options = symbol === 'all' 
+                ? ['📥 Export All Symbols', '📊 Export by Symbol...']
+                : [`📥 Export All Symbols`, `📊 Export ${symbol} Only`];
+            
+            const choice = confirm(
+                `Choose Export Option:\n\n` +
+                `OK = Export All Symbols\n` +
+                `Cancel = ${symbol === 'all' ? 'Choose specific symbol' : 'Export ' + symbol + ' only'}`
+            );
+            
+            if (choice) {
+                exportRLData('all');
+            } else {
+                if (symbol === 'all') {
+                    // Show symbol picker
+                    const selectedSymbol = prompt('Enter symbol to export (ES, NQ, GC, CL, etc.):');
+                    if (selectedSymbol) {
+                        exportRLData(selectedSymbol.trim().toUpperCase());
+                    }
+                } else {
+                    exportRLData(symbol);
+                }
             }
+        }
+        
+        function showDeleteOptions() {
+            const symbol = document.getElementById('symbolFilter').value;
+            const choice = confirm(
+                `⚠️ DELETE RL DATA\n\n` +
+                `OK = Delete All Symbols\n` +
+                `Cancel = ${symbol === 'all' ? 'Choose specific symbol' : 'Delete ' + symbol + ' only'}\n\n` +
+                `WARNING: This cannot be undone!`
+            );
             
-            // Convert to CSV
-            const headers = Object.keys(data[0]);
-            const csvContent = [
-                headers.join(','),
-                ...data.map(row => headers.map(h => JSON.stringify(row[h] || '')).join(','))
-            ].join('\n');
-            
-            // Download
-            const blob = new Blob([csvContent], { type: 'text/csv' });
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = `rl_experiences_${new Date().toISOString().split('T')[0]}.csv`;
-            a.click();
-            URL.revokeObjectURL(url);
+            if (choice) {
+                deleteRLData('all');
+            } else {
+                if (symbol === 'all') {
+                    // Show symbol picker
+                    const selectedSymbol = prompt('Enter symbol to delete (ES, NQ, GC, CL, etc.):');
+                    if (selectedSymbol) {
+                        deleteRLData(selectedSymbol.trim().toUpperCase());
+                    }
+                } else {
+                    deleteRLData(symbol);
+                }
+            }
+        }
+        
+        async function exportRLData(symbolToExport = 'current') {
+            try {
+                // Determine which data to export
+                let dataToExport;
+                let filename;
+                
+                if (symbolToExport === 'all') {
+                    // Fetch ALL data from server
+                    const response = await fetch(`${API_URL}/api/admin/database/rl_experiences?admin_key=${ADMIN_KEY}&limit=999999`);
+                    if (!response.ok) throw new Error('Failed to load all RL experiences');
+                    const data = await response.json();
+                    dataToExport = data.rows || [];
+                    filename = `rl_experiences_ALL_${new Date().toISOString().split('T')[0]}.csv`;
+                } else if (symbolToExport === 'current') {
+                    // Use currently loaded data
+                    dataToExport = databaseData['rl_experiences'];
+                    filename = `rl_experiences_${new Date().toISOString().split('T')[0]}.csv`;
+                } else {
+                    // Filter by specific symbol from all data
+                    const response = await fetch(`${API_URL}/api/admin/database/rl_experiences?admin_key=${ADMIN_KEY}&limit=999999`);
+                    if (!response.ok) throw new Error('Failed to load RL experiences');
+                    const data = await response.json();
+                    const allData = data.rows || [];
+                    dataToExport = allData.filter(row => row.symbol === symbolToExport);
+                    filename = `rl_experiences_${symbolToExport}_${new Date().toISOString().split('T')[0]}.csv`;
+                }
+                
+                if (!dataToExport || dataToExport.length === 0) {
+                    alert(`No data to export${symbolToExport !== 'all' && symbolToExport !== 'current' ? ' for ' + symbolToExport : ''}`);
+                    return;
+                }
+                
+                // Convert to CSV
+                const headers = Object.keys(dataToExport[0]);
+                const csvContent = [
+                    headers.join(','),
+                    ...dataToExport.map(row => headers.map(h => JSON.stringify(row[h] || '')).join(','))
+                ].join('\n');
+                
+                // Download
+                const blob = new Blob([csvContent], { type: 'text/csv' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = filename;
+                a.click();
+                URL.revokeObjectURL(url);
+                
+                alert(`✅ Exported ${dataToExport.length.toLocaleString()} experiences`);
+            } catch (error) {
+                console.error('Export error:', error);
+                alert(`Error exporting data: ${error.message}`);
+            }
+        }
+
+        async function deleteRLData(symbolToDelete = 'all') {
+            try {
+                // Get count first
+                let confirmMessage, deleteCount;
+                
+                if (symbolToDelete === 'all') {
+                    const response = await fetch(`${API_URL}/api/admin/database/rl_experiences?admin_key=${ADMIN_KEY}&limit=1`);
+                    const data = await response.json();
+                    deleteCount = data.total_rows || 0;
+                    confirmMessage = `⚠️ DELETE ALL RL DATA\n\nThis will permanently delete ${deleteCount.toLocaleString()} experiences from ALL symbols.\n\nThis CANNOT be undone!\n\nContinue?`;
+                } else {
+                    const response = await fetch(`${API_URL}/api/admin/database/rl_experiences?admin_key=${ADMIN_KEY}&limit=999999`);
+                    const data = await response.json();
+                    const allData = data.rows || [];
+                    const symbolData = allData.filter(row => row.symbol === symbolToDelete);
+                    deleteCount = symbolData.length;
+                    confirmMessage = `⚠️ DELETE ${symbolToDelete} DATA\n\nThis will permanently delete ${deleteCount.toLocaleString()} ${symbolToDelete} experiences.\n\nThis CANNOT be undone!\n\nContinue?`;
+                }
+                
+                if (deleteCount === 0) {
+                    alert(`No data to delete${symbolToDelete !== 'all' ? ' for ' + symbolToDelete : ''}`);
+                    return;
+                }
+                
+                const confirmed = confirm(confirmMessage);
+                if (!confirmed) {
+                    return;
+                }
+                
+                // Delete data
+                const deleteResponse = await fetch(`${API_URL}/api/admin/rl-experiences`, {
+                    method: 'DELETE',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-API-Key': ADMIN_API_KEY
+                    },
+                    body: JSON.stringify({
+                        admin_key: ADMIN_KEY,
+                        symbol: symbolToDelete === 'all' ? null : symbolToDelete
+                    })
+                });
+                
+                if (!deleteResponse.ok) {
+                    throw new Error('Failed to delete RL experiences');
+                }
+                
+                const deleteResult = await deleteResponse.json();
+                
+                alert(
+                    `✅ SUCCESS!\n\n` +
+                    `Deleted: ${deleteResult.deleted_count.toLocaleString()} experiences` +
+                    (symbolToDelete !== 'all' ? ` (${symbolToDelete})` : '')
+                );
+                
+                // Refresh the table
+                loadSelectedTable();
+                
+            } catch (error) {
+                console.error('Delete error:', error);
+                alert(`Error deleting data: ${error.message}`);
+            }
         }
 
         async function exportAndClearAllRLData() {

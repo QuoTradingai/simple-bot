@@ -2255,14 +2255,17 @@ def admin_rl_stats():
 def admin_rl_experiences():
     """Admin endpoint to view or delete RL experiences"""
     
-    # DELETE method - bulk delete all RL experiences
+    # DELETE method - bulk delete all RL experiences or by symbol
     if request.method == 'DELETE':
         admin_key = request.headers.get('X-API-Key')
+        data = request.get_json() or {}
+        
         if admin_key != ADMIN_API_KEY:
             # Also check request body
-            data = request.get_json()
             if not data or data.get('admin_key') != ADMIN_API_KEY:
                 return jsonify({"error": "Unauthorized"}), 401
+        
+        symbol = data.get('symbol')  # Optional: delete specific symbol only
         
         conn = get_db_connection()
         if not conn:
@@ -2272,23 +2275,36 @@ def admin_rl_experiences():
         try:
             cursor = conn.cursor()
             
-            # Get count before deletion
-            cursor.execute("SELECT COUNT(*) FROM rl_experiences")
-            count_before = cursor.fetchone()[0]
-            
-            # Delete all RL experiences
-            cursor.execute("DELETE FROM rl_experiences")
-            deleted_count = cursor.rowcount
+            # Build delete query based on symbol filter
+            if symbol:
+                # Delete specific symbol
+                cursor.execute("SELECT COUNT(*) FROM rl_experiences WHERE symbol = %s", (symbol,))
+                count_before = cursor.fetchone()[0]
+                
+                cursor.execute("DELETE FROM rl_experiences WHERE symbol = %s", (symbol,))
+                deleted_count = cursor.rowcount
+                
+                logging.info(f"Admin deleted {symbol} RL experiences: {deleted_count} rows")
+                message = f"Successfully deleted {deleted_count} {symbol} experiences"
+            else:
+                # Delete all
+                cursor.execute("SELECT COUNT(*) FROM rl_experiences")
+                count_before = cursor.fetchone()[0]
+                
+                cursor.execute("DELETE FROM rl_experiences")
+                deleted_count = cursor.rowcount
+                
+                logging.info(f"Admin deleted all RL experiences: {deleted_count} rows")
+                message = f"Successfully deleted {deleted_count} RL experiences"
             
             conn.commit()
-            
-            logging.info(f"Admin deleted all RL experiences: {deleted_count} rows")
             
             return jsonify({
                 "success": True,
                 "deleted_count": deleted_count,
                 "count_before": count_before,
-                "message": f"Successfully deleted {deleted_count} RL experiences"
+                "symbol": symbol or "all",
+                "message": message
             }), 200
             
         except Exception as e:
