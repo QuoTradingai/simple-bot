@@ -1717,13 +1717,13 @@ def admin_get_user(account_id):
         with conn.cursor(cursor_factory=RealDictCursor) as cursor:
             # Get user details with last active from api_logs
             cursor.execute("""
-                SELECT u.id, u.email, u.license_key, u.license_type, u.license_status,
+                SELECT u.account_id, u.email, u.license_key, u.license_type, u.license_status,
                        u.license_expiration, u.created_at,
                        MAX(a.created_at) as last_active
                 FROM users u
                 LEFT JOIN api_logs a ON u.license_key = a.license_key
-                WHERE u.id = %s OR u.license_key = %s
-                GROUP BY u.id, u.email, u.license_key, u.license_type, u.license_status,
+                WHERE u.account_id = %s OR u.license_key = %s
+                GROUP BY u.account_id, u.email, u.license_key, u.license_type, u.license_status,
                          u.license_expiration, u.created_at
             """, (account_id, account_id))
             user = cursor.fetchone()
@@ -1755,7 +1755,7 @@ def admin_get_user(account_id):
             # Format user data
             user_data = {
                 "user": {
-                    "account_id": str(user['id']),
+                    "account_id": user['account_id'],
                     "email": user['email'],
                     "license_key": user['license_key'],
                     "license_type": user['license_type'],
@@ -1847,7 +1847,7 @@ def admin_online_users():
         with conn.cursor(cursor_factory=RealDictCursor) as cursor:
             # Get online users with latest heartbeat data
             cursor.execute("""
-                SELECT u.id, u.email, u.license_key, u.license_type, 
+                SELECT u.account_id, u.email, u.license_key, u.license_type, 
                        u.last_heartbeat, u.metadata
                 FROM users u
                 WHERE u.last_heartbeat > NOW() - INTERVAL '2 minutes'
@@ -1864,7 +1864,7 @@ def admin_online_users():
                     metadata = json.loads(metadata)
                 
                 formatted.append({
-                    "account_id": str(user['id']),
+                    "account_id": user['account_id'],
                     "email": user['email'],
                     "license_key": user['license_key'],
                     "license_type": user['license_type'],
@@ -1910,7 +1910,7 @@ def admin_suspend_user(account_id):
         with conn.cursor() as cursor:
             cursor.execute("""
                 UPDATE users SET license_status = 'SUSPENDED'
-                WHERE id = %s OR license_key = %s
+                WHERE account_id = %s OR license_key = %s
                 RETURNING license_key
             """, (account_id, account_id))
             result = cursor.fetchone()
@@ -1941,7 +1941,7 @@ def admin_activate_user(account_id):
         with conn.cursor() as cursor:
             cursor.execute("""
                 UPDATE users SET license_status = 'ACTIVE'
-                WHERE id = %s OR license_key = %s
+                WHERE account_id = %s OR license_key = %s
                 RETURNING license_key
             """, (account_id, account_id))
             result = cursor.fetchone()
@@ -1975,7 +1975,7 @@ def admin_extend_license(account_id):
             cursor.execute("""
                 UPDATE users 
                 SET license_expiration = COALESCE(license_expiration, NOW()) + INTERVAL '%s days'
-                WHERE id = %s OR license_key = %s
+                WHERE account_id = %s OR license_key = %s
                 RETURNING license_key, license_expiration
             """, (days, account_id, account_id))
             result = cursor.fetchone()
