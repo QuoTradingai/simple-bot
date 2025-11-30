@@ -735,14 +735,29 @@ def check_broker_connection() -> None:
             current_time = eastern_tz.localize(current_time)
         eastern_time = current_time.astimezone(eastern_tz)
         
-        # Only go idle during maintenance, not weekend
-        # Maintenance is 5:00-6:00 PM ET on weekdays (Mon-Fri)
-        if "maintenance" in halt_reason.lower() or (eastern_time.weekday() < 5 and eastern_time.time() >= datetime_time(16, 45) and eastern_time.time() < datetime_time(18, 0)):
+        # Determine if maintenance or weekend
+        is_weekend = eastern_time.weekday() in [5, 6]  # Saturday=5, Sunday=6
+        is_maintenance = (eastern_time.weekday() < 5 and 
+                         eastern_time.time() >= datetime_time(16, 45) and 
+                         eastern_time.time() < datetime_time(18, 0))
+        
+        if is_maintenance or is_weekend or "maintenance" in halt_reason.lower() or "weekend" in halt_reason.lower():
+            # Determine idle reason for clear messaging
+            if is_weekend:
+                idle_type = "WEEKEND"
+                idle_msg = "Weekend market closure"
+                reopen_msg = "Will auto-reconnect Sunday at 6:00 PM ET"
+            else:
+                idle_type = "MAINTENANCE"
+                idle_msg = "Daily maintenance window (4:45 PM - 6:00 PM ET)"
+                reopen_msg = "Will auto-reconnect at 6:00 PM ET"
+            
             logger.critical(SEPARATOR_LINE)
-            logger.critical("≡ƒöº MAINTENANCE WINDOW - GOING IDLE")
+            logger.critical(f"≡ƒöº {idle_type} - GOING IDLE")
             logger.critical(f"Time: {eastern_time.strftime('%H:%M:%S %Z')}")
-            logger.critical("  Disconnecting broker to save resources during maintenance")
-            logger.critical("  Will auto-reconnect at 6:00 PM ET when market reopens")
+            logger.critical(f"  Reason: {idle_msg}")
+            logger.critical(f"  Disconnecting broker to save resources")
+            logger.critical(f"  {reopen_msg}")
             logger.critical(SEPARATOR_LINE)
             
             # Disconnect broker (stops all data feeds)
@@ -754,14 +769,34 @@ def check_broker_connection() -> None:
                 logger.error(f"  Γ¥î Error disconnecting: {e}")
             
             bot_status["maintenance_idle"] = True
+            bot_status["idle_type"] = idle_type  # Store for status message
             bot_status["trading_enabled"] = False
-            logger.critical("  Bot will check every 30s for market reopen...")
+            bot_status["last_idle_message_time"] = eastern_time
+            logger.critical(f"  Bot stays ON but IDLE - checking every 30s for market reopen...")
+            logger.critical(f"  Press Ctrl+C to stop bot")
             return  # Skip broker health check since we just disconnected
+    
+    # Display idle status message every 5 minutes during maintenance/weekend
+    elif trading_state == "closed" and bot_status.get("maintenance_idle", False):
+        eastern_tz = pytz.timezone('US/Eastern')
+        if current_time.tzinfo is None:
+            current_time = eastern_tz.localize(current_time)
+        eastern_time = current_time.astimezone(eastern_tz)
+        
+        last_msg_time = bot_status.get("last_idle_message_time")
+        idle_type = bot_status.get("idle_type", "MAINTENANCE")
+        
+        # Show status message every 5 minutes
+        if last_msg_time is None or (eastern_time - last_msg_time).total_seconds() >= 300:
+            logger.info(f"Γ¢ïêÔ∏è  {idle_type} IN PROGRESS - Bot idle, will resume when market reopens")
+            bot_status["last_idle_message_time"] = eastern_time
+        return  # Skip broker health check during idle period
     
     # AUTO-RECONNECT: Reconnect broker when market reopens at 6:00 PM ET
     elif trading_state == "entry_window" and bot_status.get("maintenance_idle", False):
+        idle_type = bot_status.get("idle_type", "MAINTENANCE")
         logger.critical(SEPARATOR_LINE)
-        logger.critical("Γ£à MARKET REOPENED - AUTO-RECONNECTING")
+        logger.critical(f"Γ£à {idle_type} COMPLETE - MARKET REOPENED - AUTO-RECONNECTING")
         logger.critical(f"Time: {current_time.strftime('%H:%M:%S %Z')}")
         logger.critical(SEPARATOR_LINE)
         
@@ -773,8 +808,10 @@ def check_broker_connection() -> None:
                 if success:
                     logger.critical("  [RECONNECT] Γ£à Broker connected - Data feed active")
                     bot_status["maintenance_idle"] = False
+                    bot_status["idle_type"] = None
                     bot_status["trading_enabled"] = True
                     logger.critical("  [RECONNECT] Γ£à Trading enabled. Bot fully operational.")
+                    logger.critical("  [RECONNECT] Γ£à Daily limits and VWAP reset at 6:00 PM ET")
                 else:
                     logger.error("  [RECONNECT] Γ¥î Connection failed - Will retry in 30s")
         except Exception as e:
@@ -2338,21 +2375,52 @@ def validate_signal_requirements(symbol: str, bar_time: datetime) -> Tuple[bool,
         return False, "Position active"
     
     # Check daily trade limit (skip in backtest mode)
-    if not is_backtest_mode() and state[symbol]["daily_trade_count"] >= CONFIG["max_trades_per_day"]:
-        logger.debug(f"Daily trade limit reached ({CONFIG['max_trades_per_day']}), stopping for the day")
+    # If trader is profitable for the day, allow bonus trades based on profit
+    if not is_backtest_mode():
+        base_trade_limit = CONFIG["max_trades_per_day"]
+        current_pnl = state[symbol]["daily_pnl"]
         
-        # Send max trades reached alert (only once)
-        if state[symbol]["daily_trade_count"] == CONFIG["max_trades_per_day"]:
-            try:
-                notifier = get_notifier()
-                notifier.send_error_alert(
-                    error_message=f"Max trades per day reached! Count: {state[symbol]['daily_trade_count']} / Limit: {CONFIG['max_trades_per_day']}. No more trades today.",
-                    error_type="Max Trades Reached"
-                )
-            except Exception as e:
-                logger.debug(f"Failed to send max trades alert: {e}")
-        
-        return False, "Daily trade limit"
+        # Calculate bonus trades based on profit
+        # For every $100 in profit, allow 1 additional trade (capped at 50% more trades)
+        if current_pnl > 0:
+            profit_bonus_trades = int(current_pnl / 100.0)  # 1 trade per $100 profit
+            max_bonus = int(base_trade_limit * 0.5)  # Cap at 50% more trades
+            bonus_trades = min(profit_bonus_trades, max_bonus)
+            effective_trade_limit = base_trade_limit + bonus_trades
+            
+            if state[symbol]["daily_trade_count"] >= effective_trade_limit:
+                logger.debug(f"Daily trade limit reached ({effective_trade_limit}), stopping for the day")
+                logger.debug(f"  Base limit: {base_trade_limit}, Profit bonus: +{bonus_trades} (${current_pnl:.2f} profit)")
+                
+                # Send max trades reached alert (only once)
+                if state[symbol]["daily_trade_count"] == effective_trade_limit:
+                    try:
+                        notifier = get_notifier()
+                        notifier.send_error_alert(
+                            error_message=f"Max trades per day reached! Count: {state[symbol]['daily_trade_count']} / Limit: {effective_trade_limit} (base {base_trade_limit} + {bonus_trades} profit bonus). No more trades today.",
+                            error_type="Max Trades Reached"
+                        )
+                    except Exception as e:
+                        logger.debug(f"Failed to send max trades alert: {e}")
+                
+                return False, "Daily trade limit"
+        else:
+            # No profit, use base limit
+            if state[symbol]["daily_trade_count"] >= base_trade_limit:
+                logger.debug(f"Daily trade limit reached ({base_trade_limit}), stopping for the day")
+                
+                # Send max trades reached alert (only once)
+                if state[symbol]["daily_trade_count"] == base_trade_limit:
+                    try:
+                        notifier = get_notifier()
+                        notifier.send_error_alert(
+                            error_message=f"Max trades per day reached! Count: {state[symbol]['daily_trade_count']} / Limit: {base_trade_limit}. No more trades today.",
+                            error_type="Max Trades Reached"
+                        )
+                    except Exception as e:
+                        logger.debug(f"Failed to send max trades alert: {e}")
+                
+                return False, "Daily trade limit"
     
     # Daily loss limit - ENABLED for safety
     if state[symbol]["daily_pnl"] <= -CONFIG["daily_loss_limit"]:
@@ -6200,8 +6268,8 @@ def perform_vwap_reset(symbol: str, new_date: Any, reset_time: datetime) -> None
         reset_time: Time of the reset
     """
     logger.info(SEPARATOR_LINE)
-    logger.info(f"DAILY RESET at {reset_time.strftime('%Y-%m-%d %H:%M:%S %Z')}")
-    logger.info(f"Futures trading day start (6:00 PM ET) - New trading day: {new_date}")
+    logger.info(f"VWAP RESET at {reset_time.strftime('%Y-%m-%d %H:%M:%S %Z')}")
+    logger.info(f"Futures trading day start (6:00 PM ET) - New VWAP session: {new_date}")
     logger.info(SEPARATOR_LINE)
     
     # Clear accumulated 1-minute bars for VWAP calculation
@@ -6221,8 +6289,9 @@ def perform_vwap_reset(symbol: str, new_date: Any, reset_time: datetime) -> None
     state[symbol]["vwap_day"] = new_date
     
     # Note: 15-minute trend bars continue running - trend carries from overnight
-    logger.info("Market data cleared - 15-minute trend bars continue running")
-    logger.info(f"Current 15-min bars: {len(state[symbol]['bars_15min'])}")
+    logger.info("Γ£à VWAP data cleared - starting fresh daily VWAP calculation")
+    logger.info("Γ£à 1-minute bars cleared")
+    logger.info(f"Γ£à 15-minute trend bars continue ({len(state[symbol]['bars_15min'])} bars)")
     logger.info(SEPARATOR_LINE)
 
 
@@ -6262,6 +6331,7 @@ def perform_daily_reset(symbol: str, new_date: Any) -> None:
     """
     logger.info(SEPARATOR_LINE)
     logger.info(f"DAILY RESET - New Trading Day: {new_date}")
+    logger.info(f"Resetting at 6:00 PM ET after maintenance window")
     logger.info(SEPARATOR_LINE)
     
     # Log session summary before reset
@@ -6271,6 +6341,7 @@ def perform_daily_reset(symbol: str, new_date: Any) -> None:
     state[symbol]["daily_trade_count"] = 0
     state[symbol]["daily_pnl"] = 0.0
     state[symbol]["trading_day"] = new_date
+    state[symbol]["loss_limit_alerted"] = False  # Reset alert flag
     
     # Reset session stats
     state[symbol]["session_stats"] = {
@@ -6294,10 +6365,12 @@ def perform_daily_reset(symbol: str, new_date: Any) -> None:
     if bot_status["stop_reason"] in ["daily_loss_limit", "daily_limits_reached"]:
         bot_status["trading_enabled"] = True
         bot_status["stop_reason"] = None
-        logger.info("Trading re-enabled for new day after maintenance hour reset")
+        logger.info("≡ƒÜï Trading re-enabled for new day - daily limits reset")
     
     logger.info("Daily reset complete - Ready for trading")
-    logger.info("(VWAP reset handled at market open 6:00 PM ET / 6 PM EST)")
+    logger.info("  Γ£à Daily P&L reset to $0.00")
+    logger.info("  Γ£à Trade count reset to 0")
+    logger.info("  Γ£à VWAP bands will recalculate from live data")
     logger.info(SEPARATOR_LINE)
 
 
