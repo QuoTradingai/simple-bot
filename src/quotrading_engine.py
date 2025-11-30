@@ -8076,11 +8076,10 @@ def send_heartbeat() -> None:
                     except:
                         pass
                 
-                # Exit
-                import sys
-                import time
-                time.sleep(3)
-                sys.exit(1)
+                # Bot stays ON but IDLE - never exits
+                logger.critical("Bot will remain ON but IDLE (no trading)")
+                logger.critical("Press Ctrl+C to stop bot")
+                # sys.exit(1)  # COMMENTED OUT - bot should never exit unless user stops it
             
             logger.debug("Heartbeat sent successfully")
         elif response.status_code == 403:
@@ -8096,14 +8095,15 @@ def send_heartbeat() -> None:
             logger.critical("")
             logger.critical("=" * 70)
             
-            # Force shutdown
+            # Disable trading but keep bot running
             bot_status["trading_enabled"] = False
             bot_status["emergency_stop"] = True
+            bot_status["stop_reason"] = "license_conflict"
             
-            import sys
-            import time
-            time.sleep(3)
-            sys.exit(1)
+            # Bot stays ON but IDLE - never exits
+            logger.critical("Bot will remain ON but IDLE (no trading)")
+            logger.critical("Press Ctrl+C to stop bot")
+            # sys.exit(1)  # COMMENTED OUT - bot should never exit unless user stops it
         else:
             logger.debug(f"Heartbeat returned HTTP {response.status_code}")
     
