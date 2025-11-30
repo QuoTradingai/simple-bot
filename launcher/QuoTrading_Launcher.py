@@ -1412,20 +1412,20 @@ class QuoTradingLauncher:
     
     
     def fetch_account_info(self):
-        """Ping RL server to verify API connectivity."""
+        """Ping server to verify connectivity."""
         
         # Show loading spinner
-        self.show_loading("Pinging RL server...")
+        self.show_loading("Testing server connection...")
         
         def test_connection_thread():
-            """Ping RL server."""
+            """Ping server to test connectivity."""
             import traceback
             try:
                 import requests
                 
-                # Get RL server URL
-                rl_server_url = CLOUD_API_BASE_URL
-                health_endpoint = f"{rl_server_url}/health"
+                # Get server URL
+                server_url = CLOUD_API_BASE_URL
+                health_endpoint = f"{server_url}/health"
                 
                 # Ping with timeout
                 response = requests.get(health_endpoint, timeout=10)
@@ -1447,19 +1447,18 @@ class QuoTradingLauncher:
                         
                         # Update info label to show connection success
                         self.account_info_label.config(
-                            text=f"✓ Server ping successful! Connection to AI server is working.",
+                            text=f"✓ Server ping successful! Connection is working.",
                             fg=self.colors['success']
                         )
                         
                         messagebox.showinfo(
                             "Ping Successful",
                             f"✓ Connection Test Passed!\n\n"
-                            f"Server: QuoTrading RL Server\n"
-                            f"URL: {rl_server_url}\n"
+                            f"Server: QuoTrading Server\n"
+                            f"URL: {server_url}\n"
                             f"Status: {status.upper()}\n"
                             f"Version: {version}\n\n"
-                            f"Your connection to the AI server is working properly.\n"
-                            f"The bot is ready to receive trading signals."
+                            f"Your connection to the server is working properly."
                         )
                     
                     self.root.after(0, show_success)
@@ -1467,18 +1466,18 @@ class QuoTradingLauncher:
                     raise Exception(f"Server returned status code {response.status_code}")
                 
             except requests.exceptions.Timeout:
-                error_msg = "Timeout - RL server not responding"
+                error_msg = "Timeout - Server not responding"
                 
                 def show_error():
                     self.hide_loading()
                     messagebox.showerror(
                         "Ping Failed",
                         f"❌ Connection Failed\n\n{error_msg}\n\n"
-                        f"Server: {rl_server_url}\n\n"
+                        f"Server: {server_url}\n\n"
                         f"Please check:\n"
                         f"• Internet connection\n"
                         f"• Firewall settings\n"
-                        f"• RL server status\n\n"
+                        f"• Server status\n\n"
                         f"Contact support if issue persists."
                     )
                 
@@ -1492,11 +1491,11 @@ class QuoTradingLauncher:
                     messagebox.showerror(
                         "Ping Failed",
                         f"❌ Connection Failed\n\n{error_msg}\n\n"
-                        f"Server: {rl_server_url}\n\n"
+                        f"Server: {server_url}\n\n"
                         f"Please check:\n"
                         f"• Internet connection\n"
                         f"• Firewall settings\n"
-                        f"• RL server status\n\n"
+                        f"• Server status\n\n"
                         f"Contact support if issue persists."
                     )
                 
@@ -1510,7 +1509,7 @@ class QuoTradingLauncher:
                     messagebox.showerror(
                         "Ping Failed",
                         f"❌ Connection Failed\n\n{error_msg}\n\n"
-                        f"Server: {rl_server_url}\n\n"
+                        f"Server: {server_url}\n\n"
                         f"Contact support if issue persists."
                     )
                 
@@ -1521,7 +1520,7 @@ class QuoTradingLauncher:
         thread.start()
     
     def auto_adjust_parameters(self):
-        """Auto-adjust trading parameters using intelligent risk management for all account types.
+        """Auto-adjust trading parameters using conservative risk management for all account types.
         
         Handles:
         - Prop firm accounts (TopStep, etc.) with strict drawdown rules
@@ -1559,56 +1558,53 @@ class QuoTradingLauncher:
             if match:
                 prop_firm_size = int(match.group(1)) * 1000  # Convert 50 to 50000
         
-        # INTELLIGENT DAILY LOSS LIMIT CALCULATION
+        # CONSERVATIVE DAILY LOSS LIMIT CALCULATION
+        # Use much more conservative limits to protect user capital
         if is_prop_firm:
-            # Prop firms have strict drawdown rules that are NOT simply 2% of account
-            # Common prop firm rules:
-            # - $50k account: $2k daily loss, $2.5k trailing drawdown
-            # - $100k account: $3k daily loss, $4k trailing drawdown
-            # - $150k account: $4.5k daily loss, $6k trailing drawdown
+            # Prop firms have strict drawdown rules
+            # Use CONSERVATIVE limits (25-50% of actual max drawdown)
+            # This ensures users don't hit limits too easily
             
             if prop_firm_size:
-                # Use actual prop firm rules based on account size
+                # Conservative prop firm limits (half of actual max allowed)
                 if prop_firm_size <= 50000:
-                    daily_loss_limit = 2000  # $50k TopStep = $2k daily limit
+                    daily_loss_limit = 1000  # $50k TopStep: use $1k (50% of $2k max)
                 elif prop_firm_size <= 100000:
-                    daily_loss_limit = 3000  # $100k TopStep = $3k daily limit
+                    daily_loss_limit = 1500  # $100k TopStep: use $1.5k (50% of $3k max)
                 elif prop_firm_size <= 150000:
-                    daily_loss_limit = 4500  # $150k TopStep = $4.5k daily limit
+                    daily_loss_limit = 2000  # $150k TopStep: use $2k (~44% of $4.5k max)
                 else:
-                    daily_loss_limit = prop_firm_size * 0.03  # 3% for larger accounts
+                    daily_loss_limit = prop_firm_size * 0.015  # 1.5% for larger accounts
             else:
-                # Fallback: Use conservative 2% for unknown prop firm accounts
-                # Cap at $5000 to match typical max prop firm daily limits
-                daily_loss_limit = min(account_size * 0.02, 5000)
+                # Fallback: Use very conservative 1% for unknown prop firm accounts
+                daily_loss_limit = min(account_size * 0.01, 2500)
         else:
-            # Live broker accounts: Use standard 2% risk rule
-            daily_loss_limit = account_size * 0.02
+            # Live broker accounts: Use conservative 1% risk rule (not 2%)
+            daily_loss_limit = account_size * 0.01
         
-        # MAX LOSS PER TRADE: 20% of daily limit (allows 5 losing trades)
-        # This is universal across all account types
-        max_loss_per_trade = daily_loss_limit * 0.2
+        # MAX LOSS PER TRADE: 15% of daily limit (allows ~6-7 losing trades)
+        # More conservative than 20% to give more buffer
+        max_loss_per_trade = daily_loss_limit * 0.15
         
-        # MAX CONTRACTS: Scale based on daily loss limit, not account size
-        # This ensures proper position sizing relative to risk tolerance
-        # Formula: 1 contract per $500 of daily loss limit
-        # Rationale: With $400/trade stop loss, 1 contract = ~$500 risk capacity
-        max_contracts = min(self.max_contracts_allowed, max(1, int(daily_loss_limit / 500)))
+        # MAX CONTRACTS: Very conservative scaling
+        # Formula: 1 contract per $800 of daily loss limit (was $500)
+        # This reduces position sizes for safety
+        max_contracts = min(self.max_contracts_allowed, max(1, int(daily_loss_limit / 800)))
         
-        # MAX TRADES PER DAY: Scale based on risk capacity
-        # More daily loss capacity = more trades allowed
-        if daily_loss_limit < 1000:
-            max_trades = 5  # Very conservative
+        # MAX TRADES PER DAY: Conservative scaling
+        # Fewer trades = less risk of hitting daily limit
+        if daily_loss_limit < 500:
+            max_trades = 3  # Very conservative
+        elif daily_loss_limit < 1000:
+            max_trades = 5  # Conservative
+        elif daily_loss_limit < 1500:
+            max_trades = 7  # Moderate
         elif daily_loss_limit < 2000:
-            max_trades = 8  # Conservative
+            max_trades = 8  # Active
         elif daily_loss_limit < 3000:
-            max_trades = 10  # Moderate
-        elif daily_loss_limit < 4000:
-            max_trades = 12  # Active
-        elif daily_loss_limit < 5000:
-            max_trades = 15  # Very active
+            max_trades = 10  # Very active
         else:
-            max_trades = 20  # Maximum activity
+            max_trades = 12  # Maximum (reduced from 20)
         
         # Apply the calculated settings
         self.loss_entry.delete(0, tk.END)
