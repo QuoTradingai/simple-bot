@@ -125,7 +125,7 @@ def send_license_email(email, license_key, whop_user_id=None, whop_membership_id
                                 <p style="color: #64748b; font-size: 13px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; margin: 0 0 12px 0;">
                                     Your License Key
                                 </p>
-                                <p style="font-size: 24px; font-weight: 700; color: #1e293b; letter-spacing: 2px; font-family: 'Courier New', monospace; margin: 0; word-break: break-all; line-height: 1.4;">
+                                <p style="font-size: 26px; font-weight: 900; color: #000000; letter-spacing: 2px; font-family: 'Courier New', monospace; margin: 0; word-break: break-all; line-height: 1.4; background: #ffffff; padding: 16px; border-radius: 6px; border: 2px solid #667eea;">
                                     {license_key}
                                 </p>
                             </div>
@@ -2010,19 +2010,24 @@ def admin_delete_user(account_id):
     try:
         with conn.cursor() as cursor:
             # First check if user exists
-            cursor.execute("SELECT account_id, email FROM users WHERE account_id = %s", (account_id,))
+            cursor.execute("SELECT account_id, email, license_key FROM users WHERE account_id = %s", (account_id,))
             user = cursor.fetchone()
             
             if not user:
                 return jsonify({"error": "User not found"}), 404
             
-            # Delete user's RL experiences
-            cursor.execute("DELETE FROM rl_experiences WHERE account_id = %s", (account_id,))
+            user_license_key = user[2]
+            
+            # Delete user's RL experiences (uses license_key, not account_id)
+            cursor.execute("DELETE FROM rl_experiences WHERE license_key = %s", (user_license_key,))
             deleted_experiences = cursor.rowcount
             
-            # Delete user's activity logs
-            cursor.execute("DELETE FROM activity_logs WHERE account_id = %s", (account_id,))
-            deleted_logs = cursor.rowcount
+            # Delete user's activity logs (if this table exists and uses account_id)
+            try:
+                cursor.execute("DELETE FROM activity_logs WHERE account_id = %s", (account_id,))
+                deleted_logs = cursor.rowcount
+            except Exception:
+                deleted_logs = 0  # Table might not exist
             
             # Delete the user
             cursor.execute("DELETE FROM users WHERE account_id = %s", (account_id,))
