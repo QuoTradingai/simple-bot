@@ -813,6 +813,24 @@ def generate_license_key():
         segments.append(segment)
     return '-'.join(segments)  # Format: XXXX-XXXX-XXXX-XXXX
 
+def log_webhook_event(event_type, status, whop_id=None, user_id=None, email=None, details=None, error=None, payload=None):
+    """Log webhook event to database for debugging"""
+    try:
+        conn = get_db_connection()
+        if not conn:
+            return
+        
+        cur = conn.cursor()
+        cur.execute("""
+            INSERT INTO webhook_events (event_type, whop_id, user_id, email, status, details, error, payload)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+        """, (event_type, whop_id, user_id, email, status, details, error, json.dumps(payload) if payload else None))
+        conn.commit()
+        cur.close()
+        return_connection(conn)
+    except Exception as e:
+        logging.error(f"Failed to log webhook event: {e}")
+
 def init_db_pool():
     """Initialize PostgreSQL connection pool for reusing connections"""
     global _db_pool
@@ -1420,6 +1438,7 @@ def whop_webhook():
                             """, (membership_id, user_id, email))
                             license_key = existing[0]
                             logging.info(f"🔄 License reactivated for {email}")
+                            log_webhook_event(event_type, 'success', membership_id, user_id, email, f'Reactivated license {license_key}')
                         else:
                             # Create new license
                             license_key = generate_license_key()
@@ -1429,6 +1448,7 @@ def whop_webhook():
                                 VALUES (%s, %s, %s, %s, %s, %s, %s)
                             """, (account_id, license_key, email, 'Monthly', 'active', membership_id, user_id))
                             logging.info(f"🎉 License created from Whop: {license_key} for {email}")
+                            log_webhook_event(event_type, 'success', membership_id, user_id, email, f'Created license {license_key}')
                             
                             # Send email with Whop IDs
                             email_sent = send_license_email(email, license_key, user_id, membership_id)
@@ -2231,9 +2251,57 @@ def admin_rl_stats():
     finally:
         return_connection(conn)
 
-@app.route('/api/admin/rl-experiences', methods=['GET'])
+@app.route('/api/admin/rl-experiences', methods=['GET', 'DELETE'])
 def admin_rl_experiences():
-    """Admin endpoint to view recent RL experiences with full details"""
+    """Admin endpoint to view or delete RL experiences"""
+    
+    # DELETE method - bulk delete all RL experiences
+    if request.method == 'DELETE':
+        admin_key = request.headers.get('X-API-Key')
+        if admin_key != ADMIN_API_KEY:
+            # Also check request body
+            data = request.get_json()
+            if not data or data.get('admin_key') != ADMIN_API_KEY:
+                return jsonify({"error": "Unauthorized"}), 401
+        
+        conn = get_db_connection()
+        if not conn:
+            return jsonify({"error": "Database connection failed"}), 500
+        
+        cursor = None
+        try:
+            cursor = conn.cursor()
+            
+            # Get count before deletion
+            cursor.execute("SELECT COUNT(*) FROM rl_experiences")
+            count_before = cursor.fetchone()[0]
+            
+            # Delete all RL experiences
+            cursor.execute("DELETE FROM rl_experiences")
+            deleted_count = cursor.rowcount
+            
+            conn.commit()
+            
+            logging.info(f"Admin deleted all RL experiences: {deleted_count} rows")
+            
+            return jsonify({
+                "success": True,
+                "deleted_count": deleted_count,
+                "count_before": count_before,
+                "message": f"Successfully deleted {deleted_count} RL experiences"
+            }), 200
+            
+        except Exception as e:
+            if conn:
+                conn.rollback()
+            logging.error(f"Delete RL experiences error: {e}")
+            return jsonify({"error": f"Delete failed: {str(e)}"}), 500
+        finally:
+            if cursor:
+                cursor.close()
+            return_connection(conn)
+    
+    # GET method - view RL experiences
     admin_key = request.args.get('admin_key') or request.args.get('license_key')
     if admin_key != ADMIN_API_KEY:
         return jsonify({"error": "Unauthorized"}), 401
@@ -3691,7 +3759,7 @@ def admin_view_database_table(table_name):
         return jsonify({"error": "Unauthorized"}), 401
     
     # Whitelist allowed tables
-    allowed_tables = ['rl_experiences', 'users', 'api_logs']
+    allowed_tables = ['rl_experiences', 'users', 'api_logs', 'heartbeats']
     if table_name not in allowed_tables:
         return jsonify({"error": f"Table '{table_name}' not allowed"}), 400
     
@@ -3748,6 +3816,75 @@ def admin_view_database_table(table_name):
     except Exception as e:
         logging.error(f"Database viewer error for {table_name}: {e}")
         return jsonify({"error": str(e)}), 500
+    finally:
+        cur.close()
+        return_connection(conn)
+
+@app.route('/api/admin/webhooks', methods=['GET'])
+def admin_get_webhooks():
+    """Get webhook event history (admin only)"""
+    api_key = request.args.get('license_key') or request.args.get('admin_key')
+    if api_key != ADMIN_API_KEY:
+        return jsonify({"error": "Unauthorized"}), 401
+    
+    limit = request.args.get('limit', 100, type=int)
+    if limit > 500:
+        limit = 500
+    
+    conn = get_db_connection()
+    if not conn:
+        return jsonify({"webhooks": []}), 200
+    
+    try:
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        
+        # Check if webhook_events table exists
+        cur.execute("""
+            SELECT EXISTS (
+                SELECT FROM information_schema.tables 
+                WHERE table_name = 'webhook_events'
+            )
+        """)
+        table_exists = cur.fetchone()['exists']
+        
+        if not table_exists:
+            # Create webhook_events table
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS webhook_events (
+                    id SERIAL PRIMARY KEY,
+                    timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    event_type VARCHAR(100),
+                    whop_id VARCHAR(100),
+                    user_id VARCHAR(100),
+                    email VARCHAR(255),
+                    status VARCHAR(50),
+                    details TEXT,
+                    error TEXT,
+                    payload JSONB
+                )
+            """)
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_webhook_events_timestamp ON webhook_events(timestamp DESC)")
+            conn.commit()
+            return jsonify({"webhooks": []}), 200
+        
+        # Fetch recent webhooks
+        cur.execute("""
+            SELECT * FROM webhook_events
+            ORDER BY timestamp DESC
+            LIMIT %s
+        """, (limit,))
+        rows = cur.fetchall()
+        
+        # Convert datetime to ISO
+        for row in rows:
+            if row.get('timestamp'):
+                row['timestamp'] = row['timestamp'].isoformat()
+        
+        return jsonify({"webhooks": rows}), 200
+        
+    except Exception as e:
+        logging.error(f"Webhooks fetch error: {e}")
+        return jsonify({"webhooks": []}), 200
     finally:
         cur.close()
         return_connection(conn)

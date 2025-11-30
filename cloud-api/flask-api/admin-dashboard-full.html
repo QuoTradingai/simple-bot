@@ -735,27 +735,60 @@
 
         <!-- Activity Tab -->
         <div class="tab-content" id="activity-tab">
-            <table class="sheet-table">
-                <thead>
-                    <tr>
-                        <th style="width: 160px">Timestamp</th>
-                        <th style="width: 120px">User</th>
-                        <th style="width: 200px">Endpoint</th>
-                        <th style="width: 80px">Method</th>
-                        <th style="width: 100px">Status</th>
-                        <th style="width: 120px">Response Time</th>
-                        <th style="width: 140px">IP Address</th>
-                    </tr>
-                </thead>
-                <tbody id="activityTableBody">
-                    <tr>
-                        <td colspan="7" class="empty-state">
-                            <div class="empty-state-icon">📊</div>
-                            <div class="empty-state-text">No recent activity</div>
-                        </td>
-                    </tr>
-                </tbody>
-            </table>
+            <div class="toolbar" style="margin-bottom: 16px;">
+                <button class="filter-btn" onclick="showActivityView('api')" id="apiViewBtn" style="background: #1a73e8; color: white;">📊 API Logs</button>
+                <button class="filter-btn" onclick="showActivityView('webhooks')" id="webhooksViewBtn">🔗 Webhook Events</button>
+            </div>
+            
+            <!-- API Logs View -->
+            <div id="apiLogsView">
+                <table class="sheet-table">
+                    <thead>
+                        <tr>
+                            <th style="width: 160px">Timestamp</th>
+                            <th style="width: 120px">User</th>
+                            <th style="width: 200px">Endpoint</th>
+                            <th style="width: 80px">Method</th>
+                            <th style="width: 100px">Status</th>
+                            <th style="width: 120px">Response Time</th>
+                            <th style="width: 140px">IP Address</th>
+                        </tr>
+                    </thead>
+                    <tbody id="activityTableBody">
+                        <tr>
+                            <td colspan="7" class="empty-state">
+                                <div class="empty-state-icon">📊</div>
+                                <div class="empty-state-text">No recent activity</div>
+                            </td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+            
+            <!-- Webhook Events View -->
+            <div id="webhooksView" style="display: none;">
+                <table class="sheet-table">
+                    <thead>
+                        <tr>
+                            <th style="width: 160px">Timestamp</th>
+                            <th style="width: 120px">Event Type</th>
+                            <th style="width: 140px">User/Email</th>
+                            <th style="width: 100px">Status</th>
+                            <th style="width: 150px">Whop ID</th>
+                            <th style="width: 200px">Details</th>
+                            <th style="width: 100px">Error</th>
+                        </tr>
+                    </thead>
+                    <tbody id="webhooksTableBody">
+                        <tr>
+                            <td colspan="7" class="empty-state">
+                                <div class="empty-state-icon">🔗</div>
+                                <div class="empty-state-text">No webhook events</div>
+                            </td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
         </div>
 
         <!-- License Manager Tab -->
@@ -855,26 +888,50 @@
             <div style="padding: 40px;">
                 <div style="max-width: 1800px; margin: 0 auto;">
                     <h2 style="font-size: 28px; margin-bottom: 30px; color: #202124;">
-                        🧠 RL Experience - PostgreSQL Live Trades
+                        🧠 Database Explorer
                     </h2>
                     
                     <div style="background: white; border-radius: 16px; padding: 24px; box-shadow: 0 2px 8px rgba(0,0,0,0.08); margin-bottom: 24px;">
                         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
-                            <h3 style="font-size: 20px; margin: 0; color: #202124;">📊 Live Trade Data from PostgreSQL</h3>
+                            <div style="display: flex; gap: 12px; align-items: center;">
+                                <h3 style="font-size: 20px; margin: 0; color: #202124;">📊 Table:</h3>
+                                <select id="dbTableSelector" onchange="loadSelectedTable()" style="padding: 8px 12px; border: 1px solid #dadce0; border-radius: 4px; font-size: 14px;">
+                                    <option value="rl_experiences">🧠 RL Experiences</option>
+                                    <option value="users">👥 Users (Raw)</option>
+                                    <option value="api_logs">📊 API Logs (Raw)</option>
+                                    <option value="heartbeats">💓 Heartbeats</option>
+                                </select>
+                                <select id="symbolFilter" onchange="filterRLBySymbol()" style="padding: 8px 12px; border: 1px solid #dadce0; border-radius: 4px; font-size: 14px; display: none;">
+                                    <option value="all">All Symbols</option>
+                                    <option value="ES">📈 ES</option>
+                                    <option value="NQ">📊 NQ</option>
+                                    <option value="MNQ">📉 MNQ</option>
+                                    <option value="MES">📐 MES</option>
+                                    <option value="YM">📏 YM</option>
+                                    <option value="RTY">📋 RTY</option>
+                                    <option value="GC">🥇 GC</option>
+                                    <option value="CL">🛢️ CL</option>
+                                    <option value="NG">🔥 NG</option>
+                                    <option value="6E">💶 6E</option>
+                                    <option value="ZN">📜 ZN</option>
+                                    <option value="MBTX">₿ MBTX</option>
+                                </select>
+                            </div>
                             <div>
-                                <input type="text" id="rlExpSearch" placeholder="Filter by symbol..." onkeyup="filterRLTable()" 
+                                <input type="text" id="rlExpSearch" placeholder="Filter..." onkeyup="filterRLTable()" 
                                     style="padding: 8px 12px; border: 1px solid #dadce0; border-radius: 4px; margin-right: 10px;">
-                                <button class="filter-btn" onclick="loadRLExperiencesData()">🔄 Refresh</button>
+                                <button class="filter-btn" onclick="loadSelectedTable()">🔄 Refresh</button>
                                 <button class="filter-btn" onclick="exportRLData()">📥 Export CSV</button>
+                                <button class="filter-btn" onclick="exportAndClearAllRLData()" style="background: linear-gradient(135deg, #ff6b6b 0%, #ee5a52 100%); color: white; border: none; font-weight: 600;">🗑️ Export & Clear All</button>
                             </div>
                         </div>
                         <div style="margin-bottom: 16px; color: #5f6368; font-size: 14px;">
                             <span id="rlRowCount">0 rows</span> • Last updated: <span id="rlLastUpdate">Never</span>
                         </div>
                         
-                        <div style="overflow-x: auto;">
+                        <div style="overflow-x: auto;" id="dbTableContainer">
                             <table class="sheet-table" style="font-size: 13px;">
-                                <thead>
+                                <thead id="dbTableHead">
                                     <tr>
                                         <th style="width: 120px">Timestamp</th>
                                         <th style="width: 100px">License</th>
@@ -909,7 +966,7 @@
                                     <tr>
                                         <td colspan="27" class="empty-state">
                                             <div class="empty-state-icon">🧠</div>
-                                            <div class="empty-state-text">Loading RL experiences from PostgreSQL...</div>
+                                            <div class="empty-state-text">Loading data from PostgreSQL...</div>
                                         </td>
                                     </tr>
                                 </tbody>
@@ -1698,6 +1755,62 @@
                 `).join('');
             } catch (error) {
                 console.error('Failed to load activity:', error);
+            }
+        }
+
+        function showActivityView(view) {
+            if (view === 'api') {
+                document.getElementById('apiLogsView').style.display = 'block';
+                document.getElementById('webhooksView').style.display = 'none';
+                document.getElementById('apiViewBtn').style.background = '#1a73e8';
+                document.getElementById('apiViewBtn').style.color = 'white';
+                document.getElementById('webhooksViewBtn').style.background = '';
+                document.getElementById('webhooksViewBtn').style.color = '';
+            } else {
+                document.getElementById('apiLogsView').style.display = 'none';
+                document.getElementById('webhooksView').style.display = 'block';
+                document.getElementById('webhooksViewBtn').style.background = '#1a73e8';
+                document.getElementById('webhooksViewBtn').style.color = 'white';
+                document.getElementById('apiViewBtn').style.background = '';
+                document.getElementById('apiViewBtn').style.color = '';
+                loadWebhooks();
+            }
+        }
+
+        async function loadWebhooks() {
+            try {
+                const response = await fetch(`${API_URL}/api/admin/webhooks?license_key=${ADMIN_KEY}&limit=100`);
+                const data = await response.json();
+                
+                const tbody = document.getElementById('webhooksTableBody');
+                
+                if (!data.webhooks || data.webhooks.length === 0) {
+                    tbody.innerHTML = `
+                        <tr>
+                            <td colspan="7" class="empty-state">
+                                <div class="empty-state-icon">🔗</div>
+                                <div class="empty-state-text">No webhook events recorded</div>
+                            </td>
+                        </tr>
+                    `;
+                    return;
+                }
+                
+                tbody.innerHTML = data.webhooks.map(hook => {
+                    const statusBadge = hook.status === 'success' ? 'badge-active' : 'badge-suspended';
+                    return `
+                    <tr>
+                        <td>${formatDateTime(hook.timestamp)}</td>
+                        <td><span class="badge">${hook.event_type || 'Unknown'}</span></td>
+                        <td>${hook.email || hook.user_id || '-'}</td>
+                        <td><span class="badge ${statusBadge}">${hook.status || 'unknown'}</span></td>
+                        <td style="font-family: monospace; font-size: 11px;">${hook.whop_id || '-'}</td>
+                        <td style="font-size: 12px;">${hook.details || '-'}</td>
+                        <td style="color: #d93025; font-size: 11px;">${hook.error || '-'}</td>
+                    </tr>
+                `}).join('');
+            } catch (error) {
+                console.error('Failed to load webhooks:', error);
             }
         }
 
@@ -3002,6 +3115,7 @@
         
         function renderRlExperiencesTable(rows) {
             const tbody = document.getElementById('dbRlExpTable');
+            const symbolFilter = document.getElementById('symbolFilter').value;
             
             if (!rows || rows.length === 0) {
                 tbody.innerHTML = `
@@ -3015,7 +3129,25 @@
                 return;
             }
             
-            tbody.innerHTML = rows.map(row => {
+            // Filter by symbol if not "all"
+            let filteredRows = rows;
+            if (symbolFilter && symbolFilter !== 'all') {
+                filteredRows = rows.filter(row => row.symbol === symbolFilter);
+            }
+            
+            if (filteredRows.length === 0) {
+                tbody.innerHTML = `
+                    <tr>
+                        <td colspan="27" class="empty-state">
+                            <div class="empty-state-icon">🔍</div>
+                            <div class="empty-state-text">No ${symbolFilter} experiences found</div>
+                        </td>
+                    </tr>
+                `;
+                return;
+            }
+            
+            tbody.innerHTML = filteredRows.map(row => {
                 const pnlClass = row.pnl > 0 ? 'profit' : row.pnl < 0 ? 'loss' : '';
                 const tookTradeIcon = row.took_trade ? '✅' : '❌';
                 return `
@@ -3111,6 +3243,91 @@
         
         // ==================== RL EXPERIENCE TAB FUNCTIONS ====================
         
+        async function loadSelectedTable() {
+            const table = document.getElementById('dbTableSelector').value;
+            const symbolFilter = document.getElementById('symbolFilter');
+            
+            // Show/hide symbol filter based on table selection
+            if (table === 'rl_experiences') {
+                symbolFilter.style.display = 'block';
+                loadRLExperiencesData();
+            } else {
+                symbolFilter.style.display = 'none';
+                symbolFilter.value = 'all'; // Reset filter
+                loadDatabaseTable(table);
+            }
+        }
+
+        async function loadDatabaseTable(tableName) {
+            try {
+                const response = await fetch(`${API_URL}/api/admin/database/${tableName}?admin_key=${ADMIN_KEY}&limit=100`);
+                if (!response.ok) {
+                    throw new Error(`Failed to load ${tableName}`);
+                }
+                
+                const data = await response.json();
+                
+                // Update row count
+                document.getElementById('rlRowCount').textContent = `${data.total_rows || 0} total rows`;
+                document.getElementById('rlLastUpdate').textContent = new Date().toLocaleTimeString();
+                
+                // Render generic table
+                renderGenericTable(data.rows, tableName);
+            } catch (error) {
+                console.error(`${tableName} load error:`, error);
+                const tbody = document.getElementById('dbRlExpTable');
+                tbody.innerHTML = `
+                    <tr>
+                        <td colspan="10" class="empty-state">
+                            <div class="empty-state-icon">❌</div>
+                            <div class="empty-state-text">Failed to load ${tableName}</div>
+                        </td>
+                    </tr>
+                `;
+            }
+        }
+
+        function renderGenericTable(rows, tableName) {
+            if (!rows || rows.length === 0) {
+                const tbody = document.getElementById('dbRlExpTable');
+                tbody.innerHTML = `
+                    <tr>
+                        <td colspan="10" class="empty-state">
+                            <div class="empty-state-icon">📭</div>
+                            <div class="empty-state-text">No data in ${tableName}</div>
+                        </td>
+                    </tr>
+                `;
+                return;
+            }
+
+            // Get all column names from first row
+            const columns = Object.keys(rows[0]);
+            
+            // Update table header
+            const thead = document.getElementById('dbTableHead');
+            thead.innerHTML = `
+                <tr>
+                    ${columns.map(col => `<th style="width: ${col.length > 15 ? '150px' : '120px'}">${col}</th>`).join('')}
+                </tr>
+            `;
+            
+            // Render rows
+            const tbody = document.getElementById('dbRlExpTable');
+            tbody.innerHTML = rows.map(row => `
+                <tr>
+                    ${columns.map(col => {
+                        let value = row[col];
+                        if (value === null || value === undefined) return '<td>-</td>';
+                        if (typeof value === 'object') value = JSON.stringify(value);
+                        if (typeof value === 'boolean') value = value ? '✓' : '✗';
+                        if (col.includes('timestamp') || col.includes('_at')) value = formatDateTime(value);
+                        return `<td style="font-size: 12px;">${value}</td>`;
+                    }).join('')}
+                </tr>
+            `).join('');
+        }
+
         async function loadRLExperiencesData() {
             try {
                 const response = await fetch(`${API_URL}/api/admin/database/rl_experiences?admin_key=${ADMIN_KEY}&limit=100`);
@@ -3153,6 +3370,14 @@
             }
         }
         
+        function filterRLBySymbol() {
+            // Re-render the table with the current data and new filter
+            const data = databaseData['rl_experiences'];
+            if (data && data.length > 0) {
+                renderRlExperiencesTable(data);
+            }
+        }
+        
         function exportRLData() {
             const data = databaseData['rl_experiences'];
             if (!data || data.length === 0) {
@@ -3175,6 +3400,102 @@
             a.download = `rl_experiences_${new Date().toISOString().split('T')[0]}.csv`;
             a.click();
             URL.revokeObjectURL(url);
+        }
+
+        async function exportAndClearAllRLData() {
+            try {
+                // First, load all RL data (not just the limited view)
+                const response = await fetch(`${API_URL}/api/admin/database/rl_experiences?admin_key=${ADMIN_KEY}&limit=999999`);
+                if (!response.ok) {
+                    throw new Error('Failed to load RL experiences for export');
+                }
+                
+                const data = await response.json();
+                const allData = data.rows || [];
+                
+                if (allData.length === 0) {
+                    alert('No RL data to export');
+                    return;
+                }
+                
+                // Confirm export and delete
+                const confirmExport = confirm(
+                    `⚠️ EXPORT & DELETE ALL RL DATA\n\n` +
+                    `This will:\n` +
+                    `1. Download ${allData.length.toLocaleString()} RL experiences as CSV\n` +
+                    `2. DELETE ALL experiences from the database\n\n` +
+                    `This action CANNOT be undone!\n\n` +
+                    `Continue with export & delete?`
+                );
+                
+                if (!confirmExport) {
+                    return;
+                }
+                
+                // Convert to CSV
+                const headers = Object.keys(allData[0]);
+                const csvContent = [
+                    headers.join(','),
+                    ...allData.map(row => headers.map(h => JSON.stringify(row[h] || '')).join(','))
+                ].join('\n');
+                
+                // Download CSV
+                const blob = new Blob([csvContent], { type: 'text/csv' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `rl_experiences_ALL_${new Date().toISOString().split('T')[0]}.csv`;
+                a.click();
+                URL.revokeObjectURL(url);
+                
+                // Wait a moment for download to start
+                await new Promise(resolve => setTimeout(resolve, 1000));
+                
+                // Second confirmation before deletion
+                const confirmDelete = confirm(
+                    `✅ CSV downloaded!\n\n` +
+                    `Now DELETE all ${allData.length.toLocaleString()} experiences from the database?\n\n` +
+                    `FINAL WARNING: This cannot be undone!`
+                );
+                
+                if (!confirmDelete) {
+                    alert('CSV exported but data NOT deleted from database.');
+                    return;
+                }
+                
+                // Delete all RL experiences
+                const deleteResponse = await fetch(`${API_URL}/api/admin/rl-experiences`, {
+                    method: 'DELETE',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-API-Key': ADMIN_API_KEY
+                    },
+                    body: JSON.stringify({
+                        admin_key: ADMIN_KEY
+                    })
+                });
+                
+                if (!deleteResponse.ok) {
+                    throw new Error('Failed to delete RL experiences');
+                }
+                
+                const deleteResult = await deleteResponse.json();
+                
+                // Show success message
+                alert(
+                    `✅ SUCCESS!\n\n` +
+                    `Exported: ${allData.length.toLocaleString()} experiences\n` +
+                    `Deleted: ${deleteResult.deleted_count.toLocaleString()} experiences\n\n` +
+                    `Database has been cleared for next week's data.`
+                );
+                
+                // Refresh the table to show empty state
+                loadSelectedTable();
+                
+            } catch (error) {
+                console.error('Export & Clear error:', error);
+                alert(`Error: ${error.message}\n\nPlease check console for details.`);
+            }
         }
         
         function filterDatabaseTable(tableName) {
