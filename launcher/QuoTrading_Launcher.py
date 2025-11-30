@@ -1555,7 +1555,6 @@ class QuoTradingLauncher:
         
         if is_prop_firm and "KTC" in selected_account_display.upper():
             # Extract account size from TopStep account name (e.g., "50KTC" = $50k)
-            import re
             match = re.search(r'(\d+)KTC', selected_account_display.upper())
             if match:
                 prop_firm_size = int(match.group(1)) * 1000  # Convert 50 to 50000
@@ -1580,7 +1579,7 @@ class QuoTradingLauncher:
                     daily_loss_limit = prop_firm_size * 0.03  # 3% for larger accounts
             else:
                 # Fallback: Use conservative 2% for unknown prop firm accounts
-                # But cap at typical prop firm daily limits
+                # Cap at $5000 to match typical max prop firm daily limits
                 daily_loss_limit = min(account_size * 0.02, 5000)
         else:
             # Live broker accounts: Use standard 2% risk rule
@@ -1593,6 +1592,7 @@ class QuoTradingLauncher:
         # MAX CONTRACTS: Scale based on daily loss limit, not account size
         # This ensures proper position sizing relative to risk tolerance
         # Formula: 1 contract per $500 of daily loss limit
+        # Rationale: With $400/trade stop loss, 1 contract = ~$500 risk capacity
         max_contracts = min(self.max_contracts_allowed, max(1, int(daily_loss_limit / 500)))
         
         # MAX TRADES PER DAY: Scale based on risk capacity
