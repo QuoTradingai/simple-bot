@@ -1520,12 +1520,10 @@ class QuoTradingLauncher:
         thread.start()
     
     def auto_adjust_parameters(self):
-        """Auto-adjust trading parameters using conservative risk management for all account types.
+        """Universal smart auto-configure for ALL account types.
         
-        Handles:
-        - Prop firm accounts (TopStep, etc.) with strict drawdown rules
-        - Live broker accounts with flexible risk management
-        - Different account sizes and risk profiles
+        Uses intelligent math that works for prop firms and live brokers alike.
+        Considers drawdown limits, account size, and safe risk management.
         """
         # Get account size from user input or selected account
         try:
@@ -1544,69 +1542,56 @@ class QuoTradingLauncher:
             )
             return
         
-        # Detect account type and apply intelligent risk rules
-        account_type = self.config.get("fetched_account_type", "live_broker")
-        selected_account_display = self.account_dropdown_var.get()
+        # UNIVERSAL SMART FORMULA - Works for ALL account types
+        # Key principle: Conservative scaling that protects capital
         
-        # Parse prop firm account details from account name (e.g., "50KTC-V2-398684-33989413")
-        is_prop_firm = account_type == "prop_firm"
-        prop_firm_size = None
+        # Daily loss limit: Use smart scaling based on account size
+        # Smaller accounts: ~1.5% of account
+        # Larger accounts: Caps at reasonable limits to avoid excessive risk
+        # Formula ensures we never exceed safe thresholds
         
-        if is_prop_firm and "KTC" in selected_account_display.upper():
-            # Extract account size from TopStep account name (e.g., "50KTC" = $50k)
-            match = re.search(r'(\d+)KTC', selected_account_display.upper())
-            if match:
-                prop_firm_size = int(match.group(1)) * 1000  # Convert 50 to 50000
-        
-        # CONSERVATIVE DAILY LOSS LIMIT CALCULATION
-        # Use much more conservative limits to protect user capital
-        if is_prop_firm:
-            # Prop firms have strict drawdown rules
-            # Use CONSERVATIVE limits (25-50% of actual max drawdown)
-            # This ensures users don't hit limits too easily
-            
-            if prop_firm_size:
-                # Conservative prop firm limits (half of actual max allowed)
-                if prop_firm_size <= 50000:
-                    daily_loss_limit = 1000  # $50k TopStep: use $1k (50% of $2k max)
-                elif prop_firm_size <= 100000:
-                    daily_loss_limit = 1500  # $100k TopStep: use $1.5k (50% of $3k max)
-                elif prop_firm_size <= 150000:
-                    daily_loss_limit = 2000  # $150k TopStep: use $2k (~44% of $4.5k max)
-                else:
-                    daily_loss_limit = prop_firm_size * 0.015  # 1.5% for larger accounts
-            else:
-                # Fallback: Use very conservative 1% for unknown prop firm accounts
-                daily_loss_limit = min(account_size * 0.01, 2500)
+        if account_size <= 10000:
+            # Small accounts: 1.5% with minimum $100
+            daily_loss_limit = max(100, account_size * 0.015)
+        elif account_size <= 25000:
+            # Growing accounts: ~1.2-1.5%
+            daily_loss_limit = account_size * 0.012
+        elif account_size <= 50000:
+            # Medium accounts: Cap at $600 (1.2% of $50k)
+            daily_loss_limit = min(600, account_size * 0.012)
+        elif account_size <= 100000:
+            # Large accounts: Cap at $900 (0.9% of $100k)
+            daily_loss_limit = min(900, account_size * 0.009)
         else:
-            # Live broker accounts: Use conservative 1% risk rule (not 2%)
-            daily_loss_limit = account_size * 0.01
+            # Very large accounts: Cap at $1200 (hard limit)
+            daily_loss_limit = min(1200, account_size * 0.008)
         
-        # MAX LOSS PER TRADE: 15% of daily limit (allows ~6-7 losing trades)
-        # More conservative than 20% to give more buffer
-        PER_TRADE_RISK_PCT = 0.15  # 15% of daily limit
+        # MAX LOSS PER TRADE: 12% of daily limit
+        # This gives ~8 losing trades before hitting daily limit
+        # Very safe buffer for users
+        PER_TRADE_RISK_PCT = 0.12  # 12% of daily
         max_loss_per_trade = daily_loss_limit * PER_TRADE_RISK_PCT
         
-        # MAX CONTRACTS: Very conservative scaling
-        # Formula: 1 contract per $800 of daily loss limit (was $500)
-        # This reduces position sizes for safety
-        DOLLARS_PER_CONTRACT = 800
+        # MAX CONTRACTS: Universal scaling
+        # 1 contract per $600 of daily loss capacity
+        # Conservative across all account sizes
+        DOLLARS_PER_CONTRACT = 600
         max_contracts = min(self.max_contracts_allowed, max(1, int(daily_loss_limit / DOLLARS_PER_CONTRACT)))
         
-        # MAX TRADES PER DAY: Conservative scaling
-        # Fewer trades = less risk of hitting daily limit
-        if daily_loss_limit < 500:
-            max_trades = 3  # Very conservative
+        # MAX TRADES PER DAY: Universal conservative scaling
+        # Based on daily loss capacity, not account type
+        if daily_loss_limit < 200:
+            max_trades = 3
+        elif daily_loss_limit < 400:
+            max_trades = 4
+        elif daily_loss_limit < 600:
+            max_trades = 5
+        elif daily_loss_limit < 800:
+            max_trades = 6
         elif daily_loss_limit < 1000:
-            max_trades = 5  # Conservative
-        elif daily_loss_limit < 1500:
-            max_trades = 7  # Moderate
-        elif daily_loss_limit < 2000:
-            max_trades = 8  # Active
-        elif daily_loss_limit < 3000:
-            max_trades = 10  # Very active
+            max_trades = 7
         else:
-            max_trades = 12  # Maximum (reduced from 20)
+            max_trades = 8
         
         # Apply the calculated settings
         self.loss_entry.delete(0, tk.END)
@@ -1618,10 +1603,10 @@ class QuoTradingLauncher:
         self.contracts_var.set(max_contracts)
         self.trades_var.set(max_trades)
         
-        # Update info label with account-specific feedback
-        account_label = "Prop firm" if is_prop_firm else "Live broker"
+        # Update info label with universal feedback
+        risk_buffer = daily_loss_limit / max_loss_per_trade if max_loss_per_trade > 0 else 0
         self.auto_adjust_info_label.config(
-            text=f"✓ {account_label}: {max_contracts} contracts • ${max_loss_per_trade:.0f}/trade • {max_trades} trades/day • ${daily_loss_limit:.0f} daily limit",
+            text=f"✓ Smart config: {max_contracts} contracts • ${max_loss_per_trade:.0f}/trade • {max_trades} trades/day • ${daily_loss_limit:.0f} daily limit • {risk_buffer:.0f}x buffer",
             fg=self.colors['success']
         )
     
