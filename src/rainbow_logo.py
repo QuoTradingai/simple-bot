@@ -8,6 +8,11 @@ import sys
 import os
 
 
+# Fade effect thresholds for subtitle
+FADE_THRESHOLD_DARK = 0.3   # Below this: very faded (dark gray)
+FADE_THRESHOLD_MEDIUM = 0.6  # Below this: medium fade (light gray)
+
+
 # ANSI color codes for rainbow effect
 class Colors:
     """ANSI color codes for terminal output"""
@@ -97,10 +102,10 @@ def get_faded_color(base_color, fade_progress):
     """
     # Map fade progress to grayscale intensity (for fade effect)
     # 0.0 = very dark gray, 1.0 = bright white/color
-    if fade_progress < 0.3:
+    if fade_progress < FADE_THRESHOLD_DARK:
         # Very faded - dark gray
         return '\033[90m'  # Dark gray
-    elif fade_progress < 0.6:
+    elif fade_progress < FADE_THRESHOLD_MEDIUM:
         # Medium fade - light gray
         return '\033[37m'  # Light gray
     else:
