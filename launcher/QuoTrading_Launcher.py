@@ -1648,8 +1648,9 @@ class QuoTradingLauncher:
     
     def update_license_timer(self):
         """Update the license expiration timer display."""
-        if not hasattr(self, 'license_timer_label'):
-            return  # Timer label not created yet
+        # Check if timer label exists and is still valid
+        if not self.license_timer_label or not self.license_timer_label.winfo_exists():
+            return  # Timer label not created or already destroyed
         
         # Get license expiration from config
         license_expiration = self.config.get("license_expiration")
@@ -1667,11 +1668,11 @@ class QuoTradingLauncher:
                 # Try ISO format first
                 try:
                     expiration_dt = datetime.fromisoformat(license_expiration.replace('Z', '+00:00'))
-                except:
+                except (ValueError, AttributeError):
                     # Try other common formats
                     try:
                         expiration_dt = datetime.strptime(license_expiration, "%Y-%m-%d %H:%M:%S")
-                    except:
+                    except ValueError:
                         expiration_dt = datetime.strptime(license_expiration, "%Y-%m-%dT%H:%M:%S")
             else:
                 # Already a datetime object
@@ -1713,11 +1714,14 @@ class QuoTradingLauncher:
             
             self.license_timer_label.config(text=timer_text, fg=color)
             
-        except Exception as e:
+        except (ValueError, AttributeError, TypeError) as e:
             self.license_timer_label.config(text="Error", fg=self.colors['error'])
         
-        # Schedule next update in 1 second
-        if hasattr(self, 'root') and self.root.winfo_exists():
+        # Schedule next update in 1 second, but only if we're still on trading screen
+        # Check if label still exists and current_screen is still 1 (trading screen)
+        if (self.license_timer_label and 
+            self.license_timer_label.winfo_exists() and 
+            self.current_screen == 1):
             self.root.after(1000, self.update_license_timer)
     
     
