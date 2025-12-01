@@ -1166,7 +1166,22 @@ def validate_license_endpoint():
         if conn:
             try:
                 with conn.cursor() as cursor:
-                    # Get current session info
+                    # FIRST: Auto-clear stale sessions (no heartbeat for SESSION_TIMEOUT_SECONDS)
+                    # This ensures users can immediately log back in after bot crashes/closes
+                    cursor.execute("""
+                        UPDATE users 
+                        SET device_fingerprint = NULL,
+                            last_heartbeat = NULL
+                        WHERE license_key = %s 
+                        AND (last_heartbeat IS NULL OR last_heartbeat < NOW() - make_interval(secs => %s))
+                    """, (license_key, SESSION_TIMEOUT_SECONDS))
+                    
+                    stale_cleared = cursor.rowcount
+                    if stale_cleared > 0:
+                        logging.info(f"🧹 Auto-cleared stale session for {license_key} on login (older than {SESSION_TIMEOUT_SECONDS}s)")
+                        conn.commit()
+                    
+                    # NOW: Get current session info (after clearing stale sessions)
                     cursor.execute("""
                         SELECT device_fingerprint, last_heartbeat, license_type
                         FROM users
@@ -1187,6 +1202,7 @@ def validate_license_endpoint():
                                 pass
                             else:
                                 # Different device - check if the stored session is still alive
+                                # This should rarely happen since we just cleared stale sessions
                                 from datetime import datetime, timedelta
                                 if last_heartbeat:
                                     time_since_last = datetime.now() - last_heartbeat
@@ -1199,24 +1215,6 @@ def validate_license_endpoint():
                                             "message": "LICENSE ALREADY IN USE - Only one instance allowed per API key",
                                             "active_device": stored_device[:20] + "..."
                                         }), 403
-                                    else:
-                                        # Session expired (no heartbeat for 2+ minutes) - clear and allow new session
-                                        logging.info(f"🧹 Auto-clearing expired session for {license_key} (last seen {time_since_last.total_seconds():.0f}s ago)")
-                                        cursor.execute("""
-                                            UPDATE users 
-                                            SET device_fingerprint = NULL, last_heartbeat = NULL
-                                            WHERE license_key = %s
-                                        """, (license_key,))
-                                        conn.commit()
-                                else:
-                                    # No heartbeat timestamp - clear stale session
-                                    logging.info(f"🧹 Clearing session with no heartbeat for {license_key}")
-                                    cursor.execute("""
-                                        UPDATE users 
-                                        SET device_fingerprint = NULL, last_heartbeat = NULL
-                                        WHERE license_key = %s
-                                    """, (license_key,))
-                                    conn.commit()
                     
                     # No conflict detected
                     if check_only:
