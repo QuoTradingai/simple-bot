@@ -8228,19 +8228,28 @@ if __name__ == "__main__":
     if RAINBOW_LOGO_AVAILABLE:
         try:
             # Clear screen for clean presentation, show logo, then clear for logs
-            # Note: os module already imported at top of file
-            clear_cmd = 'cls' if os.name == 'nt' else 'clear'
-            
-            # Clear screen first
-            os.system(clear_cmd)
+            # Use hardcoded commands for security (no user input)
+            if os.name == 'nt':
+                # Windows
+                os.system('cls')
+            else:
+                # Unix/Linux/Mac
+                os.system('clear')
             
             # Show logo without headers - full screen splash
             display_animated_logo(duration=3.0, fps=15, with_headers=False)
             
             # Clear screen after logo to make room for logs
-            os.system(clear_cmd)
-        except Exception:
-            # Logo display failed - continue without it (not critical)
-            pass
+            if os.name == 'nt':
+                os.system('cls')
+            else:
+                os.system('clear')
+        except Exception as e:
+            # Logo display failed - log and continue (not critical)
+            # Use logger if available, otherwise print
+            try:
+                logger.debug(f"Could not display startup logo: {e}")
+            except:
+                pass  # Logger not initialized yet, silently continue
     
     main()
