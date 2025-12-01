@@ -7245,9 +7245,9 @@ def main(symbol_override: str = None) -> None:
     # LIVE MODE: Reads from local symbol-specific folder for pattern matching, saves to cloud only
     # BACKTEST MODE: Reads and saves to local symbol-specific folder
     if is_backtest_mode() or CONFIG.get("backtest_mode", False):
-        logger.info(f"[{trading_symbol}] BACKTEST MODE: Local RL brain will be initialized by backtest code")
+        pass  # Silent - backtest mode initialization
     else:
-        logger.info(f"[{trading_symbol}] LIVE MODE: Initializing local RL brain...")
+        pass  # Silent - live mode initialization
         # Use symbol-specific folder for experiences
         signal_exp_file = str(get_data_file_path(f"experiences/{trading_symbol}/signal_experience.json"))
         rl_brain = SignalConfidenceRL(
@@ -7259,8 +7259,8 @@ def main(symbol_override: str = None) -> None:
             exploration_decay=0.995,
             save_local=False  # Live mode: read local but save to cloud only
         )
-        logger.info(f"[{trading_symbol}] ✅ Local RL brain initialized with {len(rl_brain.experiences)} experiences from experiences/{trading_symbol}/")
-        logger.info(f"[{trading_symbol}] 📝 Live mode: Reading local experiences, saving to cloud only")
+        pass  # Silent - RL brain initialized
+        pass  # Silent - live mode save configuration
         
         # Initialize Cloud API Client for reporting trade outcomes to cloud
         license_key = os.getenv("QUOTRADING_LICENSE_KEY")
@@ -7271,7 +7271,7 @@ def main(symbol_override: str = None) -> None:
                 license_key=license_key,
                 timeout=10
             )
-            logger.info(f"[{trading_symbol}] ✅ Cloud API client initialized for outcome reporting")
+            pass  # Silent - cloud API initialized
         else:
             logger.warning(f"[{trading_symbol}] No license key - cloud outcome reporting disabled")
     
@@ -7303,7 +7303,7 @@ def main(symbol_override: str = None) -> None:
     validate_timezone_configuration()
     
     # Initialize bid/ask manager
-    logger.info(f"[{trading_symbol}] Initializing bid/ask manager...")
+        pass  # Silent - bid/ask manager initialization
     bid_ask_manager = BidAskManager(CONFIG)
     
     # Initialize broker (replaces initialize_sdk)
@@ -7317,19 +7317,19 @@ def main(symbol_override: str = None) -> None:
     initialize_state(trading_symbol)
     
     # CRITICAL: Try to restore position state from disk if bot was restarted
-    logger.info(f"[{trading_symbol}] Checking for saved position state...")
+    pass  # Silent - checking for saved position state
     position_restored = load_position_state(trading_symbol)
     if position_restored:
         logger.warning(f"[{trading_symbol}] ΓÜá∩╕Å  BOT RESTARTED WITH ACTIVE POSITION - Managing existing trade")
     else:
-        logger.info(f"[{trading_symbol}] No active position to restore - starting fresh")
+        pass  # Silent - no saved position
     
     # Skip historical bars fetching in live mode - not needed for real-time trading
     # The bot will build bars from live tick data
-    logger.info(f"[{trading_symbol}] Skipping historical bars fetch - will build bars from live data")
+    pass  # Silent - skipping historical bars fetch
     
     # Initialize event loop
-    logger.info(f"[{trading_symbol}] Initializing event loop...")
+    pass  # Silent - event loop initialization
     event_loop = EventLoop(bot_status, CONFIG)
     
     # Register event handlers
@@ -7368,7 +7368,7 @@ def main(symbol_override: str = None) -> None:
     
     # Subscribe to bid/ask quotes if broker supports it
     if broker is not None and hasattr(broker, 'subscribe_quotes'):
-        logger.info(f"[{trading_symbol}] Subscribing to bid/ask quotes...")
+        pass  # Silent - quote subscription
         try:
             broker.subscribe_quotes(trading_symbol, on_quote)
         except Exception as e:
@@ -7378,12 +7378,9 @@ def main(symbol_override: str = None) -> None:
     # RL is CLOUD-ONLY - no local RL components
     # Users get confidence from cloud, contribute to cloud hive mind
     # Only the dev (Kevin) gets the experience data saved to cloud
-    logger.info("Cloud RL Mode: All learning goes to shared hive mind")
-    logger.info("No local RL files - everything saved to cloud for collective intelligence")
+    pass  # Silent - RL cloud mode (not customer-facing)
     
-    logger.info("Bot initialization complete")
-    logger.info("Starting event loop...")
-    logger.info("Press Ctrl+C for graceful shutdown")
+    pass  # Silent - initialization complete
     logger.info(SEPARATOR_LINE)
     
     # Run event loop (blocks until shutdown signal)
