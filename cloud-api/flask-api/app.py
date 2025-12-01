@@ -1110,6 +1110,112 @@ def hello():
         "note": "Bots make decisions locally using their own RL brain"
     }), 200
 
+@app.route('/api/validate-license', methods=['POST'])
+def validate_license_endpoint():
+    """
+    Validate license key and check for session conflicts.
+    This is called by the launcher BEFORE starting the bot.
+    """
+    try:
+        data = request.get_json()
+        license_key = data.get('license_key')
+        device_fingerprint = data.get('device_fingerprint')
+        
+        if not license_key:
+            return jsonify({
+                "license_valid": False,
+                "message": "License key required"
+            }), 400
+        
+        if not device_fingerprint:
+            return jsonify({
+                "license_valid": False,
+                "message": "Device fingerprint required"
+            }), 400
+        
+        # Rate limiting
+        allowed, rate_msg = check_rate_limit(license_key, '/api/validate-license')
+        if not allowed:
+            return jsonify({
+                "license_valid": False,
+                "message": rate_msg
+            }), 429
+        
+        # Validate license
+        is_valid, message, license_expiration = validate_license(license_key)
+        if not is_valid:
+            return jsonify({
+                "license_valid": False,
+                "message": message
+            }), 401
+        
+        # Check for session conflicts (another device using this license)
+        conn = get_db_connection()
+        if conn:
+            try:
+                with conn.cursor() as cursor:
+                    # Check for existing active session AND get license info
+                    cursor.execute("""
+                        SELECT device_fingerprint, last_heartbeat, license_type
+                        FROM users
+                        WHERE license_key = %s
+                    """, (license_key,))
+                    user = cursor.fetchone()
+                    
+                    if user:
+                        stored_device = user[0]
+                        last_heartbeat = user[1]
+                        license_type = user[2] if len(user) > 2 else 'STANDARD'
+                        
+                        # Check if another device is active (heartbeat within 30 seconds)
+                        if stored_device and stored_device != device_fingerprint:
+                            from datetime import datetime, timedelta
+                            if last_heartbeat:
+                                time_since_last = datetime.now() - last_heartbeat
+                                if time_since_last < timedelta(seconds=30):
+                                    # SESSION CONFLICT: Another device is active
+                                    logging.warning(f"⚠️ Login blocked - Session conflict for {license_key}: Device {device_fingerprint[:8]}... tried to login while {stored_device[:8]}... is active")
+                                    return jsonify({
+                                        "license_valid": False,
+                                        "session_conflict": True,
+                                        "message": "License already in use on another device",
+                                        "active_device": stored_device[:8] + "..."
+                                    }), 403
+                    
+                    # No conflict - this device can proceed
+                    # Update device fingerprint and set initial heartbeat
+                    cursor.execute("""
+                        UPDATE users 
+                        SET device_fingerprint = %s,
+                            last_heartbeat = NOW()
+                        WHERE license_key = %s
+                    """, (device_fingerprint, license_key))
+                    conn.commit()
+                    
+                    logging.info(f"✅ License validated for device {device_fingerprint[:8]}... - {license_type} expires {license_expiration}")
+                    
+                    return jsonify({
+                        "license_valid": True,
+                        "message": "License validated successfully",
+                        "session_conflict": False,
+                        "license_type": license_type,
+                        "expiry_date": license_expiration.isoformat() if license_expiration else None
+                    }), 200
+            finally:
+                return_connection(conn)
+        
+        return jsonify({
+            "license_valid": False,
+            "message": "Database error"
+        }), 500
+        
+    except Exception as e:
+        logging.error(f"License validation error: {e}")
+        return jsonify({
+            "license_valid": False,
+            "message": str(e)
+        }), 500
+
 @app.route('/api/heartbeat', methods=['POST'])
 def heartbeat():
     """Record bot heartbeat for online status tracking with session locking"""
