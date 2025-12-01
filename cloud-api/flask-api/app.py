@@ -1200,7 +1200,7 @@ def validate_license_endpoint():
                                         return jsonify({
                                             "license_valid": False,
                                             "session_conflict": True,
-                                            "message": "Instance Already Running - Another session is currently active. Please wait approximately 60 seconds after closing the other instance before trying again.",
+                                            "message": "Instance Already Running - Another session is currently active on this device. If the previous instance crashed or was force-closed, please wait approximately 60 seconds before trying again.",
                                             "active_device": stored_device[:20] + "...",
                                             "estimated_wait_seconds": max(0, SESSION_TIMEOUT_SECONDS - int(time_since_last.total_seconds()))
                                         }), 403
