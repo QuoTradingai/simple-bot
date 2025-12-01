@@ -89,19 +89,18 @@ def color_char_with_gradient(char, position, total_chars, color_offset=0):
     return f"{color}{char}{Colors.RESET}"
 
 
-def get_faded_color(base_color, fade_progress):
+def get_faded_color(fade_progress):
     """
-    Get a faded version of a color based on fade progress.
+    Get a faded grayscale color based on fade progress.
     
     Args:
-        base_color: Base ANSI color code
         fade_progress: Float from 0.0 (fully faded) to 1.0 (full intensity)
     
     Returns:
-        ANSI color code with appropriate intensity
+        ANSI color code with appropriate intensity (grayscale)
     """
     # Map fade progress to grayscale intensity (for fade effect)
-    # 0.0 = very dark gray, 1.0 = bright white/color
+    # 0.0 = very dark gray, 1.0 = bright white
     if fade_progress < FADE_THRESHOLD_DARK:
         # Very faded - dark gray
         return '\033[90m'  # Dark gray
@@ -113,6 +112,24 @@ def get_faded_color(base_color, fade_progress):
         return '\033[97m'  # Bright white
 
 
+def color_line_with_gradient(line, color_offset):
+    """
+    Color a line with rainbow gradient.
+    
+    Args:
+        line: Line of text to color
+        color_offset: Offset for rainbow animation
+    
+    Returns:
+        Colored line string
+    """
+    total_chars = len(line)
+    colored_line = ""
+    for i, char in enumerate(line):
+        colored_line += color_char_with_gradient(char, i, total_chars, color_offset)
+    return colored_line
+
+
 def display_logo_line(line, color_offset=0, center_width=80):
     """
     Display a single line of the logo with rainbow gradient, centered.
@@ -122,14 +139,10 @@ def display_logo_line(line, color_offset=0, center_width=80):
         color_offset: Offset for rainbow animation
         center_width: Width to center the text within (default: 80)
     """
-    total_chars = len(line)
-    colored_line = ""
-    
-    for i, char in enumerate(line):
-        colored_line += color_char_with_gradient(char, i, total_chars, color_offset)
+    colored_line = color_line_with_gradient(line, color_offset)
     
     # Center the line
-    padding = (center_width - total_chars) // 2
+    padding = (center_width - len(line)) // 2
     print(" " * padding + colored_line)
 
 
@@ -149,7 +162,7 @@ def display_animated_logo(duration=3.0, fps=15, with_headers=True):
     # Get terminal width for centering (default to 80 if not available)
     try:
         terminal_width = os.get_terminal_size().columns
-    except:
+    except (OSError, AttributeError):
         terminal_width = 80
     
     # Calculate vertical centering
@@ -179,13 +192,9 @@ def display_animated_logo(duration=3.0, fps=15, with_headers=True):
         for line in QUO_AI_LOGO:
             # Clear the line first
             sys.stdout.write('\033[2K')
-            # Display the colored line
-            total_chars = len(line)
-            colored_line = ""
-            for i, char in enumerate(line):
-                colored_line += color_char_with_gradient(char, i, total_chars, color_offset)
-            # Center and print
-            padding = (terminal_width - total_chars) // 2
+            # Get colored line and center it
+            colored_line = color_line_with_gradient(line, color_offset)
+            padding = (terminal_width - len(line)) // 2
             sys.stdout.write(" " * padding + colored_line + "\n")
         
         # Blank line
@@ -193,7 +202,7 @@ def display_animated_logo(duration=3.0, fps=15, with_headers=True):
         
         # Subtitle with fade-in effect (centered)
         sys.stdout.write('\033[2K')  # Clear line
-        subtitle_color = get_faded_color(Colors.CYAN, fade_progress)
+        subtitle_color = get_faded_color(fade_progress)
         subtitle_padding = (terminal_width - len(SUBTITLE)) // 2
         sys.stdout.write(" " * subtitle_padding + subtitle_color + SUBTITLE + Colors.RESET + "\n")
         
