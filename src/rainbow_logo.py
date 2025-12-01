@@ -162,7 +162,8 @@ def display_animated_logo(duration=3.0, fps=15, with_headers=True):
     # Get terminal width for centering (default to 80 if not available)
     try:
         terminal_width = os.get_terminal_size().columns
-    except (OSError, AttributeError):
+    except OSError:
+        # Terminal size cannot be determined (e.g., output redirected)
         terminal_width = 80
     
     # Calculate vertical centering
