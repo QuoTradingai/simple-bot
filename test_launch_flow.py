@@ -48,11 +48,14 @@ def test_launch_flow():
         raise ValueError("launch_bot_process function not found")
     
     # Find the end of the launch_bot_process function (next function definition)
-    # Look for the next 'def ' at the same indentation level
-    next_func_pattern = '\n    def '
-    next_func_start = content.find(next_func_pattern, launch_bot_start + len('def launch_bot_process'))
+    # Look for the next 'def ' at the same indentation level (class method)
+    # More robust: handle various indentation styles
+    import re
+    # Find the next method definition after launch_bot_process
+    next_func_match = re.search(r'\n\s+def\s+', content[launch_bot_start + len('def launch_bot_process'):])
     
-    if next_func_start != -1:
+    if next_func_match:
+        next_func_start = launch_bot_start + len('def launch_bot_process') + next_func_match.start()
         launch_bot_section = content[launch_bot_start:next_func_start]
     else:
         # If no next function found, use end of file
