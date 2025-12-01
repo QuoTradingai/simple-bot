@@ -125,9 +125,8 @@ class CloudAPIClient:
         Async version of report_trade_outcome using aiohttp.
         """
         # Skip reporting if license is invalid
-        # Skip reporting if license is invalid
         if not self.license_valid:
-            pass  # Silent - license check internal (async)
+            pass  # Silent - license check internal
             return False
         
         try:
