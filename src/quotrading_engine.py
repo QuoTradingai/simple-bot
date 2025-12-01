@@ -388,7 +388,7 @@ async def save_trade_experience_async(
     
     # LIVE MODE: Report to cloud ONLY (don't save locally)
     if cloud_api_client is None:
-        logger.debug("Cloud API client not initialized - skipping cloud reporting")
+        pass  # Silent - not customer-facing
         return
     
     try:
@@ -415,7 +415,7 @@ async def save_trade_experience_async(
         logger.info(f"☁️ Outcome reported to cloud: ${pnl:+.2f} in {duration_minutes:.1f}min")
         
     except Exception as e:
-        logger.debug(f"Non-critical: Could not report outcome to cloud: {e}")
+        pass  # Silent - cloud sync is transparent to customer
 
 
 
@@ -570,7 +570,7 @@ def initialize_broker() -> None:
             error_type="Bot Started"
         )
     except Exception as e:
-        logger.debug(f"Failed to send startup alert: {e}")
+        pass  # Silent - notification failure not critical
 
 
 def check_azure_time_service() -> str:
@@ -629,13 +629,13 @@ def check_azure_time_service() -> str:
             return state
         else:
             # Azure unreachable - clear cached state to trigger fallback
-            logger.debug(f"Time service returned {response.status_code}, using local time")
+            pass  # Silent fallback to local time
             bot_status["azure_trading_state"] = None
             return None  # Signal to use local get_trading_state()
             
     except Exception as e:
         # Non-critical - if cloud unreachable, fall back to local time
-        logger.debug(f"Time service check skipped (cloud unreachable): {e}")
+        pass  # Silent - cloud service optional
         bot_status["azure_trading_state"] = None
         return None  # Signal to use local get_trading_state()
 
@@ -657,13 +657,13 @@ def check_broker_connection() -> None:
     try:
         check_azure_time_service()
     except Exception as e:
-        logger.debug(f"Time service check failed (non-critical): {e}")
+        pass  # Silent - time service optional
     
     # Send heartbeat to show bot is online
     try:
         send_heartbeat()
     except Exception as e:
-        logger.debug(f"Heartbeat failed (non-critical): {e}")
+        pass  # Silent - heartbeat failure not customer-facing
     
     # AUTO-IDLE: Disconnect broker during maintenance (no data needed)
     current_time = get_current_time()
@@ -785,7 +785,7 @@ def check_broker_connection() -> None:
                 error_type="Connection Error"
             )
         except Exception as e:
-            logger.debug(f"Failed to send connection error alert: {e}")
+        pass  # Silent - notification error not customer-facing
         
         try:
             # Immediate reconnect with 3 retries
@@ -924,7 +924,7 @@ def place_market_order(symbol: str, side: str, quantity: int) -> Optional[Dict[s
                     error_type="Order Error"
                 )
             except Exception as e:
-                logger.debug(f"Failed to send order error alert: {e}")
+                pass  # Silent - alert failure not critical
             
             action = recovery_manager.handle_error(
                 RecoveryErrorType.ORDER_REJECTION,
@@ -942,7 +942,7 @@ def place_market_order(symbol: str, side: str, quantity: int) -> Optional[Dict[s
                 error_type="Order Error"
             )
         except Exception as alert_error:
-            logger.debug(f"Failed to send order error alert: {alert_error}")
+            pass  # Silent - alert failure not critical
         
         action = recovery_manager.handle_error(
             RecoveryErrorType.SDK_CRASH,
@@ -1483,9 +1483,9 @@ def save_position_state(symbol: str) -> None:
         
         # Safe logging with None checks
         if position.get('entry_price') is not None:
-            logger.debug(f"Position state saved: {position['side']} {position['quantity']} @ ${position['entry_price']:.2f}")
+            pass  # Silent - position state saved internally
         else:
-            logger.debug(f"Position state saved: {position['side']} (inactive)")
+            pass  # Silent - position state saved
         
     except Exception as e:
         logger.error(f"CRITICAL: Failed to save position state: {e}", exc_info=True)
@@ -1621,29 +1621,12 @@ def update_1min_bar(symbol: str, price: float, volume: int, dt: datetime) -> Non
         if current_bar is not None:
             state[symbol]["bars_1min"].append(current_bar)
             bar_count = len(state[symbol]["bars_1min"])
-            logger.info(f"[BAR COMPLETED] 1min bar closed | Price: ${current_bar['close']:.2f} | Vol: {current_bar['volume']} | Total bars: {bar_count}")
+            pass  # Silent - bar completion is internal process
             
             # Calculate VWAP after new bar is added
             calculate_vwap(symbol)
             
-            # Log detailed status every 5 minutes
-            if bar_count % 5 == 0:
-                vwap_data = state[symbol].get("vwap", {})
-                position_dict = state[symbol]["position"]
-                position_qty = position_dict.get("quantity", 0) if isinstance(position_dict, dict) else 0
-                market_cond = state[symbol].get("market_condition", "UNKNOWN")
-                
-                logger.info("=" * 80)
-                logger.info(f"[STATUS] 5-MIN UPDATE | Bars: {bar_count} | Position: {position_qty} contracts")
-                if vwap_data and isinstance(vwap_data, dict):
-                    vwap_val = vwap_data.get('vwap', 0)
-                    std_dev = vwap_data.get('std_dev', 0)
-                    logger.info(f"[PRICE] ${vwap_val:.2f} | StdDev: ${std_dev:.2f}")
-                    bands = vwap_data.get('bands', {})
-                    if bands and isinstance(bands, dict):
-                        logger.info(f"[BANDS] U2: ${bands.get('upper_2', 0):.2f} | L2: ${bands.get('lower_2', 0):.2f}")
-                logger.info(f"[MARKET] {market_cond}")
-                logger.info("=" * 80)
+            # 5-minute status removed - customers don't need periodic status spam
             
             # Update current regime after bar completion
             update_current_regime(symbol)
@@ -1768,7 +1751,7 @@ def update_trend_filter(symbol: str) -> None:
     period = CONFIG.get("trend_ema_period", 20)
     
     if len(bars) < period:
-        logger.debug(f"Not enough bars for trend filter: {len(bars)}/{period}")
+        pass  # Silent - technical detail not for customers
         return
     
     # Calculate EMA
@@ -1789,7 +1772,7 @@ def update_trend_filter(symbol: str) -> None:
         else:
             state[symbol]["trend_direction"] = "neutral"
         
-        logger.debug(f"Trend EMA: {ema:.2f}, Direction: {state[symbol]['trend_direction']}")
+        pass  # Silent - trend calculation internal
 
 
 def calculate_ema(values: List[float], period: int) -> Optional[float]:
@@ -2019,7 +2002,7 @@ def update_rsi(symbol: str) -> None:
     rsi_period = CONFIG.get("rsi_period", 10)  # Iteration 3 - fast RSI
     
     if len(bars) < rsi_period + 1:
-        logger.debug(f"Not enough bars for RSI: {len(bars)}/{rsi_period + 1}")
+        pass  # Silent - RSI calculation internal
         return
     
     # Use recent bars for calculation
@@ -2028,7 +2011,7 @@ def update_rsi(symbol: str) -> None:
     
     if rsi is not None:
         state[symbol]["rsi"] = rsi
-        logger.debug(f"RSI: {rsi:.2f}")
+        pass  # Silent - RSI value internal
 
 
 def update_macd(symbol: str) -> None:
@@ -2047,7 +2030,7 @@ def update_macd(symbol: str) -> None:
     signal_period = CONFIG.get("macd_signal", 9)
     
     if len(bars) < slow_period + signal_period:
-        logger.debug(f"Not enough bars for MACD: {len(bars)}/{slow_period + signal_period}")
+        pass  # Silent - MACD calculation internal
         return
     
     # Use recent bars for calculation
@@ -2056,7 +2039,7 @@ def update_macd(symbol: str) -> None:
     
     if macd_data is not None:
         state[symbol]["macd"] = macd_data
-        logger.debug(f"MACD: {macd_data['macd']:.2f}, Signal: {macd_data['signal']:.2f}, "
+        pass  # Silent - MACD value internal
                     f"Histogram: {macd_data['histogram']:.2f}")
 
 
@@ -2072,7 +2055,7 @@ def update_volume_average(symbol: str) -> None:
     lookback = CONFIG.get("volume_lookback", 20)
     
     if len(bars) < lookback:
-        logger.debug(f"Not enough bars for volume average: {len(bars)}/{lookback}")
+        pass  # Silent - volume calculation internal
         return
     
     # Calculate average volume over lookback period
@@ -2088,7 +2071,7 @@ def update_volume_average(symbol: str) -> None:
         current_volume = bars_1min[-1]["volume"]
         state[symbol]["recent_volume_history"].append(current_volume)
     
-    logger.debug(f"Average volume (last {lookback} bars): {avg_volume:.0f}")
+    pass  # Silent - volume average internal
 
 
 def detect_volume_surge(symbol: str) -> Tuple[bool, float]:
@@ -7469,16 +7452,7 @@ def handle_tick_event(event) -> None:
     state[symbol]["total_ticks_received"] += 1
     total_ticks = state[symbol]["total_ticks_received"]
     
-    # Log tick data periodically (every 1000 ticks to avoid spam)
-    if total_ticks % 1000 == 0:
-        # Get current bid/ask from bid_ask_manager if available
-        bid_ask_info = ""
-        if bid_ask_manager is not None:
-            quote = bid_ask_manager.get_current_quote(symbol)
-            if quote:
-                spread = quote.ask_price - quote.bid_price
-                bid_ask_info = f" | Bid: ${quote.bid_price:.2f} x {quote.bid_size} | Ask: ${quote.ask_price:.2f} x {quote.ask_size} | Spread: ${spread:.2f}"
-        logger.info(f"[TICK] {symbol} @ ${price:.2f} | Vol: {volume} | Total ticks: {total_ticks}{bid_ask_info}")
+    # Tick logging removed - customers don't need tick-by-tick updates
     
     # Create tick object
     tick = {

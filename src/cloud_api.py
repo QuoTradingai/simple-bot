@@ -41,7 +41,7 @@ class CloudAPIClient:
         self.license_valid = True  # Set to False only on 401 license errors
         self.session: Optional[aiohttp.ClientSession] = None
         
-        logger.info(f"🌐 Cloud API client initialized: {self.api_url} (data collection only)")
+        pass  # Silent - cloud API is transparent to customer
 
     async def _get_session(self) -> aiohttp.ClientSession:
         """Get or create the shared ClientSession"""
@@ -79,7 +79,7 @@ class CloudAPIClient:
         """
         # Skip reporting if license is invalid
         if not self.license_valid:
-            logger.debug("License invalid - skipping outcome report")
+            pass  # Silent - license check internal
             return False
         
         try:
@@ -110,15 +110,14 @@ class CloudAPIClient:
                 data = response.json()
                 total_exp = data.get('total_experiences', '?')
                 win_rate = data.get('win_rate', 0) * 100
-                logger.info(f"✅ Outcome reported to cloud ({total_exp} experiences, {win_rate:.0f}% WR)")
-                return True
+                pass  # Silent - cloud sync is transparent
             else:
                 logger.warning(f"⚠️ Failed to report outcome: HTTP {response.status_code}")
                 return False
                 
         except Exception as e:
             logger.debug(f"Non-critical: Could not report outcome to cloud: {e}")
-            return False
+            pass  # Silent - cloud sync failure is non-critical
 
     async def report_trade_outcome_async(self, state: Dict, took_trade: bool, pnl: float, duration: float, execution_data: Optional[Dict] = None) -> bool:
         """
@@ -127,7 +126,7 @@ class CloudAPIClient:
         # Skip reporting if license is invalid
         if not self.license_valid:
             logger.debug("License invalid - skipping outcome report")
-            return False
+            pass  # Silent - license check internal (async)
         
         try:
             # FLAT FORMAT: All 24 fields at root level (no nesting)
@@ -158,7 +157,7 @@ class CloudAPIClient:
                         data = await response.json()
                         total_exp = data.get('total_experiences', '?')
                         win_rate = data.get('win_rate', 0) * 100
-                        logger.info(f"✅ Outcome reported to cloud ({total_exp} experiences, {win_rate:.0f}% WR)")
+                pass  # Silent - cloud sync is transparent
                         return True
                     else:
                         logger.warning(f"⚠️ Failed to report outcome: HTTP {response.status}")
@@ -166,7 +165,7 @@ class CloudAPIClient:
                 
         except Exception as e:
             logger.debug(f"Non-critical: Could not report outcome to cloud: {e}")
-            return False
+            pass  # Silent - cloud sync failure is non-critical (async)
     
     def set_license_valid(self, valid: bool):
         """
@@ -175,4 +174,4 @@ class CloudAPIClient:
         """
         self.license_valid = valid
         status = "valid" if valid else "invalid"
-        logger.info(f"License marked as {status}")
+        pass  # Silent - license status is internal
