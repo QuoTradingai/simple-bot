@@ -47,15 +47,21 @@ CLOUD_SIGNAL_POLL_INTERVAL = 5  # Seconds between signal polls
 def get_device_fingerprint() -> str:
     """
     Generate a unique device fingerprint for session locking.
-    Prevents license key sharing across multiple computers.
+    Prevents license key sharing across multiple computers AND multiple instances on same machine.
     
     Components:
     - Machine ID (from platform UUID)
     - Username
     - Platform name
+    - Process ID (ensures uniqueness per instance)
     
     Returns:
         Unique device fingerprint (hashed for privacy)
+    
+    Security Note: Including PID makes each launcher/bot instance unique, preventing:
+    - Multiple launchers on same computer with same license key
+    - Users deleting local lock files to bypass protection
+    - Users modifying device fingerprint to create fake instances
     """
     # Get platform-specific machine ID
     try:
@@ -72,10 +78,13 @@ def get_device_fingerprint() -> str:
     # Get platform info
     platform_name = platform.system()  # Windows, Darwin (Mac), Linux
     
-    # Combine all components
-    fingerprint_raw = f"{machine_id}:{username}:{platform_name}"
+    # Get process ID (makes each instance unique)
+    pid = os.getpid()
     
-    # Hash for privacy (don't send raw MAC address to server)
+    # Combine all components INCLUDING PID for per-instance uniqueness
+    fingerprint_raw = f"{machine_id}:{username}:{platform_name}:{pid}"
+    
+    # Hash for privacy (don't send raw MAC address/PID to server)
     fingerprint_hash = hashlib.sha256(fingerprint_raw.encode()).hexdigest()[:16]
     
     return fingerprint_hash
