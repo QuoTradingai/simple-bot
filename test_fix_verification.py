@@ -220,8 +220,8 @@ def main():
     if all_passed:
         print("🎉 ALL FIXES VERIFIED - Issues are resolved!")
         print("="*70)
-        print("\n✅ Issue 1 FIXED: Undefined variable 'symbol' -> now uses 'trading_symbol'")
-        print("✅ Issue 2 FIXED: Session conflicts caught at login screen, not runtime")
+        print("\n✅ Issue 1 FIXED: Session conflicts caught at login screen, not runtime")
+        print("✅ Issue 2 FIXED: Undefined variable 'symbol' -> now uses 'trading_symbol'")
         print("\nThe bot now:")
         print("  - Validates license BEFORE any initialization")
         print("  - Catches session conflicts immediately at startup")
