@@ -1166,7 +1166,7 @@ def validate_license_endpoint():
                         SET device_fingerprint = NULL,
                             last_heartbeat = NULL
                         WHERE license_key = %s 
-                        AND last_heartbeat < NOW() - INTERVAL '%s seconds'
+                        AND last_heartbeat < NOW() - make_interval(secs => %s)
                     """, (license_key, SESSION_TIMEOUT_SECONDS))
                     
                     stale_cleared = cursor.rowcount
@@ -1416,7 +1416,7 @@ def clear_stale_sessions():
                         SET device_fingerprint = NULL,
                             last_heartbeat = NULL
                         WHERE license_key = %s 
-                        AND (last_heartbeat IS NULL OR last_heartbeat < NOW() - INTERVAL '%s seconds')
+                        AND (last_heartbeat IS NULL OR last_heartbeat < NOW() - make_interval(secs => %s))
                     """, (license_key, SESSION_TIMEOUT_SECONDS))
                     
                     rows_affected = cursor.rowcount
@@ -1470,7 +1470,7 @@ def main():
                             SET device_fingerprint = NULL,
                                 last_heartbeat = NULL
                             WHERE license_key = %s 
-                            AND last_heartbeat < NOW() - INTERVAL '%s seconds'
+                            AND last_heartbeat < NOW() - make_interval(secs => %s)
                         """, (license_key, SESSION_TIMEOUT_SECONDS))
                         
                         stale_cleared = cursor.rowcount

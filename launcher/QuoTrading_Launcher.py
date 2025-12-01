@@ -27,6 +27,9 @@ import time
 import requests  # For cloud API calls
 import platform  # For cross-platform mouse wheel support
 import psutil  # For process checking (stale lock detection)
+import hashlib  # For device fingerprint generation
+import getpass  # For username in device fingerprint
+import uuid  # For machine ID in device fingerprint
 
 # ========================================
 # CONFIGURATION
@@ -54,10 +57,6 @@ def get_device_fingerprint() -> str:
     Returns:
         Unique device fingerprint (hashed for privacy)
     """
-    import hashlib
-    import getpass
-    import uuid
-    
     # Get platform-specific machine ID
     try:
         machine_id = str(uuid.getnode())  # MAC address as unique ID
@@ -489,7 +488,7 @@ class QuoTradingLauncher:
                             "Only one device can use a license at a time.\n\n"
                             "Please stop the bot on the other device first.\n\n"
                             "If you recently stopped the bot on another device,\n"
-                            "wait 2 minutes and try again."
+                            "wait 90 seconds and try again."
                         )
                     else:
                         error_msg = error_data.get("message", "License validation failed - Access Forbidden")
