@@ -4,7 +4,7 @@ Test: Verify Concurrent Login Prevention
 This test specifically addresses the concern that auto-clearing sessions
 on login could allow multiple users to login with the same API key.
 
-Key requirement: "aslong as no more than 1 insrances of the same api key 
+Key requirement: "as long as no more than 1 instances of the same api key 
 logs in and gets past 1st screen all that matters"
 """
 
