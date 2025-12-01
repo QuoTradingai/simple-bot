@@ -51,8 +51,9 @@ ADMIN_API_KEY = os.environ.get("ADMIN_API_KEY", "ADMIN-DEV-KEY-2026")  # For cre
 
 # Session locking configuration
 # A session is considered "active" if heartbeat received within this threshold
-# Heartbeats are sent every 30 seconds, so 90 seconds = 3 missed heartbeats
-SESSION_TIMEOUT_SECONDS = 90
+# Heartbeats are sent every 30 seconds by the bot
+# Session expires after 2 minutes (120 seconds) of no heartbeat - allows detection of crashes while preventing false timeouts
+SESSION_TIMEOUT_SECONDS = 120  # 2 minutes - session expires if no heartbeat for 2 minutes
 WHOP_API_BASE_URL = "https://api.whop.com/api/v5"
 
 # Email configuration (for SendGrid or SMTP)
@@ -1120,11 +1121,17 @@ def validate_license_endpoint():
     """
     Validate license key and check for session conflicts.
     This is called by the launcher BEFORE starting the bot.
+    
+    Parameters:
+    - license_key: The license key to validate
+    - device_fingerprint: Device fingerprint (may differ between launcher and bot due to PID)
+    - check_only: If True, only validate and check conflicts WITHOUT creating session (default: False)
     """
     try:
         data = request.get_json()
         license_key = data.get('license_key')
         device_fingerprint = data.get('device_fingerprint')
+        check_only = data.get('check_only', False)  # New parameter
         
         if not license_key:
             return jsonify({
@@ -1159,21 +1166,7 @@ def validate_license_endpoint():
         if conn:
             try:
                 with conn.cursor() as cursor:
-                    # First, automatically clear stale sessions (older than SESSION_TIMEOUT_SECONDS)
-                    # This prevents false positives when a device crashed or lost connection
-                    cursor.execute("""
-                        UPDATE users 
-                        SET device_fingerprint = NULL,
-                            last_heartbeat = NULL
-                        WHERE license_key = %s 
-                        AND last_heartbeat < NOW() - make_interval(secs => %s)
-                    """, (license_key, SESSION_TIMEOUT_SECONDS))
-                    
-                    stale_cleared = cursor.rowcount
-                    if stale_cleared > 0:
-                        logging.info(f"🧹 Auto-cleared {stale_cleared} stale session(s) for {license_key} (older than {SESSION_TIMEOUT_SECONDS}s)")
-                    
-                    # Now check for existing active session AND get license info
+                    # Get current session info
                     cursor.execute("""
                         SELECT device_fingerprint, last_heartbeat, license_type
                         FROM users
@@ -1186,23 +1179,58 @@ def validate_license_endpoint():
                         last_heartbeat = user[1]
                         license_type = user[2] if len(user) > 2 else 'STANDARD'
                         
-                        # Check if another device is active (heartbeat within SESSION_TIMEOUT_SECONDS)
-                        if stored_device and stored_device != device_fingerprint:
-                            from datetime import datetime, timedelta
-                            if last_heartbeat:
-                                time_since_last = datetime.now() - last_heartbeat
-                                if time_since_last < timedelta(seconds=SESSION_TIMEOUT_SECONDS):
-                                    # SESSION CONFLICT: Another device is active
-                                    logging.warning(f"⚠️ Login blocked - Session conflict for {license_key}: Device {device_fingerprint[:8]}... tried to login while {stored_device[:8]}... is active (last seen {int(time_since_last.total_seconds())}s ago)")
-                                    return jsonify({
-                                        "license_valid": False,
-                                        "session_conflict": True,
-                                        "message": "License already in use on another device",
-                                        "active_device": stored_device[:8] + "..."
-                                    }), 403
+                        # If there's a stored session, check if it's active
+                        if stored_device:
+                            # If it's the SAME device, allow reconnection
+                            if stored_device == device_fingerprint:
+                                # Same device - allow (reconnection after crash/restart)
+                                pass
+                            else:
+                                # Different device - check if the stored session is still alive
+                                from datetime import datetime, timedelta
+                                if last_heartbeat:
+                                    time_since_last = datetime.now() - last_heartbeat
+                                    if time_since_last < timedelta(seconds=SESSION_TIMEOUT_SECONDS):
+                                        # Active session exists - BLOCK
+                                        logging.warning(f"⚠️ BLOCKED - License {license_key} already in use by {stored_device[:20]}... (tried: {device_fingerprint[:20]}...)")
+                                        return jsonify({
+                                            "license_valid": False,
+                                            "session_conflict": True,
+                                            "message": "LICENSE ALREADY IN USE - Only one instance allowed per API key",
+                                            "active_device": stored_device[:20] + "..."
+                                        }), 403
+                                    else:
+                                        # Session expired (no heartbeat for 2+ minutes) - clear and allow new session
+                                        logging.info(f"🧹 Auto-clearing expired session for {license_key} (last seen {time_since_last.total_seconds():.0f}s ago)")
+                                        cursor.execute("""
+                                            UPDATE users 
+                                            SET device_fingerprint = NULL, last_heartbeat = NULL
+                                            WHERE license_key = %s
+                                        """, (license_key,))
+                                        conn.commit()
+                                else:
+                                    # No heartbeat timestamp - clear stale session
+                                    logging.info(f"🧹 Clearing session with no heartbeat for {license_key}")
+                                    cursor.execute("""
+                                        UPDATE users 
+                                        SET device_fingerprint = NULL, last_heartbeat = NULL
+                                        WHERE license_key = %s
+                                    """, (license_key,))
+                                    conn.commit()
                     
-                    # No conflict - this device can proceed
-                    # Update device fingerprint and set initial heartbeat
+                    # No conflict detected
+                    if check_only:
+                        # Launcher check - DON'T create session, just validate and report no conflict
+                        logging.info(f"✅ License check-only validation passed for {license_key} - {license_type} expires {license_expiration}")
+                        return jsonify({
+                            "license_valid": True,
+                            "message": "License validated successfully (check only)",
+                            "session_conflict": False,
+                            "license_type": license_type,
+                            "expiry_date": license_expiration.isoformat() if license_expiration else None
+                        }), 200
+                    
+                    # Not check-only - create session by updating device fingerprint and heartbeat
                     cursor.execute("""
                         UPDATE users 
                         SET device_fingerprint = %s,
@@ -1211,7 +1239,7 @@ def validate_license_endpoint():
                     """, (device_fingerprint, license_key))
                     conn.commit()
                     
-                    logging.info(f"✅ License validated for device {device_fingerprint[:8]}... - {license_type} expires {license_expiration}")
+                    logging.info(f"✅ License validated and session created for device {device_fingerprint[:8]}... - {license_type} expires {license_expiration}")
                     
                     return jsonify({
                         "license_valid": True,
@@ -1301,13 +1329,12 @@ def heartbeat():
                         WHERE license_key = %s
                     """, (device_fingerprint, json.dumps(data.get('metadata', {})), license_key))
                     
-                    # Also insert into heartbeats table for history
+                    # Also insert into heartbeats table for history (without device_fingerprint - column doesn't exist)
                     cursor.execute("""
-                        INSERT INTO heartbeats (license_key, device_fingerprint, bot_version, status, metadata)
-                        VALUES (%s, %s, %s, %s, %s)
+                        INSERT INTO heartbeats (license_key, bot_version, status, metadata)
+                        VALUES (%s, %s, %s, %s)
                     """, (
                         license_key,
-                        device_fingerprint,
                         data.get('bot_version', 'unknown'),
                         data.get('status', 'online'),
                         json.dumps(data.get('metadata', {}))
@@ -1318,6 +1345,7 @@ def heartbeat():
                 return jsonify({
                     "status": "success",
                     "message": "Heartbeat recorded",
+                    "license_valid": True,
                     "session_conflict": False
                 }), 200
             finally:
@@ -1403,29 +1431,35 @@ def clear_stale_sessions():
         if not is_valid:
             return jsonify({"status": "error", "message": message}), 403
         
-        # Clear stale sessions (older than SESSION_TIMEOUT_SECONDS)
+        # Clear ONLY stale sessions (older than SESSION_TIMEOUT_SECONDS)
+        # This prevents clearing active sessions and maintains session locking security
         conn = get_db_connection()
         if conn:
             try:
                 with conn.cursor() as cursor:
                     from datetime import datetime, timedelta
                     
-                    # Clear sessions with last heartbeat older than SESSION_TIMEOUT_SECONDS
+                    # Only clear sessions that are truly stale (no heartbeat for 90+ seconds)
+                    # This preserves session locking - active sessions are NOT cleared
                     cursor.execute("""
                         UPDATE users 
                         SET device_fingerprint = NULL,
                             last_heartbeat = NULL
-                        WHERE license_key = %s 
+                        WHERE license_key = %s
                         AND (last_heartbeat IS NULL OR last_heartbeat < NOW() - make_interval(secs => %s))
                     """, (license_key, SESSION_TIMEOUT_SECONDS))
                     
                     rows_affected = cursor.rowcount
                     conn.commit()
                     
-                    logging.info(f"✅ Cleared {rows_affected} stale session(s) for {license_key} (older than {SESSION_TIMEOUT_SECONDS}s)")
+                    if rows_affected > 0:
+                        logging.info(f"✅ Cleared {rows_affected} stale session(s) for {license_key} (older than {SESSION_TIMEOUT_SECONDS}s)")
+                    else:
+                        logging.info(f"ℹ️ No stale sessions to clear for {license_key} (active session exists or already clear)")
+                    
                     return jsonify({
                         "status": "success",
-                        "message": f"Cleared {rows_affected} stale session(s)",
+                        "message": "Stale sessions cleared" if rows_affected > 0 else "No stale sessions found",
                         "sessions_cleared": rows_affected
                     }), 200
             finally:
@@ -1435,6 +1469,54 @@ def clear_stale_sessions():
         
     except Exception as e:
         logging.error(f"Clear stale sessions error: {e}")
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
+@app.route('/api/admin/force-clear-session', methods=['POST'])
+def force_clear_session():
+    """ADMIN ONLY: Force clear any session immediately (bypasses timeout check)"""
+    try:
+        data = request.get_json()
+        license_key = data.get('license_key')
+        admin_key = data.get('admin_key')
+        
+        # Require admin key
+        if admin_key != ADMIN_API_KEY:
+            return jsonify({"status": "error", "message": "Unauthorized - admin key required"}), 403
+        
+        if not license_key:
+            return jsonify({"status": "error", "message": "License key required"}), 400
+        
+        # Force clear session regardless of last_heartbeat
+        conn = get_db_connection()
+        if conn:
+            try:
+                with conn.cursor() as cursor:
+                    cursor.execute("""
+                        UPDATE users 
+                        SET device_fingerprint = NULL,
+                            last_heartbeat = NULL
+                        WHERE license_key = %s
+                    """, (license_key,))
+                    
+                    rows_affected = cursor.rowcount
+                    conn.commit()
+                    
+                    if rows_affected > 0:
+                        logging.info(f"🔧 ADMIN: Force cleared session for {license_key}")
+                    
+                    return jsonify({
+                        "status": "success",
+                        "message": "Session force-cleared" if rows_affected > 0 else "No session found",
+                        "sessions_cleared": rows_affected
+                    }), 200
+            finally:
+                return_connection(conn)
+        
+        return jsonify({"status": "error", "message": "Database error"}), 500
+        
+    except Exception as e:
+        logging.error(f"Force clear session error: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
 
 

@@ -122,8 +122,12 @@ def setup_logging(config: Dict[str, Any]) -> logging.Logger:
     
     logger.addHandler(console_handler)
     
-    # No file logging for customers - console output only
-    # All trade data is saved to cloud API for admin dashboard
+    # ============================================
+    # PRODUCTION MODE: Console output only
+    # ============================================
+    # No file logging for customers - they see everything in PowerShell window
+    # All critical data (trades, state) saved to data/ folder and cloud API
+    # This keeps customer installations clean and simple
     
     return logger
 
@@ -378,25 +382,15 @@ class MetricsCollector:
 
 
 class AuditLogger:
-    """Specialized logger for audit trail"""
+    """Audit trail logger - console output only for customers"""
     
     def __init__(self, log_dir: str = './logs'):
         self.logger = logging.getLogger('vwap_bot.audit')
         self.logger.setLevel(logging.INFO)
         
-        # Create audit log handler
-        os.makedirs(log_dir, exist_ok=True)
-        audit_file = os.path.join(log_dir, 'audit.log')
-        
-        handler = logging.handlers.TimedRotatingFileHandler(
-            audit_file,
-            when='midnight',
-            interval=1,
-            backupCount=365,  # Keep 1 year
-            encoding='utf-8'
-        )
-        handler.setFormatter(StructuredFormatter())
-        self.logger.addHandler(handler)
+        # Production mode: No file logging
+        # Audit trail goes to console (PowerShell window)
+        # Critical events are saved to data/ folder and cloud API
         
     def log_trade(self, trade_data: Dict[str, Any]) -> None:
         """Log trade execution with full context"""

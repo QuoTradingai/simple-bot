@@ -58,6 +58,8 @@ import time as time_module  # Import time module with alias
 import statistics  # For calculating statistics like mean, median, etc.
 import asyncio
 import hashlib
+import signal
+import atexit
 
 # Load environment variables at module import time
 from dotenv import load_dotenv
@@ -108,21 +110,18 @@ def get_application_path() -> 'Path':
 def get_device_fingerprint() -> str:
     """
     Generate a unique device fingerprint for session locking.
-    Prevents license key sharing across multiple computers AND multiple instances on same machine.
+    One session per machine/user - shared between launcher and bot.
     
     Components:
-    - Machine ID (from platform UUID)
-    - Username
-    - Platform name
-    - Process ID (ensures uniqueness per instance)
+    - Machine ID (MAC address via uuid.getnode)
+    - Username (from getpass)
+    - Platform name (Windows/Linux/Darwin)
     
     Returns:
         Unique device fingerprint (hashed for privacy)
     
-    Security Note: Including PID makes each launcher/bot instance unique, preventing:
-    - Multiple launchers on same computer with same license key
-    - Users deleting local lock files to bypass protection
-    - Users modifying device fingerprint to create fake instances
+    Security Note: Launcher creates session, bot reconnects to same session.
+    This prevents multiple instances while allowing launcher → bot handoff.
     """
     import hashlib
     import platform
@@ -144,14 +143,18 @@ def get_device_fingerprint() -> str:
     # Get platform info
     platform_name = platform.system()  # Windows, Darwin (Mac), Linux
     
-    # Get process ID (makes each instance unique)
-    pid = os.getpid()
+    # Combine all components WITHOUT PID - one session per machine/user, not per process
+    # This allows launcher and bot to share the same session
+    fingerprint_raw = f"{machine_id}:{username}:{platform_name}"
     
-    # Combine all components INCLUDING PID for per-instance uniqueness
-    fingerprint_raw = f"{machine_id}:{username}:{platform_name}:{pid}"
+    # Debug logging
+    logging.info(f"BOT Fingerprint components: MAC={machine_id}, user={username}, platform={platform_name}")
+    logging.info(f"BOT Raw fingerprint: {fingerprint_raw}")
     
-    # Hash for privacy (don't send raw MAC address/PID to server)
+    # Hash for privacy (don't send raw MAC address to server)
     fingerprint_hash = hashlib.sha256(fingerprint_raw.encode()).hexdigest()[:16]
+    
+    logging.info(f"BOT Final fingerprint: {fingerprint_hash}")
     
     return fingerprint_hash
 
@@ -468,13 +471,20 @@ def validate_license_at_startup() -> None:
         import requests
         api_url = os.getenv("QUOTRADING_API_URL", "https://quotrading-flask-api.azurewebsites.net")
         
-        # Validate with server (server handles both regular and admin keys)
+        # Get device fingerprint for debugging
+        device_fp = get_device_fingerprint()
+        import os as os_mod
+        pid = os_mod.getpid()
+        logger.info(f"📱 Device fingerprint: {device_fp} (PID: {pid})")
+        
+        # Validate with server using /api/validate-license (session locking)
         # Include device fingerprint for session locking
         response = requests.post(
-            f"{api_url}/api/main",
+            f"{api_url}/api/validate-license",
             json={
                 "license_key": license_key,
-                "device_fingerprint": get_device_fingerprint()  # Session locking
+                "device_fingerprint": device_fp,  # Session locking
+                "check_only": False  # Create/claim session
             },
             timeout=10
         )
@@ -497,38 +507,51 @@ def validate_license_at_startup() -> None:
             # Check if it's a session conflict
             data = response.json()
             if data.get("session_conflict"):
-                logger.warning("⚠️ Session conflict detected - attempting to clear stale session...")
+                logger.warning("⚠️ Session conflict detected - attempting to release session...")
                 
-                # Try to clear stale sessions
+                # Try to release the session (clears immediately, not just stale)
                 try:
                     clear_response = requests.post(
-                        f"{api_url}/api/session/clear",
-                        json={"license_key": license_key},
+                        f"{api_url}/api/session/release",
+                        json={
+                            "license_key": license_key,
+                            "device_fingerprint": device_fp
+                        },
                         timeout=10
                     )
                     
                     if clear_response.status_code == 200:
-                        logger.info("✅ Stale session cleared, retrying validation...")
+                        logger.info("✅ Session released, retrying validation...")
+                        
+                        # Brief delay to ensure database update completes
+                        time_module.sleep(0.5)
                         
                         # Retry validation
                         retry_response = requests.post(
                             f"{api_url}/api/validate-license",
                             json={
                                 "license_key": license_key,
-                                "device_fingerprint": get_device_fingerprint()
+                                "device_fingerprint": get_device_fingerprint(),
+                                "check_only": False  # Create/claim session
                             },
                             timeout=10
                         )
                         
                         if retry_response.status_code == 200:
                             retry_data = retry_response.json()
+                            logger.info(f"🔍 Retry response status: {retry_response.status_code}")
+                            logger.info(f"🔍 Retry response data: {retry_data}")
+                            logger.info(f"🔍 license_valid field: {retry_data.get('license_valid')}")
+                            
                             if retry_data.get("license_valid"):
                                 logger.info(f"✅ License validated - {retry_data.get('message', 'Access Granted')}")
                             else:
-                                logger.critical("License validation failed after clearing stale session")
+                                logger.critical(f"❌ License validation failed after releasing session")
+                                logger.critical(f"Response: {retry_data}")
                                 sys.exit(1)
                         else:
-                            logger.critical("License validation failed after clearing stale session")
+                            logger.critical(f"❌ License validation retry failed - HTTP {retry_response.status_code}")
+                            logger.critical(f"Response: {retry_response.text}")
                             sys.exit(1)
                     else:
                         # Stale session clear failed, still a real conflict
@@ -872,7 +895,7 @@ def get_account_equity() -> float:
     In live mode, returns actual account balance from broker.
     """
     # Shadow mode or no broker - return simulated capital
-    if CONFIG.get("shadow_mode", False) or broker is None:
+    if _bot_config.shadow_mode or broker is None:
         # Use starting_equity from bot_status if available
         if bot_status.get("starting_equity") is not None:
             return bot_status["starting_equity"]
@@ -1009,7 +1032,7 @@ def place_stop_order(symbol: str, side: str, quantity: int, stop_price: float) -
             "backtest": True
         }
     
-    shadow_mode = CONFIG.get("shadow_mode", False)
+    shadow_mode = _bot_config.shadow_mode
     logger.info(f"{'[SHADOW MODE] ' if shadow_mode else ''}Stop Order: {side} {quantity} {symbol} @ {stop_price}")
     
     if shadow_mode:
@@ -1079,7 +1102,7 @@ def place_limit_order(symbol: str, side: str, quantity: int, limit_price: float)
             "backtest": True
         }
     
-    shadow_mode = CONFIG.get("shadow_mode", False)
+    shadow_mode = _bot_config.shadow_mode
     logger.info(f"{'[SHADOW MODE] ' if shadow_mode else ''}Limit Order: {side} {quantity} {symbol} @ {limit_price}")
     
     if shadow_mode:
@@ -1137,7 +1160,7 @@ def cancel_order(symbol: str, order_id: str) -> bool:
         logger.info(f"[BACKTEST] Order {order_id} cancelled (simulated)")
         return True
     
-    shadow_mode = CONFIG.get("shadow_mode", False)
+    shadow_mode = _bot_config.shadow_mode
     logger.info(f"{'[SHADOW MODE] ' if shadow_mode else ''}Cancelling Order: {order_id} for {symbol}")
     
     if shadow_mode:
@@ -1184,7 +1207,7 @@ def get_position_quantity(symbol: str) -> int:
         return 0
     
     # Shadow mode uses tracked position
-    if CONFIG.get("shadow_mode", False):
+    if _bot_config.shadow_mode:
         if state.get(symbol) and state[symbol]["position"]["active"]:
             qty = state[symbol]["position"]["quantity"]
             side = state[symbol]["position"]["side"]
@@ -3479,7 +3502,7 @@ def execute_entry(symbol: str, side: str, entry_price: float) -> None:
         entry_price: Approximate entry price (mid or last)
     """
     # ===== SHADOW MODE: Signal-only (manual trading mode) =====
-    if CONFIG.get("shadow_mode", False):
+    if _bot_config.shadow_mode:
         logger.info(SEPARATOR_LINE)
         logger.info(f"≡ƒôè SIGNAL ALERT - MANUAL TRADE OPPORTUNITY")
         logger.info(f"  Symbol: {symbol}")
@@ -5944,7 +5967,7 @@ def execute_exit(symbol: str, exit_price: float, reason: str) -> None:
         }
         
         # Write to file
-        summary_file = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'data', 'trade_summary.json')
+        summary_file = get_data_file_path('data/trade_summary.json')
         with open(summary_file, 'w') as f:
             json.dump(trade_summary, f, indent=2)
         
@@ -5960,7 +5983,7 @@ def execute_exit(symbol: str, exit_price: float, reason: str) -> None:
             'timestamp': exit_time.isoformat()
         }
         
-        daily_file = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'daily_summary.json')
+        daily_file = get_data_file_path('daily_summary.json')
         with open(daily_file, 'w') as f:
             json.dump(daily_summary, f, indent=2)
             
@@ -7334,7 +7357,7 @@ def main(symbol_override: str = None) -> None:
         logger.info(f"[{trading_symbol}] 📝 Live mode: Reading local experiences, saving to cloud only")
         
         # Initialize Cloud API Client for reporting trade outcomes to cloud
-        license_key = CONFIG.get("quotrading_license") or CONFIG.get("user_api_key")
+        license_key = os.getenv("QUOTRADING_LICENSE_KEY")
         if license_key:
             cloud_api_url = "https://quotrading-flask-api.azurewebsites.net"
             cloud_api_client = CloudAPIClient(
@@ -7354,7 +7377,7 @@ def main(symbol_override: str = None) -> None:
         logger.info(f"[{trading_symbol}]   Trading Hours: {SYMBOL_SPEC.session_start} - {SYMBOL_SPEC.session_end} ET")
     
     # Display operating mode
-    if CONFIG.get('shadow_mode', False):
+    if _bot_config.shadow_mode:
         logger.info(f"[{trading_symbol}] Mode: ≡ƒôè SIGNAL-ONLY MODE (Manual Trading)")
         logger.info(f"[{trading_symbol}] ΓÜá∩╕Å  Signal mode: Shows trading signals without executing trades")
     else:
@@ -7415,6 +7438,20 @@ def main(symbol_override: str = None) -> None:
     # Register shutdown handlers for cleanup
     event_loop.register_shutdown_handler(cleanup_on_shutdown)
     
+    # Register atexit handler to ensure session is ALWAYS released
+    atexit.register(release_session)
+    
+    # Register signal handlers for Ctrl+C, SIGTERM, etc.
+    def signal_handler(signum, frame):
+        logger.info(f"Signal {signum} received, releasing session and shutting down...")
+        release_session()
+        sys.exit(0)
+    
+    signal.signal(signal.SIGINT, signal_handler)   # Ctrl+C
+    signal.signal(signal.SIGTERM, signal_handler)  # Termination signal
+    if hasattr(signal, 'SIGBREAK'):
+        signal.signal(signal.SIGBREAK, signal_handler)  # Windows Ctrl+Break
+    
     # Initialize timer manager for periodic events
     tz = pytz.timezone(CONFIG["timezone"])
     timer_manager = TimerManager(event_loop, CONFIG, tz)
@@ -7448,8 +7485,14 @@ def main(symbol_override: str = None) -> None:
         event_loop.run()
     except KeyboardInterrupt:
         logger.info("Keyboard interrupt received")
+    except Exception as e:
+        logger.error(f"Event loop error: {e}")
     finally:
         logger.info("Event loop stopped")
+        
+        # CRITICAL: Release session immediately on ANY exit
+        logger.info("Releasing session lock...")
+        release_session()
         
         # Metrics are already logged by event loop's _log_metrics()
         # No need to call get_metrics() here
@@ -7721,17 +7764,17 @@ def handle_license_check_event(data: Dict[str, Any]) -> None:
     
     try:
         # Get license key from config
-        license_key = CONFIG.get("quotrading_license") or CONFIG.get("user_api_key")
+        license_key = os.getenv("QUOTRADING_LICENSE_KEY")
         if not license_key:
             logger.warning("No license key configured - cannot validate")
             return
         
-        # Validate license via API (also acts as heartbeat to keep session alive)
+        # Send heartbeat to maintain session (don't use validate-license as it creates new sessions)
         import requests
         api_url = os.getenv("QUOTRADING_API_URL", "https://quotrading-flask-api.azurewebsites.net")
         
         response = requests.post(
-            f"{api_url}/api/validate-license",
+            f"{api_url}/api/heartbeat",
             json={
                 "license_key": license_key,
                 "device_fingerprint": get_device_fingerprint()
@@ -8010,7 +8053,7 @@ def send_heartbeat() -> None:
         import requests
         
         api_url = os.getenv("QUOTRADING_API_URL", "https://quotrading-flask-api.azurewebsites.net")
-        license_key = CONFIG.get("quotrading_license") or CONFIG.get("user_api_key")
+        license_key = os.getenv("QUOTRADING_LICENSE_KEY")
         
         if not license_key:
             return
@@ -8059,7 +8102,7 @@ def send_heartbeat() -> None:
             "status": "online" if bot_status.get("trading_enabled", False) else "idle",
             "metadata": {
                 "symbol": symbol,
-                "shadow_mode": CONFIG.get("shadow_mode", False),
+                "shadow_mode": _bot_config.shadow_mode,
                 # Real-time performance metrics
                 "session_pnl": round(session_pnl, 2),
                 "total_trades": total_trades,
@@ -8076,6 +8119,10 @@ def send_heartbeat() -> None:
                 "hours_until_expiration": bot_status.get("hours_until_expiration")
             }
         }
+        
+        import os as os_mod
+        pid = os_mod.getpid()
+        logger.info(f"📱 Sending heartbeat with fingerprint: {payload['device_fingerprint']} (PID: {pid})")
         
         response = requests.post(
             f"{api_url}/api/heartbeat",
@@ -8166,11 +8213,8 @@ def handle_shutdown_event(data: Dict[str, Any]) -> None:
     bot_status["trading_enabled"] = False
 
 
-def cleanup_on_shutdown() -> None:
-    """Cleanup tasks on shutdown"""
-    logger.info("Running cleanup tasks...")
-    
-    # Release session lock on cloud API
+def release_session() -> None:
+    """Release session lock - called on ANY exit"""
     try:
         import requests
         license_key = os.getenv("QUOTRADING_LICENSE_KEY")
@@ -8185,11 +8229,19 @@ def cleanup_on_shutdown() -> None:
                 timeout=5
             )
             if response.status_code == 200:
-                logger.info("Session lock released successfully")
+                logger.info("✅ Session lock released successfully")
             else:
-                logger.warning(f"Failed to release session lock: HTTP {response.status_code}")
+                logger.warning(f"⚠️ Failed to release session lock: HTTP {response.status_code}")
     except Exception as e:
-        logger.warning(f"Error releasing session lock: {e}")
+        logger.warning(f"⚠️ Error releasing session lock: {e}")
+
+
+def cleanup_on_shutdown() -> None:
+    """Cleanup tasks on shutdown"""
+    logger.info("Running cleanup tasks...")
+    
+    # Release session lock
+    release_session()
     
     # Send bot shutdown alert
     try:

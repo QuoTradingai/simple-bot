@@ -12,18 +12,18 @@ import time
 import asyncio
 
 # Import broker SDKs (optional dependencies)
+# NOTE: Moved imports inside methods to avoid initialization errors at module import time
+BROKER_SDK_AVAILABLE = False
 try:
-    from project_x_py import ProjectX, ProjectXConfig, TradingSuite, TradingSuiteConfig
-    from project_x_py import OrderSide, OrderType
-    from project_x_py.realtime.core import ProjectXRealtimeClient
+    import project_x_py
+    # Only test if the module exists, don't import classes yet (they may have initialization bugs)
     BROKER_SDK_AVAILABLE = True
 except ImportError:
-    BROKER_SDK_AVAILABLE = False
     logging.warning("Broker SDK (project-x-py) not installed - some broker operations may not work")
 
 # Import WebSocket streamer
 try:
-    from broker_websocket import TopStepWebSocketStreamer
+    from broker_websocket import BrokerWebSocketStreamer
     BROKER_WEBSOCKET_AVAILABLE = True
 except ImportError:
     BROKER_WEBSOCKET_AVAILABLE = False
@@ -207,7 +207,7 @@ class BrokerSDKImplementation(BrokerInterface):
         self.trading_suite: Optional[TradingSuite] = None
         
         # WebSocket streamer for live data
-        self.websocket_streamer: Optional[TopStepWebSocketStreamer] = None
+        self.websocket_streamer: Optional[BrokerWebSocketStreamer] = None
         self._contract_id_cache: Dict[str, str] = {}  # symbol -> contract_id mapping (populated during connection)
         
         # Dynamic balance tracking for auto-reconfiguration
@@ -250,6 +250,10 @@ class BrokerSDKImplementation(BrokerInterface):
         Returns:
             True if connected, False if all retries failed
         """
+        # Import SDK classes here to avoid module-level initialization errors
+        from project_x_py import ProjectX, ProjectXConfig, TradingSuite, TradingSuiteConfig
+        from project_x_py.realtime.core import ProjectXRealtimeClient
+        
         if self.circuit_breaker_open:
             logger.error("Circuit breaker is open - cannot connect")
             return False
@@ -309,7 +313,7 @@ class BrokerSDKImplementation(BrokerInterface):
                     session_token = self.sdk_client.get_session_token()
                     if session_token:
                         logger.info("Initializing WebSocket streamer...")
-                        self.websocket_streamer = TopStepWebSocketStreamer(session_token)
+                        self.websocket_streamer = BrokerWebSocketStreamer(session_token)
                         if self.websocket_streamer.connect():
                             logger.info("[SUCCESS] WebSocket streamer initialized and connected")
                         else:
@@ -600,6 +604,8 @@ class BrokerSDKImplementation(BrokerInterface):
         
         try:
             import asyncio
+            # Import order enums here to avoid module-level import issues
+            from project_x_py import OrderSide, OrderType
             
             # Get contract ID for the symbol dynamically
             contract_id = self._get_contract_id_sync(symbol)
@@ -670,6 +676,8 @@ class BrokerSDKImplementation(BrokerInterface):
         
         try:
             import asyncio
+            # Import order enums here to avoid module-level import issues
+            from project_x_py import OrderSide, OrderType
             
             # Get contract ID for the symbol dynamically
             contract_id = self._get_contract_id_sync(symbol)
@@ -782,6 +790,8 @@ class BrokerSDKImplementation(BrokerInterface):
         
         try:
             import asyncio
+            # Import order enums here to avoid module-level import issues
+            from project_x_py import OrderSide, OrderType
             
             # Convert side to SDK enum
             order_side = OrderSide.BUY if side.upper() == "BUY" else OrderSide.SELL
