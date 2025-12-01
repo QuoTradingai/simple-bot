@@ -2075,15 +2075,17 @@ Shadow Mode: {shadow_mode}
         cancel_btn.pack(pady=(5, 20))
         
         # Countdown logic
-        countdown_value = [8]  # Use list to allow modification in nested function
+        countdown_value = 8  # Use simple variable with nonlocal
         
         def update_countdown():
+            nonlocal countdown_value  # Use nonlocal instead of list workaround
+            
             if self.countdown_cancelled:
                 return
             
-            if countdown_value[0] > 0:
-                countdown_label.config(text=str(countdown_value[0]))
-                countdown_value[0] -= 1
+            if countdown_value > 0:
+                countdown_label.config(text=str(countdown_value))
+                countdown_value -= 1
                 countdown_dialog.after(1000, update_countdown)
             else:
                 # Countdown finished - launch bot

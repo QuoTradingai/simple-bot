@@ -111,6 +111,9 @@ def display_animated_logo(duration=3.0, fps=15):
     frames = int(duration * fps)
     delay = 1.0 / fps
     
+    # Pre-calculate ANSI clear sequence for efficiency
+    clear_sequence = '\033[F\033[K' * len(QUO_AI_LOGO)
+    
     # Print a header before the logo
     print("\n" + "=" * 60)
     print(" " * 15 + "QUOTRADING AI - STARTING UP")
@@ -119,9 +122,7 @@ def display_animated_logo(duration=3.0, fps=15):
     for frame in range(frames):
         # Move cursor up to overwrite previous frame (only after first frame)
         if frame > 0:
-            # Combine ANSI escape sequences for efficiency
-            clear_and_move = '\033[F\033[K' * len(QUO_AI_LOGO)
-            print(clear_and_move, end='')
+            print(clear_sequence, end='')
         
         # Calculate color offset for this frame
         # This creates the "flowing" rainbow effect

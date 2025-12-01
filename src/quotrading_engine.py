@@ -68,13 +68,13 @@ PROJECT_ROOT = Path(__file__).parent.parent
 env_path = PROJECT_ROOT / '.env'
 load_dotenv(dotenv_path=env_path)
 
-# Import rainbow logo display
+# Import rainbow logo display - with fallback if not available
 try:
     from rainbow_logo import display_animated_logo
+    RAINBOW_LOGO_AVAILABLE = True
 except ImportError:
-    # Fallback if rainbow_logo module not available
-    def display_animated_logo(*args, **kwargs):
-        pass
+    RAINBOW_LOGO_AVAILABLE = False
+    display_animated_logo = None
 
 # ===== EXE-COMPATIBLE FILE PATH HELPERS =====
 # These ensure files are saved in the correct location whether running as:
@@ -7294,11 +7294,12 @@ def main(symbol_override: str = None) -> None:
     
     # Display animated rainbow logo while bot is getting ready
     # This shows in the PowerShell terminal when the bot starts
-    try:
-        display_animated_logo(duration=3.0, fps=15)
-    except Exception as e:
-        # Logo display failed - log it but continue (not critical)
-        logger.warning(f"Could not display rainbow logo: {e}")
+    if RAINBOW_LOGO_AVAILABLE:
+        try:
+            display_animated_logo(duration=3.0, fps=15)
+        except Exception as e:
+            # Logo display failed - log it but continue (not critical)
+            logger.warning(f"Could not display rainbow logo: {e}")
     
     # CRITICAL: Validate license FIRST, before any initialization
     # This is the "login screen" - fail fast if license invalid or session conflict
