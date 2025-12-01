@@ -74,7 +74,7 @@ class MockSessionManager:
                     print(f"  ❌ Different device, session EXISTS (heartbeat {int(time_since.total_seconds())}s ago) - BLOCKED")
                     return False, "LICENSE ALREADY IN USE"
             else:
-                # Session fully expired (>= 120s) - allow takeover
+                # Session fully expired (>= 60s) - allow takeover
                 print(f"  🧹 Expired session (heartbeat {int(time_since.total_seconds())}s ago) - allowing takeover")
                 self.sessions[license_key] = (device_fp, datetime.now())
                 return True, "Session created (takeover)"

@@ -3,7 +3,7 @@ Test: Strict Session Blocking - User Requirement
 =================================================
 This test demonstrates that NO login is allowed past the first screen
 while ANY session with that API key exists, regardless of:
-- How long it's been (as long as < 120s timeout)
+- How long it's been (as long as < 60s timeout)
 - Same device or different device
 - Any other factors
 
@@ -45,14 +45,14 @@ class StrictSessionManager:
             
             time_since = datetime.now() - last_heartbeat
             
-            # If heartbeat exists and is < 120s, BLOCK ALL
+            # If heartbeat exists and is < 60s, BLOCK ALL
             if time_since < timedelta(seconds=self.SESSION_TIMEOUT_SECONDS):
                 if stored_fp == device_fp:
                     return False, f"❌ BLOCKED - Same device, session exists ({int(time_since.total_seconds())}s ago)"
                 else:
                     return False, f"❌ BLOCKED - Different device, session exists ({int(time_since.total_seconds())}s ago)"
             else:
-                # Fully expired (>= 120s)
+                # Fully expired (>= 60s)
                 self.sessions[license_key] = (device_fp, datetime.now())
                 return True, f"✅ Allowed - Session expired ({int(time_since.total_seconds())}s ago)"
         
@@ -63,7 +63,7 @@ class StrictSessionManager:
 
 def test_strict_blocking_same_device():
     """
-    Test: Same device CANNOT login if session exists (any age < 120s)
+    Test: Same device CANNOT login if session exists (any age < 60s)
     """
     print("\n" + "="*70)
     print("TEST: Strict Blocking - Same Device")
