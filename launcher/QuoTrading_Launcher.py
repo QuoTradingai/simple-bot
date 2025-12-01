@@ -272,6 +272,12 @@ class QuoTradingLauncher:
         # Track current API key for lock management
         self.current_api_key = None
         
+        # Countdown state (initialized here to avoid dynamic attribute creation)
+        self.countdown_cancelled = False
+        
+        # License timer label (will be created when trading screen is shown)
+        self.license_timer_label = None
+        
         # Register cleanup on window close
         self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
         
@@ -1587,6 +1593,30 @@ class QuoTradingLauncher:
         launch_container.pack(expand=True, padx=(0, 60))
         launch_btn = self.create_button(launch_container, "LAUNCH AI", self.start_bot, "next")
         launch_btn.pack(pady=2, ipady=3)
+        
+        # License expiration timer (bottom right)
+        timer_container = tk.Frame(bottom_row, bg=self.colors['card'])
+        timer_container.pack(side=tk.RIGHT, anchor=tk.E, padx=(0, 5))
+        
+        tk.Label(
+            timer_container,
+            text="⏱️ License Expires:",
+            font=("Segoe UI", 7, "bold"),
+            bg=self.colors['card'],
+            fg=self.colors['text_light']
+        ).pack()
+        
+        self.license_timer_label = tk.Label(
+            timer_container,
+            text="Loading...",
+            font=("Segoe UI", 9, "bold"),
+            bg=self.colors['card'],
+            fg=self.colors['success']
+        )
+        self.license_timer_label.pack()
+        
+        # Start the license timer update
+        self.update_license_timer()
     
     def on_account_selected(self, event=None):
         """Update account size field when user selects a different account from dropdown."""
@@ -1615,6 +1645,82 @@ class QuoTradingLauncher:
                 self.account_info_label.config(text=info_text, fg=self.colors['success'])
         except Exception as e:
             pass
+    
+    def update_license_timer(self):
+        """Update the license expiration timer display."""
+        # Check if timer label exists and is still valid
+        if not self.license_timer_label or not self.license_timer_label.winfo_exists():
+            return  # Timer label not created or already destroyed
+        
+        # Get license expiration from config
+        license_expiration = self.config.get("license_expiration")
+        
+        if not license_expiration:
+            self.license_timer_label.config(text="No expiration data", fg=self.colors['text_secondary'])
+            return
+        
+        try:
+            # Parse the expiration datetime (format: "2025-12-31T23:59:59" or similar)
+            # Handle different possible formats
+            if isinstance(license_expiration, str):
+                # Try ISO format first
+                try:
+                    expiration_dt = datetime.fromisoformat(license_expiration.replace('Z', '+00:00'))
+                except (ValueError, AttributeError):
+                    # Try other common formats
+                    try:
+                        expiration_dt = datetime.strptime(license_expiration, "%Y-%m-%d %H:%M:%S")
+                    except ValueError:
+                        expiration_dt = datetime.strptime(license_expiration, "%Y-%m-%dT%H:%M:%S")
+            else:
+                # Already a datetime object
+                expiration_dt = license_expiration
+            
+            # Calculate time remaining
+            now = datetime.now()
+            time_remaining = expiration_dt - now
+            
+            # Check if expired
+            if time_remaining.total_seconds() <= 0:
+                self.license_timer_label.config(text="EXPIRED", fg=self.colors['error'])
+                return
+            
+            # Calculate days, hours, minutes, seconds
+            total_seconds = int(time_remaining.total_seconds())
+            days = total_seconds // 86400
+            hours = (total_seconds % 86400) // 3600
+            minutes = (total_seconds % 3600) // 60
+            seconds = total_seconds % 60
+            
+            # Format the display
+            if days > 0:
+                timer_text = f"{days}d {hours}h {minutes}m {seconds}s"
+            elif hours > 0:
+                timer_text = f"{hours}h {minutes}m {seconds}s"
+            elif minutes > 0:
+                timer_text = f"{minutes}m {seconds}s"
+            else:
+                timer_text = f"{seconds}s"
+            
+            # Color based on time remaining
+            if days > 7:
+                color = self.colors['success']  # Green - plenty of time
+            elif days > 1:
+                color = self.colors['warning']  # Orange - getting close
+            else:
+                color = self.colors['error']  # Red - expiring soon
+            
+            self.license_timer_label.config(text=timer_text, fg=color)
+            
+        except (ValueError, AttributeError, TypeError) as e:
+            self.license_timer_label.config(text="Error", fg=self.colors['error'])
+        
+        # Schedule next update in 1 second, but only if we're still on trading screen
+        # Check if label still exists and current_screen is still 1 (trading screen)
+        if (self.license_timer_label and 
+            self.license_timer_label.winfo_exists() and 
+            self.current_screen == 1):
+            self.root.after(1000, self.update_license_timer)
     
     
     def fetch_account_info(self):
@@ -1903,10 +2009,12 @@ class QuoTradingLauncher:
             if is_locked:
                 broker_username = lock_info.get("broker_username", "unknown")
                 created_at = lock_info.get("created_at", "unknown time")
+                # Use the display string from dropdown for account name
+                selected_account_display = self.account_dropdown_var.get()
                 messagebox.showerror(
                     "Account Already Trading",
                     f"❌ This account is already being traded!\n\n"
-                    f"Account: {selected_account_name}\n"
+                    f"Account: {selected_account_display}\n"
                     f"Broker: {broker_username}\n"
                     f"Started: {created_at}\n\n"
                     f"You cannot run multiple bots on the same trading account.\n"
@@ -1953,6 +2061,146 @@ class QuoTradingLauncher:
         
         if not result:
             return
+        
+        # Show countdown dialog before launching
+        self.show_countdown_and_launch(selected_symbols, selected_account_id, loss_limit)
+    
+    def show_countdown_and_launch(self, selected_symbols, selected_account_id, loss_limit):
+        """Show 8-second countdown with settings display and cancel option."""
+        # Create countdown dialog
+        countdown_dialog = tk.Toplevel(self.root)
+        countdown_dialog.title("Launching QuoTrading AI")
+        countdown_dialog.geometry("500x450")
+        countdown_dialog.resizable(False, False)
+        countdown_dialog.configure(bg=self.colors['card'])
+        
+        # Make it modal
+        countdown_dialog.transient(self.root)
+        countdown_dialog.grab_set()
+        
+        # Keep window decorations for better UX (user can still close if needed)
+        # This is safer than overrideredirect(True) which could trap users
+        
+        # Center the dialog
+        countdown_dialog.update_idletasks()
+        x = self.root.winfo_x() + (self.root.winfo_width() // 2) - (countdown_dialog.winfo_width() // 2)
+        y = self.root.winfo_y() + (self.root.winfo_height() // 2) - (countdown_dialog.winfo_height() // 2)
+        countdown_dialog.geometry(f"+{x}+{y}")
+        
+        # Main content frame
+        inner_frame = tk.Frame(countdown_dialog, bg=self.colors['card'])
+        inner_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        
+        # Header
+        header_label = tk.Label(
+            inner_frame,
+            text="🚀 LAUNCHING IN...",
+            font=("Segoe UI", 16, "bold"),
+            bg=self.colors['card'],
+            fg=self.colors['success']
+        )
+        header_label.pack(pady=(20, 10))
+        
+        # Countdown display
+        countdown_label = tk.Label(
+            inner_frame,
+            text="8",
+            font=("Segoe UI", 48, "bold"),
+            bg=self.colors['card'],
+            fg=self.colors['success']
+        )
+        countdown_label.pack(pady=10)
+        
+        # Settings display
+        settings_frame = tk.Frame(inner_frame, bg=self.colors['secondary'], relief=tk.FLAT)
+        settings_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=10)
+        
+        tk.Label(
+            settings_frame,
+            text="📋 Your Trading Configuration:",
+            font=("Segoe UI", 11, "bold"),
+            bg=self.colors['secondary'],
+            fg=self.colors['text']
+        ).pack(pady=(10, 5))
+        
+        # Display all settings
+        symbols_str = ", ".join(selected_symbols)
+        broker = self.config.get("broker", "TopStep")
+        account = self.account_dropdown_var.get()
+        contracts = self.contracts_var.get()
+        max_trades = self.trades_var.get()
+        confidence = self.confidence_var.get()
+        shadow_mode = "ON" if self.shadow_mode_var.get() else "OFF"
+        
+        settings_text = f"""
+Broker: {broker}
+Account: {account}
+Symbols: {symbols_str}
+Contracts Per Trade: {contracts}
+Daily Loss Limit: ${loss_limit}
+Max Trades/Day: {max_trades}
+Confidence Threshold: {confidence}%
+Shadow Mode: {shadow_mode}
+        """
+        
+        settings_label = tk.Label(
+            settings_frame,
+            text=settings_text.strip(),
+            font=("Segoe UI", 9),
+            bg=self.colors['secondary'],
+            fg=self.colors['text'],
+            justify=tk.LEFT
+        )
+        settings_label.pack(pady=(5, 10))
+        
+        # Cancel button
+        self.countdown_cancelled = False
+        
+        def cancel_launch():
+            self.countdown_cancelled = True
+            countdown_dialog.destroy()
+        
+        cancel_btn = tk.Button(
+            inner_frame,
+            text="❌ CANCEL",
+            font=("Segoe UI", 10, "bold"),
+            bg=self.colors['error'],
+            fg='white',
+            activebackground='#B91C1C',
+            activeforeground='white',
+            relief=tk.FLAT,
+            bd=0,
+            command=cancel_launch,
+            cursor="hand2",
+            width=20,
+            height=2
+        )
+        cancel_btn.pack(pady=(5, 20))
+        
+        # Countdown logic
+        countdown_value = 8  # Use simple variable with nonlocal
+        
+        def update_countdown():
+            nonlocal countdown_value  # Use nonlocal instead of list workaround
+            
+            if self.countdown_cancelled:
+                return
+            
+            if countdown_value > 0:
+                countdown_label.config(text=str(countdown_value))
+                countdown_value -= 1
+                countdown_dialog.after(1000, update_countdown)
+            else:
+                # Countdown finished - launch bot
+                countdown_dialog.destroy()
+                self.launch_bot_process(selected_symbols, selected_account_id)
+        
+        # Start countdown
+        update_countdown()
+    
+    def launch_bot_process(self, selected_symbols, selected_account_id):
+        """Launch the bot process after countdown completes."""
+        symbols_str = ", ".join(selected_symbols)
         
         # Launch AI in PowerShell terminal
         try:
