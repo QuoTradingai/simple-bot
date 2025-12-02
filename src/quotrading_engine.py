@@ -331,6 +331,7 @@ bot_status: Dict[str, Any] = {
     "early_close_losses": 0,
     "early_close_saves": 0,
     "flatten_mode": False,
+    "session_start_time": None,  # Track when bot started for session runtime display
 }
 
 
@@ -1758,30 +1759,64 @@ def update_1min_bar(symbol: str, price: float, volume: int, dt: datetime) -> Non
                     state[symbol]["market_condition"] = "UNKNOWN"
             
             # Display market snapshot on every 1-minute bar close
-            vwap_data = state[symbol].get("vwap", {})
-            market_cond = state[symbol].get("market_condition", "UNKNOWN")
-            current_regime = state[symbol].get("current_regime", "NORMAL")
-            
-            # Get current bid/ask from bid_ask_manager if available
-            quote_info = ""
-            if bid_ask_manager is not None:
-                quote = bid_ask_manager.get_current_quote(symbol)
-                if quote:
-                    spread = quote.ask_price - quote.bid_price
-                    quote_info = f" | Bid: ${quote.bid_price:.2f} x {quote.bid_size} | Ask: ${quote.ask_price:.2f} x {quote.ask_size} | Spread: ${spread:.2f}"
-            
-            # Get latest bar volume
-            vol_info = f" | Vol: {current_bar['volume']}"
-            
-            # Get VWAP if available
-            vwap_info = ""
-            if vwap_data and isinstance(vwap_data, dict):
-                vwap_val = vwap_data.get('vwap', 0)
-                std_dev = vwap_data.get('std_dev', 0)
-                if vwap_val > 0:
-                    vwap_info = f" | VWAP: ${vwap_val:.2f} ± ${std_dev:.2f}"
-            
-            logger.info(f"📊 Market: {symbol} @ ${current_bar['close']:.2f}{quote_info}{vol_info} | Bars: {bar_count}{vwap_info} | Condition: {market_cond} | Regime: {current_regime}")
+            # Only display if bot has been running for at least 1 minute to avoid confusion
+            # with rapid bar creation during startup
+            if bot_status.get("session_start_time"):
+                time_since_start = (get_current_time() - bot_status["session_start_time"]).total_seconds()
+                if time_since_start < 60:
+                    # Skip display for first minute of runtime
+                    pass
+                else:
+                    vwap_data = state[symbol].get("vwap", {})
+                    market_cond = state[symbol].get("market_condition", "UNKNOWN")
+                    current_regime = state[symbol].get("current_regime", "NORMAL")
+                    
+                    # Get current bid/ask from bid_ask_manager if available
+                    quote_info = ""
+                    if bid_ask_manager is not None:
+                        quote = bid_ask_manager.get_current_quote(symbol)
+                        if quote:
+                            spread = quote.ask_price - quote.bid_price
+                            quote_info = f" | Bid: ${quote.bid_price:.2f} x {quote.bid_size} | Ask: ${quote.ask_price:.2f} x {quote.ask_size} | Spread: ${spread:.2f}"
+                    
+                    # Get latest bar volume
+                    vol_info = f" | Vol: {current_bar['volume']}"
+                    
+                    # Get VWAP if available
+                    vwap_info = ""
+                    if vwap_data and isinstance(vwap_data, dict):
+                        vwap_val = vwap_data.get('vwap', 0)
+                        std_dev = vwap_data.get('std_dev', 0)
+                        if vwap_val > 0:
+                            vwap_info = f" | VWAP: ${vwap_val:.2f} ± ${std_dev:.2f}"
+                    
+                    logger.info(f"📊 Market: {symbol} @ ${current_bar['close']:.2f}{quote_info}{vol_info} | Bars: {bar_count}{vwap_info} | Condition: {market_cond} | Regime: {current_regime}")
+            else:
+                # Fallback if session_start_time not set (shouldn't happen)
+                vwap_data = state[symbol].get("vwap", {})
+                market_cond = state[symbol].get("market_condition", "UNKNOWN")
+                current_regime = state[symbol].get("current_regime", "NORMAL")
+                
+                # Get current bid/ask from bid_ask_manager if available
+                quote_info = ""
+                if bid_ask_manager is not None:
+                    quote = bid_ask_manager.get_current_quote(symbol)
+                    if quote:
+                        spread = quote.ask_price - quote.bid_price
+                        quote_info = f" | Bid: ${quote.bid_price:.2f} x {quote.bid_size} | Ask: ${quote.ask_price:.2f} x {quote.ask_size} | Spread: ${spread:.2f}"
+                
+                # Get latest bar volume
+                vol_info = f" | Vol: {current_bar['volume']}"
+                
+                # Get VWAP if available
+                vwap_info = ""
+                if vwap_data and isinstance(vwap_data, dict):
+                    vwap_val = vwap_data.get('vwap', 0)
+                    std_dev = vwap_data.get('std_dev', 0)
+                    if vwap_val > 0:
+                        vwap_info = f" | VWAP: ${vwap_val:.2f} ± ${std_dev:.2f}"
+                
+                logger.info(f"📊 Market: {symbol} @ ${current_bar['close']:.2f}{quote_info}{vol_info} | Bars: {bar_count}{vwap_info} | Condition: {market_cond} | Regime: {current_regime}")
             
             # Update current regime after bar completion
             update_current_regime(symbol)
@@ -6975,6 +7010,15 @@ def log_session_summary(symbol: str, logout_success: bool = True, show_logout_st
         log_with_bot(SEPARATOR_LINE)
         log_with_bot(f"Trading Day: {state[symbol]['trading_day']}")
         
+        # Calculate and display session runtime
+        if bot_status.get("session_start_time"):
+            tz = pytz.timezone(CONFIG.get("timezone", "US/Eastern"))
+            session_end = datetime.now(tz)
+            runtime = session_end - bot_status["session_start_time"]
+            hours, remainder = divmod(int(runtime.total_seconds()), 3600)
+            minutes, seconds = divmod(remainder, 60)
+            log_with_bot(f"Session Runtime: {hours}h {minutes}m {seconds}s")
+        
         # The helper functions will still call logger.info directly,
         # so we temporarily patch logger.info to use our wrapper
         original_info = logger.info
@@ -7009,6 +7053,15 @@ def log_session_summary(symbol: str, logout_success: bool = True, show_logout_st
         logger.info("SESSION SUMMARY")
         logger.info(SEPARATOR_LINE)
         logger.info(f"Trading Day: {state[symbol]['trading_day']}")
+        
+        # Calculate and display session runtime
+        if bot_status.get("session_start_time"):
+            tz = pytz.timezone(CONFIG.get("timezone", "US/Eastern"))
+            session_end = datetime.now(tz)
+            runtime = session_end - bot_status["session_start_time"]
+            hours, remainder = divmod(int(runtime.total_seconds()), 3600)
+            minutes, seconds = divmod(remainder, 60)
+            logger.info(f"Session Runtime: {hours}h {minutes}m {seconds}s")
         
         # Format trade statistics
         format_trade_statistics(stats)
@@ -7467,6 +7520,9 @@ def main(symbol_override: str = None) -> None:
                         Used for multi-symbol bot instances
     """
     global event_loop, timer_manager, bid_ask_manager, cloud_api_client, rl_brain
+    
+    # Track session start time for runtime display
+    bot_status["session_start_time"] = datetime.now(pytz.timezone(CONFIG.get("timezone", "US/Eastern")))
     
     # CRITICAL: Validate license FIRST, before any initialization
     # This is the "login screen" - fail fast if license invalid or session conflict
