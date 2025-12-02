@@ -35,6 +35,21 @@ QUO_AI_LOGO = [
     "  ╚═════╝  ╚═════╝  ╚═════╝    ╚═╝   ╚═╝  ╚═╝╚═╝  ╚═╝╚═════╝ ╚═╝╚═╝  ╚═══╝ ╚═════╝     ╚═╝  ╚═╝╚═╝"
 ]
 
+# Compact bot ASCII art for session summary
+BOT_ASCII_ART = [
+    "     ___",
+    "    /   \\",
+    "   | o o |",
+    "    \\___/",
+    "   __|||__",
+    "  |       |",
+    "  | QUO   |",
+    "  | TRADE |",
+    "  |_______|",
+    "   || | ||",
+    "   || | ||",
+]
+
 # Subtitle for professional branding
 SUBTITLE = "A L G O R I T H M I C   T R A D I N G"
 
@@ -256,6 +271,27 @@ def display_static_logo():
     for line in QUO_AI_LOGO:
         display_logo_line(line, 0)
     print()
+
+
+def get_rainbow_bot_art():
+    """
+    Get bot ASCII art with rainbow colors applied.
+    Returns a list of colored strings, one per line.
+    """
+    rainbow = get_rainbow_colors()
+    colored_lines = []
+    
+    for line_idx, line in enumerate(BOT_ASCII_ART):
+        colored_line = ''
+        for char_idx, char in enumerate(line):
+            if char.strip():  # Only color non-whitespace characters
+                color = rainbow[(line_idx + char_idx) % len(rainbow)]
+                colored_line += f"{color}{char}{Colors.RESET}"
+            else:
+                colored_line += char
+        colored_lines.append(colored_line)
+    
+    return colored_lines
 
 
 if __name__ == "__main__":

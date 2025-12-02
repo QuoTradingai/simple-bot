@@ -89,12 +89,13 @@ load_dotenv(dotenv_path=env_path)
 
 # Import rainbow logo display - with fallback if not available
 try:
-    from rainbow_logo import display_animated_logo, Colors
+    from rainbow_logo import display_animated_logo, Colors, get_rainbow_bot_art
     RAINBOW_LOGO_AVAILABLE = True
 except ImportError:
     RAINBOW_LOGO_AVAILABLE = False
     display_animated_logo = None
     Colors = None
+    get_rainbow_bot_art = None
 
 # ===== EXE-COMPATIBLE FILE PATH HELPERS =====
 # These ensure files are saved in the correct location whether running as:
@@ -6846,30 +6847,77 @@ def log_session_summary(symbol: str) -> None:
     """
     Log comprehensive session summary at end of trading day.
     Coordinates summary formatting through helper functions.
+    Displays with rainbow bot logo on the right side.
     
     Args:
         symbol: Instrument symbol
     """
     stats = state[symbol]["session_stats"]
     
-    logger.info(SEPARATOR_LINE)
-    logger.info("SESSION SUMMARY")
-    logger.info(SEPARATOR_LINE)
-    logger.info(f"Trading Day: {state[symbol]['trading_day']}")
+    # Collect summary lines to display
+    summary_lines = []
+    summary_lines.append(SEPARATOR_LINE)
+    summary_lines.append("SESSION SUMMARY")
+    summary_lines.append(SEPARATOR_LINE)
+    summary_lines.append(f"Trading Day: {state[symbol]['trading_day']}")
     
-    # Format trade statistics
-    format_trade_statistics(stats)
+    # Collect trade statistics lines
+    total_trades = len(stats["trades"])
+    wins = stats.get("win_count", 0)
+    losses = stats.get("loss_count", 0)
+    summary_lines.append(f"Total Trades: {total_trades}")
+    summary_lines.append(f"Wins: {wins}")
+    summary_lines.append(f"Losses: {losses}")
     
-    # Format P&L summary
-    format_pnl_summary(stats)
+    # Win rate
+    if total_trades > 0:
+        win_rate = (wins / total_trades) * 100
+        summary_lines.append(f"Win Rate: {win_rate:.1f}%")
+    else:
+        summary_lines.append("Win Rate: N/A (no trades)")
     
-    # Format risk metrics (flatten mode analysis)
-    format_risk_metrics()
+    # P&L
+    total_pnl = stats.get("total_pnl", 0.0)
+    largest_win = stats.get("largest_win", 0.0)
+    largest_loss = stats.get("largest_loss", 0.0)
+    summary_lines.append(f"Total P&L: ${total_pnl:+.2f}")
+    summary_lines.append(f"Largest Win: ${largest_win:+.2f}")
+    summary_lines.append(f"Largest Loss: ${largest_loss:+.2f}")
+    summary_lines.append(SEPARATOR_LINE)
     
-    # Format time statistics (position duration)
-    format_time_statistics(stats)
-    
-    logger.info(SEPARATOR_LINE)
+    # Get rainbow bot art if available
+    if get_rainbow_bot_art:
+        bot_lines = get_rainbow_bot_art()
+        
+        # Display summary and bot side by side
+        max_lines = max(len(summary_lines), len(bot_lines))
+        summary_width = 60  # Width for summary column
+        
+        for i in range(max_lines):
+            # Get summary line (or empty if past end)
+            if i < len(summary_lines):
+                summary_line = summary_lines[i]
+            else:
+                summary_line = ""
+            
+            # Get bot line (or empty if past end)
+            if i < len(bot_lines):
+                bot_line = bot_lines[i]
+            else:
+                bot_line = ""
+            
+            # Pad summary line to fixed width (accounting for ANSI codes in separator)
+            if summary_line == SEPARATOR_LINE:
+                display_line = summary_line
+            else:
+                display_line = summary_line.ljust(summary_width)
+            
+            # Combine with bot art on the right
+            logger.info(f"{display_line}    {bot_line}")
+    else:
+        # Fallback: display without bot art
+        for line in summary_lines:
+            logger.info(line)
     
     # Send daily summary alert
     try:
