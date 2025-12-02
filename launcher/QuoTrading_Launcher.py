@@ -43,6 +43,10 @@ USE_CLOUD_SIGNALS = True  # Set to True for production (cloud ML/RL)
 CLOUD_API_BASE_URL = os.getenv("QUOTRADING_API_URL", "https://quotrading-flask-api.azurewebsites.net")
 CLOUD_SIGNAL_POLL_INTERVAL = 5  # Seconds between signal polls
 
+# Multi-symbol launch configuration
+# Delay between launching each symbol to prevent session race conditions
+MULTI_SYMBOL_LAUNCH_DELAY_SECONDS = 3
+
 
 def get_device_fingerprint() -> str:
     """
@@ -2255,11 +2259,11 @@ Shadow Mode: {shadow_mode}
                 
                 self.bot_processes.append((symbol, process))
                 
-                # MULTI-SYMBOL FIX: Wait 3 seconds between launching each symbol
+                # MULTI-SYMBOL FIX: Wait between launching each symbol
                 # This ensures each bot completes its session registration before the next starts
                 # Prevents race conditions where multiple bots try to create sessions simultaneously
                 if i < len(selected_symbols) - 1:  # Don't wait after the last symbol
-                    time.sleep(3)
+                    time.sleep(MULTI_SYMBOL_LAUNCH_DELAY_SECONDS)
             
             # CREATE ACCOUNT LOCK with ALL bot PIDs
             # Lock tracks all processes so stale lock detection works properly

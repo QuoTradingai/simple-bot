@@ -14,7 +14,11 @@ import hashlib
 import uuid
 import getpass
 import platform
+import time
 from datetime import datetime, timedelta
+
+# Constants for fingerprint generation (match production code)
+FINGERPRINT_HASH_LENGTH = 16
 
 
 class MockSessionManager:
@@ -38,7 +42,7 @@ class MockSessionManager:
         
         platform_name = platform.system()
         fingerprint_raw = f"{machine_id}:{username}:{platform_name}"
-        fingerprint_hash = hashlib.sha256(fingerprint_raw.encode()).hexdigest()[:16]
+        fingerprint_hash = hashlib.sha256(fingerprint_raw.encode()).hexdigest()[:FINGERPRINT_HASH_LENGTH]
         
         return fingerprint_hash
     
@@ -259,7 +263,7 @@ class MultiSymbolSessionManager:
         else:
             fingerprint_raw = f"{machine_id}:{username}:{platform_name}"
         
-        fingerprint_hash = hashlib.sha256(fingerprint_raw.encode()).hexdigest()[:16]
+        fingerprint_hash = hashlib.sha256(fingerprint_raw.encode()).hexdigest()[:FINGERPRINT_HASH_LENGTH]
         return fingerprint_hash
     
     def validate_and_create_session(self, license_key: str, device_fp: str, symbol: str = None) -> tuple[bool, str]:
@@ -376,8 +380,6 @@ def test_scenario_8_multi_symbol_with_delay():
     print("SCENARIO 8: Multi-Symbol Launch With Delay (Production Fix)")
     print("="*70)
     
-    import time
-    
     mgr = MultiSymbolSessionManager()
     license_key = "TEST-KEY-DELAY"
     symbols = ["ES", "NQ", "MES"]
@@ -395,10 +397,10 @@ def test_scenario_8_multi_symbol_with_delay():
         if success:
             sessions_created.append(symbol)
         
-        # Simulate 3-second delay between launches (but use shorter for test)
+        # Simulate delay between launches (matches production MULTI_SYMBOL_LAUNCH_DELAY_SECONDS)
         if i < len(symbols) - 1:
             print(f"   Waiting before next symbol...")
-            # time.sleep(0.1)  # Short delay for test
+            time.sleep(0.01)  # Short delay for test speed (production uses 3 seconds)
     
     print(f"\n2. Sessions created: {sessions_created}")
     assert len(sessions_created) == len(symbols), f"All {len(symbols)} symbols should have sessions"
