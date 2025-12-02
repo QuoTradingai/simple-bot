@@ -1412,6 +1412,7 @@ class QuoTradingLauncher:
             highlightcolor=self.colors['success']
         )
         self.max_loss_per_trade_entry.pack(fill=tk.X, ipady=2, padx=2)
+        # Default value matches DEFAULT_MAX_STOP_LOSS_DOLLARS in src/config.py
         self.max_loss_per_trade_entry.insert(0, self.config.get("max_loss_per_trade", "200"))
         
         # Info label for max loss per trade

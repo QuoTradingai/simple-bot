@@ -202,7 +202,7 @@ def get_data_file_path(filename: str) -> 'Path':
     return file_path
 
 # Import new production modules
-from config import load_config, BotConfiguration
+from config import load_config, BotConfiguration, DEFAULT_MAX_STOP_LOSS_DOLLARS
 from event_loop import EventLoop, EventType, EventPriority, TimerManager
 from error_recovery import ErrorRecoveryManager, ErrorType as RecoveryErrorType
 from bid_ask_manager import BidAskManager, BidAskQuote
@@ -3149,7 +3149,7 @@ def calculate_position_size(symbol: str, side: str, entry_price: float, rl_confi
     
     # Get max stop loss from GUI (user sets in dollars, e.g., $300)
     # This is the "Max Loss Per Trade" setting configured by the user in the launcher
-    max_stop_dollars = CONFIG.get("max_stop_loss_dollars", 200.0)
+    max_stop_dollars = CONFIG.get("max_stop_loss_dollars", DEFAULT_MAX_STOP_LOSS_DOLLARS)
     logger.info(f"Account equity: ${equity:.2f}, Max stop loss per trade: ${max_stop_dollars:.2f}")
     
     # Determine stop price using user's max stop loss setting
@@ -5564,7 +5564,7 @@ def calculate_pnl(position: Dict[str, Any], exit_price: float) -> Tuple[float, f
     gross_pnl = ticks * tick_value * contracts
     
     # CONFIGURABLE CAP: Maximum loss (protects against slippage/gaps)
-    max_stop_loss = CONFIG.get("max_stop_loss_dollars", 200.0)
+    max_stop_loss = CONFIG.get("max_stop_loss_dollars", DEFAULT_MAX_STOP_LOSS_DOLLARS)
     if gross_pnl < -max_stop_loss:
         logger.warning(f"⚠️ Loss capped: ${gross_pnl:.2f} -> $-{max_stop_loss:.2f} (max loss protection)")
         gross_pnl = -max_stop_loss
@@ -7466,7 +7466,7 @@ def main(symbol_override: str = None) -> None:
     logger.info("📋 Trading Configuration:")
     logger.info(f"  • Max Contracts: {CONFIG['max_contracts']}")
     logger.info(f"  • Max Trades/Day: {CONFIG['max_trades_per_day']}")
-    logger.info(f"  • Max Loss Per Trade: ${CONFIG.get('max_stop_loss_dollars', 200.0):.0f}")
+    logger.info(f"  • Max Loss Per Trade: ${CONFIG.get('max_stop_loss_dollars', DEFAULT_MAX_STOP_LOSS_DOLLARS):.0f}")
     logger.info(f"  • Daily Loss Limit: ${CONFIG['daily_loss_limit']}")
     logger.info(f"  • Entry Window: {CONFIG['entry_start_time']} - {CONFIG['entry_end_time']} ET")
     logger.info(f"  • Force Close: {CONFIG['forced_flatten_time']} ET")

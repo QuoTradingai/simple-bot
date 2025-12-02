@@ -10,6 +10,9 @@ from datetime import time
 from dataclasses import dataclass, field
 import pytz
 
+# Default configuration constants
+DEFAULT_MAX_STOP_LOSS_DOLLARS = 200.0  # Default max loss per trade in dollars
+
 
 @dataclass
 class BotConfiguration:
@@ -243,7 +246,7 @@ class BotConfiguration:
     stop_loss_atr_multiplier: float = 3.6  # Iteration 3 (tight stops)
     
     # Stop Loss Configuration - USER CONFIGURABLE
-    max_stop_loss_dollars: float = 200.0  # USER CONFIGURABLE - max loss per trade in dollars (default $200)
+    max_stop_loss_dollars: float = DEFAULT_MAX_STOP_LOSS_DOLLARS  # USER CONFIGURABLE - max loss per trade in dollars
     # This is the "Max Loss Per Trade" setting from the GUI
     # Position closes automatically if trade loses this amount
     
