@@ -278,9 +278,16 @@ def get_rainbow_bot_art_with_message():
     Get thank you message with rainbow colors for display on right side.
     Returns a list of colored strings, one per line.
     Simple text format without robot art.
+    Vertically centered in the right margin space.
     """
     rainbow = get_rainbow_colors()
     colored_lines = []
+    
+    # Add blank lines to push message down to vertical center
+    colored_lines.append("")
+    colored_lines.append("")
+    colored_lines.append("")
+    colored_lines.append("")
     
     # Add rainbow-colored "Thanks for using QuoTrading AI"
     message = "Thanks for using QuoTrading AI"
