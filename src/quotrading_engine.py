@@ -804,7 +804,7 @@ def check_broker_connection() -> None:
             # Display session summary before going idle (like Ctrl+C)
             symbol = CONFIG.get("instrument")
             if symbol and symbol in state:
-                log_session_summary(symbol, logout_success=True, show_logout_status=False)
+                log_session_summary(symbol, logout_success=True, show_logout_status=False, show_bot_art=False)
             
             logger.critical(SEPARATOR_LINE)
             logger.critical(f"[IDLE MODE] {idle_type} - GOING IDLE")
@@ -6939,7 +6939,7 @@ def format_risk_metrics() -> None:
         logger.info(f"Trailing Stop Success Rate: {trailing_success_rate:.1f}%")
 
 
-def log_session_summary(symbol: str, logout_success: bool = True, show_logout_status: bool = True) -> None:
+def log_session_summary(symbol: str, logout_success: bool = True, show_logout_status: bool = True, show_bot_art: bool = True) -> None:
     """
     Log comprehensive session summary at end of trading day.
     Coordinates summary formatting through helper functions.
@@ -6949,11 +6949,13 @@ def log_session_summary(symbol: str, logout_success: bool = True, show_logout_st
         symbol: Instrument symbol
         logout_success: Whether cleanup/logout was successful
         show_logout_status: Whether to show the logout status message (False for maintenance mode)
+        show_bot_art: Whether to show rainbow bot art (False for maintenance mode)
     """
     stats = state[symbol]["session_stats"]
     
     # Display rainbow thank you message on the right side if available
-    if get_rainbow_bot_art_with_message:
+    # Only show bot art when explicitly requested (not during maintenance)
+    if get_rainbow_bot_art_with_message and show_bot_art:
         bot_lines = get_rainbow_bot_art_with_message()
         bot_line_idx = 0
         
