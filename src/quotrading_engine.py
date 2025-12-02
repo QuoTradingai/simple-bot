@@ -202,7 +202,7 @@ def get_data_file_path(filename: str) -> 'Path':
     return file_path
 
 # Import new production modules
-from config import load_config, BotConfiguration
+from config import load_config, BotConfiguration, DEFAULT_MAX_STOP_LOSS_DOLLARS
 from event_loop import EventLoop, EventType, EventPriority, TimerManager
 from error_recovery import ErrorRecoveryManager, ErrorType as RecoveryErrorType
 from bid_ask_manager import BidAskManager, BidAskQuote
@@ -331,6 +331,7 @@ bot_status: Dict[str, Any] = {
     "early_close_losses": 0,
     "early_close_saves": 0,
     "flatten_mode": False,
+    "session_start_time": None,  # Track when bot started for session runtime display
 }
 
 
@@ -801,6 +802,11 @@ def check_broker_connection() -> None:
                 idle_msg = "Daily maintenance window (4:45 PM - 6:00 PM ET)"
                 reopen_msg = "Will auto-reconnect at 6:00 PM ET"
             
+            # Display session summary before going idle (like Ctrl+C)
+            symbol = CONFIG.get("instrument")
+            if symbol and symbol in state:
+                log_session_summary(symbol, logout_success=True, show_logout_status=False, show_bot_art=False)
+            
             logger.critical(SEPARATOR_LINE)
             logger.critical(f"[IDLE MODE] {idle_type} - GOING IDLE")
             logger.critical(f"Time: {eastern_time.strftime('%H:%M:%S %Z')}")
@@ -819,9 +825,16 @@ def check_broker_connection() -> None:
             
             bot_status["maintenance_idle"] = True
             bot_status["idle_type"] = idle_type  # Store for status message
-            bot_status["trading_enabled"] = False
+            # CRITICAL: Keep trading_enabled = True so event loop keeps running
+            # bot_status["trading_enabled"] = False  # REMOVED - bot stays running
             bot_status["last_idle_message_time"] = eastern_time
-            logger.critical(f"  Bot stays ON but IDLE - checking periodically for market reopen...")
+            bot_status["idle_heartbeat_count"] = 0  # Initialize heartbeat counter
+            
+            # Display idle status with heartbeat
+            logger.info("")
+            logger.info("\033[93m⏸  Market Maintenance - Waiting for market data...\033[0m")  # Yellow
+            logger.info("")
+            logger.critical(f"  Bot stays ON and IDLE - checking periodically for market reopen...")
             logger.critical(f"  Press Ctrl+C to stop bot")
             return  # Skip broker health check since we just disconnected
     
@@ -835,9 +848,20 @@ def check_broker_connection() -> None:
         last_msg_time = bot_status.get("last_idle_message_time")
         idle_type = bot_status.get("idle_type", "MAINTENANCE")
         
-        # Show status message every 5 minutes
-        if last_msg_time is None or (eastern_time - last_msg_time).total_seconds() >= IDLE_STATUS_MESSAGE_INTERVAL:
-            logger.info(f"[IDLE] {idle_type} IN PROGRESS - Bot idle, will resume when market reopens")
+        # Increment heartbeat counter for animated dots
+        heartbeat_count = bot_status.get("idle_heartbeat_count", 0)
+        heartbeat_count += 1
+        bot_status["idle_heartbeat_count"] = heartbeat_count
+        
+        # Animated dots (cycles through . .. ... every 3 heartbeats)
+        dots = "." * ((heartbeat_count % 3) + 1)
+        
+        # Heartbeat symbol (alternates between ♥ and ♡)
+        heartbeat = "♥" if heartbeat_count % 2 == 0 else "♡"
+        
+        # Show status message every 30 seconds with animated dots
+        if last_msg_time is None or (eastern_time - last_msg_time).total_seconds() >= 30:
+            logger.info(f"\033[93m{heartbeat} Market {idle_type} - Waiting for market data{dots}\033[0m")
             bot_status["last_idle_message_time"] = eastern_time
         return  # Skip broker health check during idle period
     
@@ -1735,30 +1759,64 @@ def update_1min_bar(symbol: str, price: float, volume: int, dt: datetime) -> Non
                     state[symbol]["market_condition"] = "UNKNOWN"
             
             # Display market snapshot on every 1-minute bar close
-            vwap_data = state[symbol].get("vwap", {})
-            market_cond = state[symbol].get("market_condition", "UNKNOWN")
-            current_regime = state[symbol].get("current_regime", "NORMAL")
-            
-            # Get current bid/ask from bid_ask_manager if available
-            quote_info = ""
-            if bid_ask_manager is not None:
-                quote = bid_ask_manager.get_current_quote(symbol)
-                if quote:
-                    spread = quote.ask_price - quote.bid_price
-                    quote_info = f" | Bid: ${quote.bid_price:.2f} x {quote.bid_size} | Ask: ${quote.ask_price:.2f} x {quote.ask_size} | Spread: ${spread:.2f}"
-            
-            # Get latest bar volume
-            vol_info = f" | Vol: {current_bar['volume']}"
-            
-            # Get VWAP if available
-            vwap_info = ""
-            if vwap_data and isinstance(vwap_data, dict):
-                vwap_val = vwap_data.get('vwap', 0)
-                std_dev = vwap_data.get('std_dev', 0)
-                if vwap_val > 0:
-                    vwap_info = f" | VWAP: ${vwap_val:.2f} ± ${std_dev:.2f}"
-            
-            logger.info(f"📊 Market: {symbol} @ ${current_bar['close']:.2f}{quote_info}{vol_info} | Bars: {bar_count}{vwap_info} | Condition: {market_cond} | Regime: {current_regime}")
+            # Only display if bot has been running for at least 1 minute to avoid confusion
+            # with rapid bar creation during startup
+            if bot_status.get("session_start_time"):
+                time_since_start = (get_current_time() - bot_status["session_start_time"]).total_seconds()
+                if time_since_start < 60:
+                    # Skip display for first minute of runtime
+                    pass
+                else:
+                    vwap_data = state[symbol].get("vwap", {})
+                    market_cond = state[symbol].get("market_condition", "UNKNOWN")
+                    current_regime = state[symbol].get("current_regime", "NORMAL")
+                    
+                    # Get current bid/ask from bid_ask_manager if available
+                    quote_info = ""
+                    if bid_ask_manager is not None:
+                        quote = bid_ask_manager.get_current_quote(symbol)
+                        if quote:
+                            spread = quote.ask_price - quote.bid_price
+                            quote_info = f" | Bid: ${quote.bid_price:.2f} x {quote.bid_size} | Ask: ${quote.ask_price:.2f} x {quote.ask_size} | Spread: ${spread:.2f}"
+                    
+                    # Get latest bar volume
+                    vol_info = f" | Vol: {current_bar['volume']}"
+                    
+                    # Get VWAP if available
+                    vwap_info = ""
+                    if vwap_data and isinstance(vwap_data, dict):
+                        vwap_val = vwap_data.get('vwap', 0)
+                        std_dev = vwap_data.get('std_dev', 0)
+                        if vwap_val > 0:
+                            vwap_info = f" | VWAP: ${vwap_val:.2f} ± ${std_dev:.2f}"
+                    
+                    logger.info(f"📊 Market: {symbol} @ ${current_bar['close']:.2f}{quote_info}{vol_info} | Bars: {bar_count}{vwap_info} | Condition: {market_cond} | Regime: {current_regime}")
+            else:
+                # Fallback if session_start_time not set (shouldn't happen)
+                vwap_data = state[symbol].get("vwap", {})
+                market_cond = state[symbol].get("market_condition", "UNKNOWN")
+                current_regime = state[symbol].get("current_regime", "NORMAL")
+                
+                # Get current bid/ask from bid_ask_manager if available
+                quote_info = ""
+                if bid_ask_manager is not None:
+                    quote = bid_ask_manager.get_current_quote(symbol)
+                    if quote:
+                        spread = quote.ask_price - quote.bid_price
+                        quote_info = f" | Bid: ${quote.bid_price:.2f} x {quote.bid_size} | Ask: ${quote.ask_price:.2f} x {quote.ask_size} | Spread: ${spread:.2f}"
+                
+                # Get latest bar volume
+                vol_info = f" | Vol: {current_bar['volume']}"
+                
+                # Get VWAP if available
+                vwap_info = ""
+                if vwap_data and isinstance(vwap_data, dict):
+                    vwap_val = vwap_data.get('vwap', 0)
+                    std_dev = vwap_data.get('std_dev', 0)
+                    if vwap_val > 0:
+                        vwap_info = f" | VWAP: ${vwap_val:.2f} ± ${std_dev:.2f}"
+                
+                logger.info(f"📊 Market: {symbol} @ ${current_bar['close']:.2f}{quote_info}{vol_info} | Bars: {bar_count}{vwap_info} | Condition: {market_cond} | Regime: {current_regime}")
             
             # Update current regime after bar completion
             update_current_regime(symbol)
@@ -3115,8 +3173,28 @@ def calculate_position_size(symbol: str, side: str, entry_price: float, rl_confi
     - Position size is ALWAYS fixed at this value (no dynamic scaling)
     - Risk-based calculation ensures we don't exceed risk tolerance
     
+    STOP LOSS CALCULATION:
+    - Uses user's "Max Loss Per Trade" setting from GUI (in dollars)
+    - This represents the TOTAL TRADE RISK, not per-contract risk
+    - Stop distance is calculated to ensure total risk equals user's setting
+    - Automatically adapts to different symbols (ES, NQ, CL, GC, etc.)
+    - Correctly handles symbol-specific tick sizes and tick values
+    
+    EXAMPLES (same $700 max loss, different symbols):
+    - ES (tick_value=$12.50): Stop = 56 ticks, Total Risk = $700
+    - NQ (tick_value=$5.00): Stop = 140 ticks, Total Risk = $700
+    - CL (tick_value=$10.00): Stop = 70 ticks, Total Risk = $700
+    
+    MULTI-CONTRACT HANDLING:
+    - All contracts use the SAME stop distance (same number of ticks)
+    - Stop is NOT multiplied by contract count
+    - With 3 contracts and $700 max loss on ES:
+      * Stop distance = 56 ticks for ALL contracts
+      * Total risk = $700 (NOT $700 × 3 = $2100)
+    - This ensures risk scales correctly regardless of contract count
+    
     Args:
-        symbol: Instrument symbol
+        symbol: Instrument symbol (ES, NQ, CL, GC, etc.)
         side: 'long' or 'short'
         entry_price: Expected entry price
         rl_confidence: Optional RL confidence (for tracking, not used for position sizing)
@@ -3128,15 +3206,21 @@ def calculate_position_size(symbol: str, side: str, entry_price: float, rl_confi
     equity = get_account_equity()
     
     # Get max stop loss from GUI (user sets in dollars, e.g., $300)
-    max_stop_dollars = CONFIG["risk_per_trade"]
+    # This is the "Max Loss Per Trade" setting configured by the user in the launcher
+    max_stop_dollars = CONFIG.get("max_stop_loss_dollars", DEFAULT_MAX_STOP_LOSS_DOLLARS)
     logger.info(f"Account equity: ${equity:.2f}, Max stop loss per trade: ${max_stop_dollars:.2f}")
     
     # Determine stop price using user's max stop loss setting
     vwap_bands = state[symbol]["vwap_bands"]
     vwap = state[symbol]["vwap"]
     
-    # Get symbol-specific tick values from SymbolSpec if available, otherwise use config defaults
+    # CRITICAL: Get symbol-specific tick values from SymbolSpec
     # This ensures correct stop loss placement for ALL symbols (ES, NQ, CL, GC, etc.)
+    # Each symbol has different tick sizes and values:
+    # - ES: tick_size=0.25, tick_value=$12.50 (4 ticks per point, $50 per point)
+    # - NQ: tick_size=0.25, tick_value=$5.00 (4 ticks per point, $20 per point)
+    # - CL: tick_size=0.01, tick_value=$10.00 (100 ticks per point, $1000 per point)
+    # - GC: tick_size=0.10, tick_value=$10.00 (10 ticks per point, $100 per point)
     from symbol_specs import SYMBOL_SPECS
     if symbol in SYMBOL_SPECS:
         spec = SYMBOL_SPECS[symbol]
@@ -3147,8 +3231,18 @@ def calculate_position_size(symbol: str, side: str, entry_price: float, rl_confi
         tick_size = CONFIG.get("tick_size", 0.25)
         tick_value = CONFIG.get("tick_value", 12.50)
     
-    # Calculate stop distance based on user's max stop loss in dollars
+    # STEP 1: Convert user's max loss (dollars) to ticks
+    # Formula: max_loss_dollars / tick_value = number of ticks
+    # Example (ES): $700 / $12.50 = 56 ticks
+    # Example (NQ): $700 / $5.00 = 140 ticks
+    # Example (CL): $1000 / $10.00 = 100 ticks
     max_stop_ticks = max_stop_dollars / tick_value  # Convert dollars to ticks
+    
+    # STEP 2: Convert ticks to price distance
+    # Formula: ticks * tick_size = price distance
+    # Example (ES): 56 ticks * 0.25 = 14 points
+    # Example (NQ): 140 ticks * 0.25 = 35 points
+    # Example (CL): 100 ticks * 0.01 = 1.00 points
     stop_distance = max_stop_ticks * tick_size  # Convert ticks to price distance
     
     # Detect current regime for entry (for logging purposes)
@@ -3162,22 +3256,29 @@ def calculate_position_size(symbol: str, side: str, entry_price: float, rl_confi
     else:
         logger.info(f"Fixed stop: {max_stop_ticks:.0f} ticks (${max_stop_dollars:.2f})")
     
-    # Calculate stop price based on entry side
+    # STEP 3: Calculate stop price based on entry side
+    # For LONG positions: stop is BELOW entry (entry - stop_distance)
+    # For SHORT positions: stop is ABOVE entry (entry + stop_distance)
     if side == "long":
         stop_price = entry_price - stop_distance
     else:  # short
         stop_price = entry_price + stop_distance
     
+    # Round to nearest valid tick (ensures broker accepts the price)
     stop_price = round_to_tick(stop_price)
     
-    # Calculate stop distance in ticks
+    # STEP 4: Verify the risk calculation
+    # Recalculate actual stop distance after rounding (may differ slightly)
     stop_distance = abs(entry_price - stop_price)
     ticks_at_risk = stop_distance / tick_size
     
-    # Calculate risk per contract
+    # Calculate actual risk per contract in dollars
+    # This should equal max_stop_dollars (or very close due to rounding)
     risk_per_contract = ticks_at_risk * tick_value
     
-    # Use fixed contracts from GUI (no dynamic scaling)
+    # STEP 5: Use fixed contracts from GUI (no dynamic scaling)
+    # User explicitly sets the contract count in the launcher
+    # The bot respects this setting regardless of account size or risk
     user_max_contracts = CONFIG["max_contracts"]
     contracts = user_max_contracts
     
@@ -3187,6 +3288,32 @@ def calculate_position_size(symbol: str, side: str, entry_price: float, rl_confi
         logger.warning(f"Position size is zero - check GUI settings")
         return 0, stop_price
     
+    # TOTAL RISK CALCULATION EXPLANATION:
+    # ====================================
+    # The stop distance (in ticks) is the SAME for all contracts in the position.
+    # This is NOT a per-contract stop - all contracts share the same stop price.
+    # 
+    # The max_loss_per_trade setting defines the TOTAL POSITION RISK.
+    # 
+    # HOW IT WORKS:
+    # - Calculate stop distance: max_loss_per_trade / tick_value = ticks
+    # - ALL contracts use this SAME tick distance
+    # - Total risk = ticks × tick_value = max_loss_per_trade (original setting)
+    # 
+    # Example with ES (tick_value=$12.50):
+    # - User sets max_loss_per_trade = $700
+    # - Stop distance = $700 / $12.50 = 56 ticks
+    # 
+    # Scenario 1: 1 contract
+    # - Stop: 56 ticks
+    # - Total risk: 56 ticks × $12.50 = $700 ✓
+    # 
+    # Scenario 2: 3 contracts  
+    # - Stop: 56 ticks (SAME as 1 contract, not 56×3!)
+    # - Total risk: 56 ticks × $12.50 = $700 ✓ (NOT $700×3 = $2100)
+    # 
+    # This ensures the user's risk tolerance is respected exactly as configured,
+    # regardless of how many contracts are traded.
     
     logger.info(f"Position sizing: {contracts} contract(s)")
     logger.info(f"  Entry: ${entry_price:.2f}, Stop: ${stop_price:.2f}")
@@ -5495,7 +5622,7 @@ def calculate_pnl(position: Dict[str, Any], exit_price: float) -> Tuple[float, f
     gross_pnl = ticks * tick_value * contracts
     
     # CONFIGURABLE CAP: Maximum loss (protects against slippage/gaps)
-    max_stop_loss = CONFIG.get("max_stop_loss_dollars", 200.0)
+    max_stop_loss = CONFIG.get("max_stop_loss_dollars", DEFAULT_MAX_STOP_LOSS_DOLLARS)
     if gross_pnl < -max_stop_loss:
         logger.warning(f"⚠️ Loss capped: ${gross_pnl:.2f} -> $-{max_stop_loss:.2f} (max loss protection)")
         gross_pnl = -max_stop_loss
@@ -6847,7 +6974,7 @@ def format_risk_metrics() -> None:
         logger.info(f"Trailing Stop Success Rate: {trailing_success_rate:.1f}%")
 
 
-def log_session_summary(symbol: str, logout_success: bool = True) -> None:
+def log_session_summary(symbol: str, logout_success: bool = True, show_logout_status: bool = True, show_bot_art: bool = True) -> None:
     """
     Log comprehensive session summary at end of trading day.
     Coordinates summary formatting through helper functions.
@@ -6856,23 +6983,30 @@ def log_session_summary(symbol: str, logout_success: bool = True) -> None:
     Args:
         symbol: Instrument symbol
         logout_success: Whether cleanup/logout was successful
+        show_logout_status: Whether to show the logout status message (False for maintenance mode)
+        show_bot_art: Whether to show rainbow bot art (False for maintenance mode)
     """
     stats = state[symbol]["session_stats"]
     
     # Display rainbow thank you message on the right side if available
-    if get_rainbow_bot_art_with_message:
+    # Only show bot art when explicitly requested (not during maintenance)
+    if get_rainbow_bot_art_with_message and show_bot_art:
         bot_lines = get_rainbow_bot_art_with_message()
         bot_line_idx = 0
+        
+        # Save original logger.info BEFORE defining log_with_bot
+        original_info = logger.info
         
         def log_with_bot(message):
             """Helper to log a line with bot art on the right"""
             nonlocal bot_line_idx
             if bot_line_idx < len(bot_lines):
                 # Pad message to 60 characters and add bot art
-                logger.info(f"{message:<60}    {bot_lines[bot_line_idx]}")
+                # CRITICAL: Use original_info to avoid recursion
+                original_info(f"{message:<60}    {bot_lines[bot_line_idx]}")
                 bot_line_idx += 1
             else:
-                logger.info(message)
+                original_info(message)
         
         # Log session summary with bot on the right
         log_with_bot(SEPARATOR_LINE)
@@ -6880,9 +7014,17 @@ def log_session_summary(symbol: str, logout_success: bool = True) -> None:
         log_with_bot(SEPARATOR_LINE)
         log_with_bot(f"Trading Day: {state[symbol]['trading_day']}")
         
+        # Calculate and display session runtime
+        if bot_status.get("session_start_time"):
+            tz = pytz.timezone(CONFIG.get("timezone", "US/Eastern"))
+            session_end = datetime.now(tz)
+            runtime = session_end - bot_status["session_start_time"]
+            hours, remainder = divmod(int(runtime.total_seconds()), 3600)
+            minutes, seconds = divmod(remainder, 60)
+            log_with_bot(f"Session Runtime: {hours}h {minutes}m {seconds}s")
+        
         # The helper functions will still call logger.info directly,
         # so we temporarily patch logger.info to use our wrapper
-        original_info = logger.info
         logger.info = log_with_bot
         
         try:
@@ -6915,6 +7057,15 @@ def log_session_summary(symbol: str, logout_success: bool = True) -> None:
         logger.info(SEPARATOR_LINE)
         logger.info(f"Trading Day: {state[symbol]['trading_day']}")
         
+        # Calculate and display session runtime
+        if bot_status.get("session_start_time"):
+            tz = pytz.timezone(CONFIG.get("timezone", "US/Eastern"))
+            session_end = datetime.now(tz)
+            runtime = session_end - bot_status["session_start_time"]
+            hours, remainder = divmod(int(runtime.total_seconds()), 3600)
+            minutes, seconds = divmod(remainder, 60)
+            logger.info(f"Session Runtime: {hours}h {minutes}m {seconds}s")
+        
         # Format trade statistics
         format_trade_statistics(stats)
         
@@ -6929,13 +7080,14 @@ def log_session_summary(symbol: str, logout_success: bool = True) -> None:
         
         logger.info(SEPARATOR_LINE)
     
-    # Log logout status right after session summary
-    logger.info("")
-    if logout_success:
-        logger.info("\033[92m✓ Logged out successfully\033[0m")  # Green
-    else:
-        logger.info("\033[91m✗ Logout completed with errors\033[0m")  # Red
-    logger.info("")
+    # Log logout status right after session summary (only if show_logout_status is True)
+    if show_logout_status:
+        logger.info("")
+        if logout_success:
+            logger.info("\033[92m✓ Logged out successfully\033[0m")  # Green
+        else:
+            logger.info("\033[91m✗ Logout completed with errors\033[0m")  # Red
+        logger.info("")
     
     # Send daily summary alert
     try:
@@ -7372,6 +7524,9 @@ def main(symbol_override: str = None) -> None:
     """
     global event_loop, timer_manager, bid_ask_manager, cloud_api_client, rl_brain
     
+    # Track session start time for runtime display
+    bot_status["session_start_time"] = datetime.now(pytz.timezone(CONFIG.get("timezone", "US/Eastern")))
+    
     # CRITICAL: Validate license FIRST, before any initialization
     # This is the "login screen" - fail fast if license invalid or session conflict
     validate_license_at_startup()
@@ -7397,15 +7552,7 @@ def main(symbol_override: str = None) -> None:
     logger.info("📋 Trading Configuration:")
     logger.info(f"  • Max Contracts: {CONFIG['max_contracts']}")
     logger.info(f"  • Max Trades/Day: {CONFIG['max_trades_per_day']}")
-    
-    # Ensure risk per trade is displayed correctly even if env var was missing/zero
-    risk_display = CONFIG['risk_per_trade']
-    if risk_display < 1.0: # Likely a percentage or zero
-         # Fallback to default $300 if something went wrong with env var
-         risk_display = 300.0
-         CONFIG['risk_per_trade'] = 300.0 # Fix it in config too
-         
-    logger.info(f"  • Risk Per Trade: ${risk_display:.0f}")
+    logger.info(f"  • Max Loss Per Trade: ${CONFIG.get('max_stop_loss_dollars', DEFAULT_MAX_STOP_LOSS_DOLLARS):.0f}")
     logger.info(f"  • Daily Loss Limit: ${CONFIG['daily_loss_limit']}")
     logger.info(f"  • Entry Window: {CONFIG['entry_start_time']} - {CONFIG['entry_end_time']} ET")
     logger.info(f"  • Force Close: {CONFIG['forced_flatten_time']} ET")

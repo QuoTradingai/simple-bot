@@ -1351,10 +1351,13 @@ class QuoTradingLauncher:
             bd=0,
             highlightthickness=2,
             highlightbackground=self.colors['border'],
-            highlightcolor=self.colors['success']
+            highlightcolor=self.colors['success'],
+            state='readonly'  # Make account size field readonly - shows selected account balance
         )
         self.account_entry.pack(fill=tk.X, ipady=2, padx=2)
-        self.account_entry.insert(0, self.config.get("account_size", "10000"))
+        # Use textvariable for readonly field
+        self.account_var = tk.StringVar(value=self.config.get("account_size", "10000"))
+        self.account_entry.configure(textvariable=self.account_var)
         
         # Daily Loss Limit
         loss_frame = tk.Frame(settings_row, bg=self.colors['card'])
@@ -1412,6 +1415,7 @@ class QuoTradingLauncher:
             highlightcolor=self.colors['success']
         )
         self.max_loss_per_trade_entry.pack(fill=tk.X, ipady=2, padx=2)
+        # Default value matches DEFAULT_MAX_STOP_LOSS_DOLLARS in src/config.py
         self.max_loss_per_trade_entry.insert(0, self.config.get("max_loss_per_trade", "200"))
         
         # Info label for max loss per trade
@@ -1655,8 +1659,7 @@ class QuoTradingLauncher:
             if selected_account:
                 # Update account size field with selected account's balance
                 balance = selected_account['balance']
-                self.account_entry.delete(0, tk.END)
-                self.account_entry.insert(0, str(int(balance)))
+                self.account_var.set(str(int(balance)))
                 
                 # Update info label
                 info_text = f"✓ {selected_account['id']} | Balance: ${selected_account['balance']:,.2f}"
@@ -1857,7 +1860,7 @@ class QuoTradingLauncher:
         """
         # Get account size from user input or selected account
         try:
-            account_size = float(self.account_entry.get() or "10000")
+            account_size = float(self.account_var.get() or "10000")
         except ValueError:
             messagebox.showwarning(
                 "Invalid Account Size",
@@ -1953,7 +1956,7 @@ class QuoTradingLauncher:
         
         # Validate account size
         try:
-            account_size = float(self.account_entry.get())
+            account_size = float(self.account_var.get())
             if account_size <= 0:
                 raise ValueError()
         except ValueError:
@@ -1984,6 +1987,16 @@ class QuoTradingLauncher:
             messagebox.showerror(
                 "Invalid Max Loss Per Trade",
                 "Please enter a valid numeric value greater than 0 for max loss per trade."
+            )
+            return
+        
+        # Validate that daily loss limit is at least as large as max loss per trade
+        if loss_limit < max_loss_per_trade:
+            messagebox.showerror(
+                "Invalid Risk Settings",
+                f"Daily Loss Limit (${loss_limit:.0f}) must be greater than or equal to Max Loss Per Trade (${max_loss_per_trade:.0f}).\n\n"
+                f"Your daily limit should allow for at least one full trade at your max loss per trade setting.\n\n"
+                f"Please increase Daily Loss Limit to at least ${max_loss_per_trade:.0f} or decrease Max Loss Per Trade."
             )
             return
         
@@ -2120,12 +2133,14 @@ class QuoTradingLauncher:
         max_trades = self.trades_var.get()
         confidence = self.confidence_var.get()
         shadow_mode = "ON" if self.shadow_mode_var.get() else "OFF"
+        max_loss_per_trade = self.config.get("max_loss_per_trade", 200)
         
         settings_text = f"""
 Broker: {broker}
 Account: {account}
 Symbols: {symbols_str}
 Contracts Per Trade: {contracts}
+Max Loss Per Trade: ${max_loss_per_trade}
 Daily Loss Limit: ${loss_limit}
 Max Trades/Day: {max_trades}
 Confidence Threshold: {confidence}%
