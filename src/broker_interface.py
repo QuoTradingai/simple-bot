@@ -20,11 +20,13 @@ class _SuppressProjectXLoggers(logging.Filter):
 # Install filter on root logger to catch ALL project_x_py loggers
 logging.getLogger().addFilter(_SuppressProjectXLoggers())
 
-# Also suppress the parent logger directly
+# Also suppress the parent logger directly with extreme prejudice
 _px_logger = logging.getLogger('project_x_py')
-_px_logger.setLevel(logging.CRITICAL)
+_px_logger.setLevel(logging.CRITICAL + 1)  # Beyond CRITICAL to block everything
 _px_logger.propagate = False
 _px_logger.handlers = []
+_px_logger.addHandler(logging.NullHandler())  # Add null handler to absorb any logs
+_px_logger.disabled = True  # Completely disable the logger
 
 # Import broker SDKs (optional dependencies)
 # NOTE: Moved imports inside methods to avoid initialization errors at module import time
@@ -272,21 +274,25 @@ class BrokerSDKImplementation(BrokerInterface):
         # Helper to forcefully suppress JSON spam loggers
         def _suppress_spam_loggers():
             import logging
-            # Suppress root project_x_py logger
+            # Suppress root project_x_py logger with extreme prejudice
             px_logger = logging.getLogger('project_x_py')
-            px_logger.setLevel(logging.CRITICAL)
+            px_logger.setLevel(logging.CRITICAL + 1)  # Beyond CRITICAL to block everything
             px_logger.propagate = False
             px_logger.handlers = []
+            px_logger.addHandler(logging.NullHandler())  # Add null handler to absorb any logs
+            px_logger.disabled = True  # Completely disable the logger
             
             # Iterate over all existing loggers and suppress any from project_x_py
             # This catches child loggers like project_x_py.statistics.bounded_statistics
             for name in list(logging.Logger.manager.loggerDict.keys()):
                 if name.startswith('project_x_py'):
                     try:
-                        logger = logging.getLogger(name)
-                        logger.setLevel(logging.CRITICAL)
-                        logger.propagate = False
-                        logger.handlers = []
+                        child_logger = logging.getLogger(name)
+                        child_logger.setLevel(logging.CRITICAL + 1)  # Beyond CRITICAL
+                        child_logger.propagate = False
+                        child_logger.handlers = []
+                        child_logger.addHandler(logging.NullHandler())  # Add null handler
+                        child_logger.disabled = True  # Completely disable
                     except Exception:
                         pass
 

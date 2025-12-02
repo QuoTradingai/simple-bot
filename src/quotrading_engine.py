@@ -58,11 +58,13 @@ class _SuppressProjectXLoggers(logging.Filter):
 
 logging.getLogger().addFilter(_SuppressProjectXLoggers())
 
-# Also suppress the parent logger directly
+# Also suppress the parent logger directly with extreme prejudice
 _project_x_root = logging.getLogger('project_x_py')
-_project_x_root.setLevel(logging.CRITICAL)
+_project_x_root.setLevel(logging.CRITICAL + 1)  # Beyond CRITICAL to block everything
 _project_x_root.propagate = False
 _project_x_root.handlers = []
+_project_x_root.addHandler(logging.NullHandler())  # Add null handler to absorb any logs
+_project_x_root.disabled = True  # Completely disable the logger
 
 from datetime import datetime, timedelta
 from datetime import time as datetime_time  # Alias to avoid conflict with time.time()
@@ -337,11 +339,13 @@ def setup_logging() -> logging.Logger:
     # Install filter on root logger FIRST
     logging.getLogger().addFilter(SuppressProjectXLoggers())
     
-    # Also suppress the parent logger directly
+    # Also suppress the parent logger directly with extreme prejudice
     project_x_root = logging.getLogger('project_x_py')
-    project_x_root.setLevel(logging.CRITICAL)
+    project_x_root.setLevel(logging.CRITICAL + 1)  # Beyond CRITICAL to block everything
     project_x_root.propagate = False
     project_x_root.handlers = []
+    project_x_root.addHandler(logging.NullHandler())  # Add null handler to absorb any logs
+    project_x_root.disabled = True  # Completely disable the logger
     
     logging.basicConfig(
         level=logging.INFO,
@@ -358,9 +362,11 @@ def setup_logging() -> logging.Logger:
     
     # Suppress ALL project_x_py loggers by disabling propagation at root level
     project_x_logger = logging.getLogger('project_x_py')
-    project_x_logger.setLevel(logging.CRITICAL)  # Only show critical errors
+    project_x_logger.setLevel(logging.CRITICAL + 1)  # Beyond CRITICAL to block everything
     project_x_logger.propagate = False  # Don't propagate to root logger
     project_x_logger.handlers = []  # Clear all handlers to prevent JSON output
+    project_x_logger.addHandler(logging.NullHandler())  # Add null handler to absorb any logs
+    project_x_logger.disabled = True  # Completely disable the logger
     
     logging.getLogger('signalrcore').setLevel(logging.ERROR)
     
@@ -377,9 +383,11 @@ def setup_logging() -> logging.Logger:
                         'project_x_py.data_manager', 
                         'project_x_py.risk_manager']:
         child_logger = logging.getLogger(logger_name)
-        child_logger.setLevel(logging.CRITICAL)
+        child_logger.setLevel(logging.CRITICAL + 1)  # Beyond CRITICAL
         child_logger.propagate = False
         child_logger.handlers = []  # Clear all handlers
+        child_logger.addHandler(logging.NullHandler())  # Add null handler
+        child_logger.disabled = True  # Completely disable
     
     # 2. Initialization & Setup (RL brain, bid/ask manager, event loop, broker SDK details)
     logging.getLogger('signal_confidence').setLevel(logging.WARNING)  # RL brain initialization
