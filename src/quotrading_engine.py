@@ -1632,6 +1632,7 @@ def update_1min_bar(symbol: str, price: float, volume: int, dt: datetime) -> Non
                 position_qty = position_dict.get("quantity", 0) if isinstance(position_dict, dict) else 0
                 position_side = position_dict.get("side", "FLAT") if isinstance(position_dict, dict) and position_qty > 0 else "FLAT"
                 market_cond = state[symbol].get("market_condition", "UNKNOWN")
+                current_regime = state[symbol].get("current_regime", "NORMAL")
                 
                 # Build professional status message
                 status_parts = []
@@ -1645,6 +1646,7 @@ def update_1min_bar(symbol: str, price: float, volume: int, dt: datetime) -> Non
                         status_parts.append(f"VWAP: ${vwap_val:.2f} ± ${std_dev:.2f}")
                 
                 status_parts.append(f"Condition: {market_cond}")
+                status_parts.append(f"Regime: {current_regime}")
                 status_parts.append(f"Position: {position_qty} contracts {position_side}")
                 
                 logger.info(" | ".join(status_parts))
@@ -4856,13 +4858,11 @@ def update_current_regime(symbol: str) -> None:
     detected_regime = regime_detector.detect_regime(bars, current_atr, CONFIG.get("atr_period", 14))
     state[symbol]["current_regime"] = detected_regime.name
     
-    # Enhanced logging for backtesting - log regime changes explicitly
-    if is_backtest_mode() and prev_regime != detected_regime.name:
-        logger.info(f"[REGIME CHANGE] {prev_regime} → {detected_regime.name} (ATR: {current_atr:.2f})")
-        logger.info(f"  Stop Mult: {detected_regime.stop_mult:.2f}x | Trailing: {detected_regime.trailing_mult:.2f}x")
-        logger.info(f"  Timeouts: Sideways={detected_regime.sideways_timeout}min, Underwater={detected_regime.underwater_timeout}min")
+    # Log regime changes for customers (not just backtest)
+    if prev_regime != detected_regime.name:
+        logger.info(f"📊 Market Regime Changed: {prev_regime} → {detected_regime.name}")
     else:
-        logger.debug(f"[REGIME] Updated to {detected_regime.name} (ATR: {current_atr:.2f})")
+        pass  # Silent - no regime change
 
 
 def check_regime_change(symbol: str, current_price: float) -> None:
@@ -4984,37 +4984,24 @@ def check_regime_change(symbol: str, current_price: float) -> None:
             original_stop = position.get("original_stop_price", position["stop_price"])
             initial_stop_distance_ticks = abs(entry_price - original_stop) / tick_size
             
+            # Professional regime change notification
             logger.info("=" * 60)
-            logger.info(f"REGIME CHANGE - PARAMETERS UPDATED")
+            logger.info(f"⚠️  REGIME CHANGE: {entry_regime_name} → {current_regime.name}")
             logger.info("=" * 60)
-            logger.info(f"  Transition: {entry_regime_name} ΓåÆ {current_regime.name}")
-            logger.info(f"  Timestamp: {get_current_time().strftime('%H:%M:%S')}")
-            logger.info(f"")
-            logger.info(f"  Stop Management:")
-            logger.info(f"    Stop Multiplier: {old_regime.stop_mult:.2f}x ΓåÆ {current_regime.stop_mult:.2f}x")
-            logger.info(f"    Old Stop: ${old_stop:.2f} ΓåÆ New Stop: ${new_stop_price:.2f}")
-            logger.info(f"    Initial Risk: {initial_stop_distance_ticks:.1f} ticks (adapts to actual risk)")
-            logger.info(f"")
-            logger.info(f"  Breakeven Management:")
-            logger.info(f"    BE Multiplier: {old_regime.breakeven_mult:.2f}x ΓåÆ {current_regime.breakeven_mult:.2f}x")
-            if not position.get("breakeven_active"):
-                old_be_threshold = initial_stop_distance_ticks * old_regime.breakeven_mult
-                new_be_threshold = initial_stop_distance_ticks * current_regime.breakeven_mult
-                logger.info(f"    BE Threshold: {old_be_threshold:.1f} ΓåÆ {new_be_threshold:.1f} ticks (1:1 risk-reward)")
-            else:
-                logger.info(f"    Breakeven already active (stop at ${position['stop_price']:.2f})")
-            logger.info(f"")
-            logger.info(f"  Trailing Stop:")
-            logger.info(f"    Trailing Mult: {old_regime.trailing_mult:.2f}x ΓåÆ {current_regime.trailing_mult:.2f}x")
-            base_trailing_ticks = CONFIG.get("trailing_stop_distance_ticks", 8)
-            old_trailing_distance = base_trailing_ticks * old_regime.trailing_mult
-            new_trailing_distance = base_trailing_ticks * current_regime.trailing_mult
-            logger.info(f"    Trailing Distance: {old_trailing_distance:.1f} ΓåÆ {new_trailing_distance:.1f} ticks")
-            logger.info(f"")
-            logger.info(f"  Timeout Protection:")
-            logger.info(f"    Sideways Timeout: {old_regime.sideways_timeout}min ΓåÆ {current_regime.sideways_timeout}min")
-            logger.info(f"    Underwater Timeout: {old_regime.underwater_timeout}min ΓåÆ {current_regime.underwater_timeout}min")
-            logger.info(f"    (Timeout clocks reset from regime change time)")
+            logger.info(f"  Time: {get_current_time().strftime('%H:%M:%S')}")
+            logger.info(f"  Stop Adjusted: ${old_stop:.2f} → ${new_stop_price:.2f}")
+            
+            # Show what changed in simple terms
+            if current_regime.stop_mult < old_regime.stop_mult:
+                logger.info(f"  Action: Tighter stops ({current_regime.stop_mult:.2f}x vs {old_regime.stop_mult:.2f}x)")
+            elif current_regime.stop_mult > old_regime.stop_mult:
+                logger.info(f"  Action: Wider stops ({current_regime.stop_mult:.2f}x vs {old_regime.stop_mult:.2f}x)")
+            
+            if current_regime.trailing_mult != old_regime.trailing_mult:
+                base_trailing_ticks = CONFIG.get("trailing_stop_distance_ticks", 8)
+                new_trailing_distance = base_trailing_ticks * current_regime.trailing_mult
+                logger.info(f"  Trailing: {new_trailing_distance:.1f} ticks ({current_regime.trailing_mult:.2f}x)")
+            
             logger.info("=" * 60)
         else:
             logger.error("Failed to update stop after regime change")
@@ -5022,34 +5009,15 @@ def check_regime_change(symbol: str, current_price: float) -> None:
         # Stop would move backward - log but don't update
         old_regime = REGIME_DEFINITIONS[entry_regime_name]
         logger.info("=" * 60)
-        logger.info(f"REGIME CHANGE DETECTED - STOP NOT ADJUSTED")
+        logger.info(f"⚠️  REGIME CHANGE: {entry_regime_name} → {current_regime.name}")
         logger.info("=" * 60)
-        logger.info(f"  Transition: {entry_regime_name} ΓåÆ {current_regime.name}")
-        logger.info(f"  Stop would move backward: ${current_stop:.2f} ΓåÆ ${new_stop_price:.2f}")
-        logger.info(f"  Stop remains at: ${current_stop:.2f}")
-        logger.info(f"")
-        logger.info(f"  Other parameters still updated:")
-        logger.info(f"    Breakeven Mult: {old_regime.breakeven_mult:.2f}x ΓåÆ {current_regime.breakeven_mult:.2f}x")
-        logger.info(f"    Trailing Mult: {old_regime.trailing_mult:.2f}x ΓåÆ {current_regime.trailing_mult:.2f}x")
-        logger.info(f"    Timeouts: Sideways {old_regime.sideways_timeout}ΓåÆ{current_regime.sideways_timeout}min, "
-                   f"Underwater {old_regime.underwater_timeout}ΓåÆ{current_regime.underwater_timeout}min")
+        logger.info(f"  Time: {get_current_time().strftime('%H:%M:%S')}")
+        logger.info(f"  Stop Protected: ${current_stop:.2f} (would worsen to ${new_stop_price:.2f})")
+        logger.info(f"  Trailing Updated: {current_regime.trailing_mult:.2f}x")
         logger.info("=" * 60)
     
     # Update breakeven threshold based on new regime (if not already active)
-    if not position["breakeven_active"]:
-        old_regime = REGIME_DEFINITIONS[entry_regime_name]
-        
-        # PROFESSIONAL: Calculate dynamic threshold based on initial stop distance
-        entry_price = position["entry_price"]
-        original_stop = position["original_stop_price"]
-        tick_size = CONFIG["tick_size"]
-        initial_stop_distance_ticks = abs(entry_price - original_stop) / tick_size
-        
-        old_breakeven_threshold = initial_stop_distance_ticks * old_regime.breakeven_mult
-        new_breakeven_threshold = initial_stop_distance_ticks * current_regime.breakeven_mult
-        logger.info(f"  Breakeven threshold updated: {old_breakeven_threshold:.1f} ΓåÆ {new_breakeven_threshold:.1f} ticks")
-    else:
-        logger.info(f"  Breakeven already active - threshold change does not apply")
+    pass  # Silent - breakeven threshold adjustment is internal
 
 
 def check_exit_conditions(symbol: str) -> None:
@@ -7276,7 +7244,7 @@ def main(symbol_override: str = None) -> None:
     logger.info("📋 Trading Configuration:")
     logger.info(f"  • Max Contracts: {CONFIG['max_contracts']}")
     logger.info(f"  • Max Trades/Day: {CONFIG['max_trades_per_day']}")
-    logger.info(f"  • Risk Per Trade: {CONFIG['risk_per_trade'] * 100:.1f}%")
+    logger.info(f"  • Risk Per Trade: ${CONFIG['risk_per_trade']:.0f}")
     logger.info(f"  • Daily Loss Limit: ${CONFIG['daily_loss_limit']}")
     logger.info(f"  • Entry Window: {CONFIG['entry_start_time']} - {CONFIG['entry_end_time']} ET")
     logger.info(f"  • Force Close: {CONFIG['forced_flatten_time']} ET")
