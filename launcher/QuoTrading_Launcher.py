@@ -1062,12 +1062,12 @@ class QuoTradingLauncher:
                     self.hide_loading()
                     
                     # Validate account was fetched successfully
-                    actual_starting_balance = accounts[0]['balance']
+                    actual_current_balance = accounts[0]['balance']
                     
                     # Save config
                     self.config["broker_type"] = self.broker_type_var.get()
                     self.config["broker"] = broker
-                    self.config["account_size"] = str(int(actual_starting_balance))  # Use actual balance
+                    self.config["account_size"] = str(int(actual_current_balance))  # Use current balance from broker
                     self.config["broker_validated"] = True
                     self.config["accounts"] = accounts
                     self.config["fetched_account_balance"] = accounts[0]['balance']
