@@ -35,6 +35,21 @@ QUO_AI_LOGO = [
     "  ╚═════╝  ╚═════╝  ╚═════╝    ╚═╝   ╚═╝  ╚═╝╚═╝  ╚═╝╚═════╝ ╚═╝╚═╝  ╚═══╝ ╚═════╝     ╚═╝  ╚═╝╚═╝"
 ]
 
+# Compact bot ASCII art for session summary
+BOT_ASCII_ART = [
+    "     ___",
+    "    /   \\",
+    "   | o o |",
+    "    \\___/",
+    "   __|||__",
+    "  |       |",
+    "  | QUO   |",
+    "  | TRADE |",
+    "  |_______|",
+    "   || | ||",
+    "   || | ||",
+]
+
 # Subtitle for professional branding
 SUBTITLE = "A L G O R I T H M I C   T R A D I N G"
 
@@ -256,6 +271,57 @@ def display_static_logo():
     for line in QUO_AI_LOGO:
         display_logo_line(line, 0)
     print()
+
+
+def get_rainbow_bot_art_with_message():
+    """
+    Get thank you message with rainbow colors for display on right side.
+    Returns a list of colored strings, one per line.
+    Simple text format without robot art.
+    Vertically centered in the right margin space.
+    """
+    rainbow = get_rainbow_colors()
+    colored_lines = []
+    
+    # Add blank lines to push message down to vertical center
+    colored_lines.append("")
+    colored_lines.append("")
+    colored_lines.append("")
+    colored_lines.append("")
+    
+    # Add rainbow-colored "Thanks for using QuoTrading AI"
+    message = "Thanks for using QuoTrading AI"
+    colored_message = ''.join(f"{rainbow[i % len(rainbow)]}{char}{Colors.RESET}" for i, char in enumerate(message))
+    colored_lines.append(colored_message)
+    
+    # Add blank line
+    colored_lines.append("")
+    
+    # Add support info on one line
+    colored_lines.append("Any issues? Reach out to: support@quotrading.com")
+    
+    return colored_lines
+
+
+def get_rainbow_bot_art():
+    """
+    Get bot ASCII art with rainbow colors applied.
+    Returns a list of colored strings, one per line.
+    """
+    rainbow = get_rainbow_colors()
+    colored_lines = []
+    
+    for line_idx, line in enumerate(BOT_ASCII_ART):
+        colored_line = ''
+        for char_idx, char in enumerate(line):
+            if char.strip():  # Only color non-whitespace characters
+                color = rainbow[(line_idx + char_idx) % len(rainbow)]
+                colored_line += f"{color}{char}{Colors.RESET}"
+            else:
+                colored_line += char
+        colored_lines.append(colored_line)
+    
+    return colored_lines
 
 
 if __name__ == "__main__":

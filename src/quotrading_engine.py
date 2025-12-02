@@ -58,11 +58,13 @@ class _SuppressProjectXLoggers(logging.Filter):
 
 logging.getLogger().addFilter(_SuppressProjectXLoggers())
 
-# Also suppress the parent logger directly
+# Also suppress the parent logger directly with extreme prejudice
 _project_x_root = logging.getLogger('project_x_py')
-_project_x_root.setLevel(logging.CRITICAL)
+_project_x_root.setLevel(logging.CRITICAL + 1)  # Beyond CRITICAL to block everything
 _project_x_root.propagate = False
 _project_x_root.handlers = []
+_project_x_root.addHandler(logging.NullHandler())  # Add null handler to absorb any logs
+_project_x_root.disabled = True  # Completely disable the logger
 
 from datetime import datetime, timedelta
 from datetime import time as datetime_time  # Alias to avoid conflict with time.time()
@@ -87,11 +89,17 @@ load_dotenv(dotenv_path=env_path)
 
 # Import rainbow logo display - with fallback if not available
 try:
-    from rainbow_logo import display_animated_logo
+    from rainbow_logo import display_animated_logo, Colors, get_rainbow_bot_art, get_rainbow_bot_art_with_message
     RAINBOW_LOGO_AVAILABLE = True
 except ImportError:
     RAINBOW_LOGO_AVAILABLE = False
     display_animated_logo = None
+    Colors = None
+    get_rainbow_bot_art = None
+    get_rainbow_bot_art_with_message = None
+
+# Startup logo configuration
+STARTUP_LOGO_DURATION = 8.0  # Seconds to display startup logo
 
 # ===== EXE-COMPATIBLE FILE PATH HELPERS =====
 # These ensure files are saved in the correct location whether running as:
@@ -337,11 +345,13 @@ def setup_logging() -> logging.Logger:
     # Install filter on root logger FIRST
     logging.getLogger().addFilter(SuppressProjectXLoggers())
     
-    # Also suppress the parent logger directly
+    # Also suppress the parent logger directly with extreme prejudice
     project_x_root = logging.getLogger('project_x_py')
-    project_x_root.setLevel(logging.CRITICAL)
+    project_x_root.setLevel(logging.CRITICAL + 1)  # Beyond CRITICAL to block everything
     project_x_root.propagate = False
     project_x_root.handlers = []
+    project_x_root.addHandler(logging.NullHandler())  # Add null handler to absorb any logs
+    project_x_root.disabled = True  # Completely disable the logger
     
     logging.basicConfig(
         level=logging.INFO,
@@ -358,9 +368,11 @@ def setup_logging() -> logging.Logger:
     
     # Suppress ALL project_x_py loggers by disabling propagation at root level
     project_x_logger = logging.getLogger('project_x_py')
-    project_x_logger.setLevel(logging.CRITICAL)  # Only show critical errors
+    project_x_logger.setLevel(logging.CRITICAL + 1)  # Beyond CRITICAL to block everything
     project_x_logger.propagate = False  # Don't propagate to root logger
     project_x_logger.handlers = []  # Clear all handlers to prevent JSON output
+    project_x_logger.addHandler(logging.NullHandler())  # Add null handler to absorb any logs
+    project_x_logger.disabled = True  # Completely disable the logger
     
     logging.getLogger('signalrcore').setLevel(logging.ERROR)
     
@@ -377,9 +389,11 @@ def setup_logging() -> logging.Logger:
                         'project_x_py.data_manager', 
                         'project_x_py.risk_manager']:
         child_logger = logging.getLogger(logger_name)
-        child_logger.setLevel(logging.CRITICAL)
+        child_logger.setLevel(logging.CRITICAL + 1)  # Beyond CRITICAL
         child_logger.propagate = False
         child_logger.handlers = []  # Clear all handlers
+        child_logger.addHandler(logging.NullHandler())  # Add null handler
+        child_logger.disabled = True  # Completely disable
     
     # 2. Initialization & Setup (RL brain, bid/ask manager, event loop, broker SDK details)
     logging.getLogger('signal_confidence').setLevel(logging.WARNING)  # RL brain initialization
@@ -6833,34 +6847,95 @@ def format_risk_metrics() -> None:
         logger.info(f"Trailing Stop Success Rate: {trailing_success_rate:.1f}%")
 
 
-def log_session_summary(symbol: str) -> None:
+def log_session_summary(symbol: str, logout_success: bool = True) -> None:
     """
     Log comprehensive session summary at end of trading day.
     Coordinates summary formatting through helper functions.
+    Displays with rainbow thank you message on the right side.
     
     Args:
         symbol: Instrument symbol
+        logout_success: Whether cleanup/logout was successful
     """
     stats = state[symbol]["session_stats"]
     
-    logger.info(SEPARATOR_LINE)
-    logger.info("SESSION SUMMARY")
-    logger.info(SEPARATOR_LINE)
-    logger.info(f"Trading Day: {state[symbol]['trading_day']}")
+    # Display rainbow thank you message on the right side if available
+    if get_rainbow_bot_art_with_message:
+        bot_lines = get_rainbow_bot_art_with_message()
+        bot_line_idx = 0
+        
+        def log_with_bot(message):
+            """Helper to log a line with bot art on the right"""
+            nonlocal bot_line_idx
+            if bot_line_idx < len(bot_lines):
+                # Pad message to 60 characters and add bot art
+                logger.info(f"{message:<60}    {bot_lines[bot_line_idx]}")
+                bot_line_idx += 1
+            else:
+                logger.info(message)
+        
+        # Log session summary with bot on the right
+        log_with_bot(SEPARATOR_LINE)
+        log_with_bot("SESSION SUMMARY")
+        log_with_bot(SEPARATOR_LINE)
+        log_with_bot(f"Trading Day: {state[symbol]['trading_day']}")
+        
+        # The helper functions will still call logger.info directly,
+        # so we temporarily patch logger.info to use our wrapper
+        original_info = logger.info
+        logger.info = log_with_bot
+        
+        try:
+            # Format trade statistics
+            format_trade_statistics(stats)
+            
+            # Format P&L summary
+            format_pnl_summary(stats)
+            
+            # Format risk metrics (flatten mode analysis)
+            format_risk_metrics()
+            
+            # Format time statistics (position duration)
+            format_time_statistics(stats)
+        finally:
+            # Restore original logger.info
+            logger.info = original_info
+        
+        # Log final separator with bot
+        log_with_bot(SEPARATOR_LINE)
+        
+        # Log any remaining bot lines
+        while bot_line_idx < len(bot_lines):
+            logger.info(f"{'':60}    {bot_lines[bot_line_idx]}")
+            bot_line_idx += 1
+    else:
+        # Fallback: display without bot art
+        logger.info(SEPARATOR_LINE)
+        logger.info("SESSION SUMMARY")
+        logger.info(SEPARATOR_LINE)
+        logger.info(f"Trading Day: {state[symbol]['trading_day']}")
+        
+        # Format trade statistics
+        format_trade_statistics(stats)
+        
+        # Format P&L summary
+        format_pnl_summary(stats)
+        
+        # Format risk metrics (flatten mode analysis)
+        format_risk_metrics()
+        
+        # Format time statistics (position duration)
+        format_time_statistics(stats)
+        
+        logger.info(SEPARATOR_LINE)
     
-    # Format trade statistics
-    format_trade_statistics(stats)
-    
-    # Format P&L summary
-    format_pnl_summary(stats)
-    
-    # Format risk metrics (flatten mode analysis)
-    format_risk_metrics()
-    
-    # Format time statistics (position duration)
-    format_time_statistics(stats)
-    
-    logger.info(SEPARATOR_LINE)
+    # Log logout status right after session summary
+    logger.info("")
+    if logout_success:
+        logger.info("\033[92m✓ Logged out successfully\033[0m")  # Green
+    else:
+        logger.info("\033[91m✗ Logout completed with errors\033[0m")  # Red
+    logger.info("")
     
     # Send daily summary alert
     try:
@@ -7477,10 +7552,9 @@ def main(symbol_override: str = None) -> None:
     except Exception as e:
         logger.error(f"Event loop error: {e}")
     finally:
-        logger.info("Event loop stopped")
+        pass  # Silent - event loop cleanup
         
         # CRITICAL: Release session immediately on ANY exit
-        logger.info("Releasing session lock...")
         release_session()
         
         # Metrics are already logged by event loop's _log_metrics()
@@ -8211,10 +8285,15 @@ def release_session() -> None:
 
 def cleanup_on_shutdown() -> None:
     """Cleanup tasks on shutdown"""
-    # Silent cleanup
+    # Track cleanup success
+    cleanup_success = True
     
     # Release session lock
-    release_session()
+    try:
+        release_session()
+    except Exception as e:
+        cleanup_success = False
+        logger.debug(f"Failed to release session: {e}")
     
     # Send bot shutdown alert
     try:
@@ -8230,32 +8309,38 @@ def cleanup_on_shutdown() -> None:
     if recovery_manager:
         try:
             recovery_manager.save_state(state)
-            pass  # Silent - state saved
         except Exception as e:
-            pass  # Silent - save failed
+            cleanup_success = False
+            logger.debug(f"Failed to save state: {e}")
     
     # Disconnect broker
     if broker and broker.is_connected():
         try:
             broker.disconnect()
-            pass  # Silent - broker disconnected
         except Exception as e:
-            pass  # Silent - disconnect failed
+            cleanup_success = False
+            logger.debug(f"Failed to disconnect broker: {e}")
     
     # Stop timer manager
     if timer_manager:
         try:
             timer_manager.stop()
-            pass  # Silent - timer stopped
         except Exception as e:
-            pass  # Silent - stop failed
+            cleanup_success = False
+            logger.debug(f"Failed to stop timer: {e}")
     
-    # Log session summary
+    # Log session summary with logout status
     symbol = CONFIG["instrument"]
     if symbol in state:
-        log_session_summary(symbol)
-    
-    logger.info("Cleanup complete")
+        log_session_summary(symbol, cleanup_success)
+    else:
+        # No session to summarize, just log logout status
+        logger.info("")
+        if cleanup_success:
+            logger.info("\033[92m✓ Logged out successfully\033[0m")  # Green
+        else:
+            logger.info("\033[91m✗ Logout completed with errors\033[0m")  # Red
+        logger.info("")
 
 
 if __name__ == "__main__":
@@ -8265,7 +8350,7 @@ if __name__ == "__main__":
         try:
             # Show logo immediately without clearing first - instant display
             # This creates a professional loading screen effect
-            display_animated_logo(duration=3.0, fps=20, with_headers=False)
+            display_animated_logo(duration=STARTUP_LOGO_DURATION, fps=20, with_headers=False)
             
             # Clear screen after logo to make room for logs
             if os.name == 'nt':
