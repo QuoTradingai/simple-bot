@@ -20,6 +20,7 @@ import hmac
 import hashlib
 import requests
 import traceback
+import re  # For email validation
 
 app = Flask(__name__)
 
@@ -1596,11 +1597,15 @@ def get_user_profile():
                             profile[key] = value.isoformat()
                     
                     # Don't expose full license key in response for security (safe masking)
-                    if len(profile['license_key']) >= 12:
+                    key_len = len(profile['license_key'])
+                    if key_len >= 12:
                         profile['license_key'] = profile['license_key'][:8] + "..." + profile['license_key'][-4:]
-                    else:
-                        # For short keys, just show first 4 characters
+                    elif key_len >= 4:
+                        # For medium-length keys, show first 4 characters
                         profile['license_key'] = profile['license_key'][:4] + "..."
+                    else:
+                        # For very short keys (< 4 chars), just mask completely
+                        profile['license_key'] = "***"
                     
                     logging.info(f"✅ Profile retrieved for {user['email']}")
                     
@@ -1661,10 +1666,8 @@ def update_user_profile():
         if email is not None and not isinstance(email, str):
             return jsonify({"error": "Invalid email format"}), 400
         
-        # Improved email validation
+        # Improved email validation with regex pattern
         if email is not None:
-            import re
-            # Basic email regex pattern
             email_pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
             if not re.match(email_pattern, email):
                 return jsonify({"error": "Invalid email address format"}), 400
