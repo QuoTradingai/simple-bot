@@ -1144,19 +1144,19 @@ class QuoTradingLauncher:
         content = tk.Frame(card, bg=self.colors['card'], padx=10, pady=4)
         content.pack(fill=tk.BOTH, expand=True)
         
-        # Account Fetch Section - COMPACT HORIZONTAL STYLE
-        fetch_frame = tk.Frame(content, bg=self.colors['card'])
+        # Account Fetch Section - COMPACT HORIZONTAL STYLE with main background
+        fetch_frame = tk.Frame(content, bg=self.colors['background'])
         fetch_frame.pack(fill=tk.X, pady=(0, 4))
         
         # Left side: Account dropdown
-        account_select_frame = tk.Frame(fetch_frame, bg=self.colors['card'])
+        account_select_frame = tk.Frame(fetch_frame, bg=self.colors['background'])
         account_select_frame.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 5))
         
         tk.Label(
             account_select_frame,
             text="Select Account:",
             font=("Segoe UI", 9, "bold"),
-            bg=self.colors['card'],
+            bg=self.colors['background'],
             fg=self.colors['text']
         ).pack(anchor=tk.W)
         
@@ -1183,14 +1183,14 @@ class QuoTradingLauncher:
         self.account_dropdown.bind("<<ComboboxSelected>>", self.on_account_selected)
         
         # Middle: Ping button with label
-        fetch_button_frame = tk.Frame(fetch_frame, bg=self.colors['card'])
+        fetch_button_frame = tk.Frame(fetch_frame, bg=self.colors['background'])
         fetch_button_frame.pack(side=tk.LEFT, padx=5)
         
         sync_label = tk.Label(
             fetch_button_frame,
             text="🔄 Test Connection:",
             font=("Segoe UI", 8, "bold"),
-            bg=self.colors['card'],
+            bg=self.colors['background'],
             fg=self.colors['success']
         )
         sync_label.pack(anchor=tk.W)
@@ -1201,14 +1201,14 @@ class QuoTradingLauncher:
         fetch_btn.pack()
         
         # Right: Auto-adjust button
-        auto_adjust_frame = tk.Frame(fetch_frame, bg=self.colors['card'])
+        auto_adjust_frame = tk.Frame(fetch_frame, bg=self.colors['background'])
         auto_adjust_frame.pack(side=tk.LEFT, padx=5)
         
         tk.Label(
             auto_adjust_frame,
             text="Quick Setup:",
             font=("Segoe UI", 9, "bold"),
-            bg=self.colors['card'],
+            bg=self.colors['background'],
             fg=self.colors['text']
         ).pack(anchor=tk.W)
         
@@ -2167,7 +2167,7 @@ Shadow Mode: {shadow_mode}
         cancel_btn = tk.Button(
             inner_frame,
             text="❌ CANCEL",
-            font=("Segoe UI", 10, "bold"),
+            font=("Segoe UI", 12, "bold"),
             bg=self.colors['error'],
             fg='white',
             activebackground='#B91C1C',
@@ -2177,9 +2177,9 @@ Shadow Mode: {shadow_mode}
             command=cancel_launch,
             cursor="hand2",
             width=20,
-            height=2
+            height=3
         )
-        cancel_btn.pack(pady=(5, 20))
+        cancel_btn.pack(pady=(10, 20))
         
         # Countdown logic
         countdown_value = 8  # Use simple variable with nonlocal
@@ -2203,36 +2203,58 @@ Shadow Mode: {shadow_mode}
         update_countdown()
     
     def launch_bot_process(self, selected_symbols, selected_account_id):
-        """Launch the bot process after countdown completes."""
+        """Launch bot processes after countdown completes.
+        
+        Multi-Symbol Architecture:
+        - Spawns a SEPARATE PowerShell window for each selected symbol
+        - Each window runs independently with its own:
+          * Symbol-specific RL data (experiences/{symbol}/signal_experience.json)
+          * Independent connection to broker
+          * Own heartbeat to server
+        - All windows share the same API key (server handles multiple sessions)
+        - Account locks prevent duplicate trading on same account
+        """
         symbols_str = ", ".join(selected_symbols)
         
-        # Launch AI in PowerShell terminal
+        # Launch AI in PowerShell terminal(s)
         try:
             # Get the AI directory (parent of launcher folder)
             bot_dir = Path(__file__).parent.parent.absolute()
             
-            # PowerShell command to run the QuoTrading AI bot
-            ps_command = [
-                "powershell.exe",
-                "-NoExit",  # Keep window open
-                "-Command",
-                f"cd '{bot_dir}'; python src/quotrading_engine.py"
-            ]
+            # Track all launched processes
+            self.bot_processes = []
             
-            # Start PowerShell process in a NEW CONSOLE WINDOW
-            self.bot_process = subprocess.Popen(
-                ps_command,
-                creationflags=subprocess.CREATE_NEW_CONSOLE,
-                cwd=str(bot_dir)
-            )
+            # Launch a SEPARATE PowerShell window for each symbol
+            for symbol in selected_symbols:
+                # PowerShell command to run the QuoTrading AI bot with symbol argument
+                # Each window gets its own symbol via command-line argument
+                ps_command = [
+                    "powershell.exe",
+                    "-NoExit",  # Keep window open
+                    "-Command",
+                    f"$host.UI.RawUI.WindowTitle = 'QuoTrading AI - {symbol}'; cd '{bot_dir}'; python src/quotrading_engine.py {symbol}"
+                ]
+                
+                # Start PowerShell process in a NEW CONSOLE WINDOW
+                process = subprocess.Popen(
+                    ps_command,
+                    creationflags=subprocess.CREATE_NEW_CONSOLE,
+                    cwd=str(bot_dir)
+                )
+                
+                self.bot_processes.append((symbol, process))
             
-            # CREATE ACCOUNT LOCK with bot's PowerShell PID
-            bot_pid = self.bot_process.pid
-            if selected_account_id:
-                self.create_account_lock(selected_account_id, bot_pid)
+            # CREATE ACCOUNT LOCK with ALL bot PIDs
+            # Lock tracks all processes so stale lock detection works properly
+            if selected_account_id and self.bot_processes:
+                all_pids = [proc.pid for symbol, proc in self.bot_processes]
+                self.create_account_lock(selected_account_id, all_pids)
+            
+            # Keep backward compatibility - store first process
+            self.bot_process = self.bot_processes[0][1] if self.bot_processes else None
             
             # Close the GUI immediately and release launcher lock
-            # The bot will maintain its own runtime session via heartbeats
+            # Each bot will maintain its own runtime session via heartbeats
             if self.current_api_key:
                 release_launcher_lock(self.current_api_key)
             self.root.destroy()
@@ -3357,7 +3379,11 @@ BOT_LOG_LEVEL=INFO
         self.update_trade_info(conf_value)
     
     def check_account_lock(self, account_id):
-        """Check if an account is already being traded in another instance."""
+        """Check if an account is already being traded in another instance.
+        
+        Multi-symbol aware: checks all PIDs in the lock file.
+        Lock is considered active if ANY of the tracked processes is still running.
+        """
         locks_dir = Path("locks")
         locks_dir.mkdir(exist_ok=True)
         
@@ -3370,27 +3396,48 @@ BOT_LOG_LEVEL=INFO
             with open(lock_file, 'r') as f:
                 lock_data = json.load(f)
             
-            # Check if the process is still running (stale lock detection)
-            pid = lock_data.get("pid")
-            if pid and psutil.pid_exists(pid):
-                return True, lock_data
-            else:
-                # Stale lock - remove it
-                lock_file.unlink()
-                return False, None
+            # Check if ANY process is still running (multi-symbol aware)
+            # First check the pids list (multi-symbol mode)
+            pids = lock_data.get("pids", [])
+            if not pids:
+                # Fallback to single pid for backward compatibility
+                single_pid = lock_data.get("pid")
+                if single_pid:
+                    pids = [single_pid]
+            
+            # Lock is active if ANY tracked process is still running
+            for pid in pids:
+                if pid and psutil.pid_exists(pid):
+                    return True, lock_data
+            
+            # All processes terminated - stale lock, remove it
+            lock_file.unlink()
+            return False, None
         except:
             return False, None
     
-    def create_account_lock(self, account_id, bot_pid):
-        """Create a lock file for an account being traded."""
+    def create_account_lock(self, account_id, bot_pids):
+        """Create a lock file for an account being traded.
+        
+        Args:
+            account_id: The trading account ID to lock
+            bot_pids: Single PID (int) or list of PIDs for multi-symbol mode
+        """
         locks_dir = Path("locks")
         locks_dir.mkdir(exist_ok=True)
         
         lock_file = locks_dir / f"account_{account_id}.lock"
         
+        # Support both single PID and list of PIDs for multi-symbol
+        if isinstance(bot_pids, int):
+            pid_list = [bot_pids]
+        else:
+            pid_list = list(bot_pids)
+        
         lock_data = {
             "account_id": account_id,
-            "pid": bot_pid,
+            "pid": pid_list[0] if pid_list else None,  # Primary PID for backward compatibility
+            "pids": pid_list,  # All PIDs for multi-symbol mode
             "created_at": datetime.now().isoformat(),
             "broker_username": self.config.get("topstep_username", "unknown")
         }

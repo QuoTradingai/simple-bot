@@ -49,6 +49,7 @@ For Multi-User Subscriptions:
 import os
 import sys
 import logging
+import argparse
 
 # CRITICAL: Suppress ALL project_x_py loggers BEFORE any other imports
 # Install a filter on the root logger to block all project_x_py child loggers
@@ -89,7 +90,7 @@ load_dotenv(dotenv_path=env_path)
 
 # Import rainbow logo display - with fallback if not available
 try:
-    from rainbow_logo import display_animated_logo, Colors, get_rainbow_bot_art, get_rainbow_bot_art_with_message
+    from rainbow_logo import display_animated_logo, Colors, get_rainbow_bot_art, get_rainbow_bot_art_with_message, display_animated_thank_you, display_static_thank_you
     RAINBOW_LOGO_AVAILABLE = True
 except ImportError:
     RAINBOW_LOGO_AVAILABLE = False
@@ -97,6 +98,8 @@ except ImportError:
     Colors = None
     get_rainbow_bot_art = None
     get_rainbow_bot_art_with_message = None
+    display_animated_thank_you = None
+    display_static_thank_you = None
 
 # Startup logo configuration
 STARTUP_LOGO_DURATION = 8.0  # Seconds to display startup logo
@@ -961,16 +964,17 @@ def get_account_equity() -> float:
     """
     Fetch current account equity from broker.
     Returns account equity/balance with error handling.
-    In shadow mode, returns simulated capital (no account login).
+    In shadow mode, returns account_size from config (actual fetched balance from launcher).
     In live mode, returns actual account balance from broker.
     """
-    # Shadow mode or no broker - return simulated capital
+    # Shadow mode or no broker - return account size from config
     if _bot_config.shadow_mode or broker is None:
         # Use starting_equity from bot_status if available
         if bot_status.get("starting_equity") is not None:
             return bot_status["starting_equity"]
-        # Default starting capital for shadow mode
-        return 50000.0
+        # Use account_size from config (fetched from broker during launcher login)
+        # This is the actual account balance the user selected in the launcher
+        return float(CONFIG.get("account_size", 50000.0))
     
     # Live mode - get actual balance from broker account
     try:
@@ -7089,6 +7093,17 @@ def log_session_summary(symbol: str, logout_success: bool = True, show_logout_st
             logger.info("\033[91m✗ Logout completed with errors\033[0m")  # Red
         logger.info("")
     
+    # Display animated rainbow "Thanks for using QuoTrading AI" message
+    # Only show when bot art is enabled (not during maintenance mode)
+    if show_bot_art and display_animated_thank_you:
+        try:
+            display_animated_thank_you(duration=3.0, fps=15)
+        except Exception as e:
+            # Fallback to static display if animation fails
+            logger.debug(f"Animation failed, using static display: {e}")
+            if display_static_thank_you:
+                display_static_thank_you()
+    
     # Send daily summary alert
     try:
         notifier = get_notifier()
@@ -8491,6 +8506,37 @@ def cleanup_on_shutdown() -> None:
 
 
 if __name__ == "__main__":
+    # Parse command-line arguments for multi-symbol support
+    # Usage: python src/quotrading_engine.py [SYMBOL]
+    # Example: python src/quotrading_engine.py ES
+    #          python src/quotrading_engine.py NQ
+    parser = argparse.ArgumentParser(
+        description='QuoTrading AI - Professional Trading System',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  python src/quotrading_engine.py           # Uses symbol from config/env
+  python src/quotrading_engine.py ES        # Trade ES (E-mini S&P 500)
+  python src/quotrading_engine.py NQ        # Trade NQ (E-mini Nasdaq)
+  python src/quotrading_engine.py MES       # Trade MES (Micro E-mini S&P)
+
+Multi-Symbol Mode:
+  Launch separate terminals for each symbol:
+  - Window 1: python src/quotrading_engine.py ES
+  - Window 2: python src/quotrading_engine.py NQ
+  
+  Each window uses symbol-specific RL data from experiences/{symbol}/
+        """
+    )
+    parser.add_argument(
+        'symbol',
+        nargs='?',
+        default=None,
+        help='Trading symbol (e.g., ES, NQ, MES, MNQ). If not provided, uses symbol from config.'
+    )
+    
+    args = parser.parse_args()
+    
     # Display rainbow logo IMMEDIATELY when PowerShell opens (no initial clear screen)
     # This ensures the logo appears instantly instead of showing a black screen first
     if RAINBOW_LOGO_AVAILABLE:
@@ -8512,4 +8558,5 @@ if __name__ == "__main__":
             except:
                 pass  # Logger not initialized yet, silently continue
     
-    main()
+    # Pass symbol from command line to main function
+    main(symbol_override=args.symbol)
