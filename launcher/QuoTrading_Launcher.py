@@ -1318,7 +1318,7 @@ class QuoTradingLauncher:
         
         tk.Label(
             shadow_mode_frame,
-            text="Show trade opportunities for manual execution",
+            text="View signals without auto-trading",
             font=("Segoe UI", 7, "bold"),
             bg=self.colors['card'],
             fg=self.colors['text_light']

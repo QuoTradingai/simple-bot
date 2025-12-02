@@ -7485,10 +7485,9 @@ def main(symbol_override: str = None) -> None:
     except Exception as e:
         logger.error(f"Event loop error: {e}")
     finally:
-        logger.info("Event loop stopped")
+        pass  # Silent - event loop cleanup
         
         # CRITICAL: Release session immediately on ANY exit
-        logger.info("Releasing session lock...")
         release_session()
         
         # Metrics are already logged by event loop's _log_metrics()
@@ -8258,12 +8257,8 @@ def cleanup_on_shutdown() -> None:
         except Exception as e:
             pass  # Silent - stop failed
     
-    # Log session summary
-    symbol = CONFIG["instrument"]
-    if symbol in state:
-        log_session_summary(symbol)
-    
-    logger.info("Cleanup complete")
+    # Simple logout message instead of detailed session summary
+    logger.info("✓ Logged out successfully")
 
 
 if __name__ == "__main__":
