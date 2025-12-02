@@ -2,10 +2,12 @@
 Test Session Management
 =======================
 Verify that:
-1. Launcher and bot use the same device fingerprint
-2. Stale sessions are auto-cleared on login
-3. Active sessions block concurrent logins
-4. Sessions are released on clean shutdown
+1. Launcher and bot use the same base device fingerprint (without symbol)
+2. Bot creates symbol-specific fingerprints for multi-symbol support
+3. Different symbols generate different fingerprints on the same device
+4. Stale sessions are auto-cleared on login
+5. Active sessions block concurrent logins
+6. Sessions are released on clean shutdown
 
 Note: This test duplicates the fingerprint generation logic from launcher
 and bot files because importing those files directly requires tkinter and
@@ -24,7 +26,7 @@ import uuid
 def get_launcher_device_fingerprint() -> str:
     """
     Generate a unique device fingerprint for session locking.
-    One session per machine/user - shared between launcher and bot.
+    Launcher uses fingerprint WITHOUT symbol (validates license once).
     
     This is the LAUNCHER version from QuoTrading_Launcher.py
     """
@@ -43,8 +45,7 @@ def get_launcher_device_fingerprint() -> str:
     # Get platform info
     platform_name = platform.system()  # Windows, Darwin (Mac), Linux
     
-    # Combine all components WITHOUT PID - one session per machine/user, not per process
-    # This allows launcher and bot to share the same session
+    # Combine all components WITHOUT symbol - launcher just validates license
     fingerprint_raw = f"{machine_id}:{username}:{platform_name}"
     
     # Hash for privacy (don't send raw MAC address to server)
@@ -53,12 +54,16 @@ def get_launcher_device_fingerprint() -> str:
     return fingerprint_hash
 
 
-def get_bot_device_fingerprint() -> str:
+def get_bot_device_fingerprint(symbol: str = None) -> str:
     """
     Generate a unique device fingerprint for session locking.
-    One session per machine/user - shared between launcher and bot.
+    Supports multi-symbol mode: each symbol gets its own session.
     
     This is the BOT version from quotrading_engine.py
+    
+    Args:
+        symbol: Optional trading symbol (e.g., 'ES', 'NQ'). When provided,
+               creates a symbol-specific fingerprint for multi-symbol support.
     """
     # Get platform-specific machine ID
     try:
@@ -75,9 +80,11 @@ def get_bot_device_fingerprint() -> str:
     # Get platform info
     platform_name = platform.system()  # Windows, Darwin (Mac), Linux
     
-    # Combine all components WITHOUT PID - one session per machine/user, not per process
-    # This allows launcher and bot to share the same session
-    fingerprint_raw = f"{machine_id}:{username}:{platform_name}"
+    # Combine all components - include symbol if provided for multi-symbol support
+    if symbol:
+        fingerprint_raw = f"{machine_id}:{username}:{platform_name}:{symbol}"
+    else:
+        fingerprint_raw = f"{machine_id}:{username}:{platform_name}"
     
     # Hash for privacy (don't send raw MAC address to server)
     fingerprint_hash = hashlib.sha256(fingerprint_raw.encode()).hexdigest()[:16]
@@ -86,25 +93,25 @@ def get_bot_device_fingerprint() -> str:
 
 
 def test_device_fingerprint_consistency():
-    """Test that launcher and bot generate the same device fingerprint"""
+    """Test that launcher and bot generate the same BASE device fingerprint (without symbol)"""
     print("\n" + "="*70)
-    print("TEST: Device Fingerprint Consistency")
+    print("TEST: Device Fingerprint Consistency (Base - No Symbol)")
     print("="*70)
     
-    # Generate fingerprints
+    # Generate fingerprints (bot without symbol should match launcher)
     launcher_fingerprint = get_launcher_device_fingerprint()
-    bot_fingerprint = get_bot_device_fingerprint()
+    bot_fingerprint = get_bot_device_fingerprint()  # No symbol = base fingerprint
     
     print(f"Launcher fingerprint: {launcher_fingerprint}")
-    print(f"Bot fingerprint:      {bot_fingerprint}")
+    print(f"Bot fingerprint (no symbol): {bot_fingerprint}")
     
-    # Verify they match
+    # Verify they match (base fingerprints should be the same)
     if launcher_fingerprint == bot_fingerprint:
-        print("✅ PASS: Fingerprints match - launcher and bot will share the same session")
+        print("✅ PASS: Base fingerprints match - launcher and bot share the same base")
         return True
     else:
-        print("❌ FAIL: Fingerprints don't match - this will cause session conflicts!")
-        print("  Launcher and bot MUST use the same fingerprint")
+        print("❌ FAIL: Base fingerprints don't match!")
+        print("  Launcher and bot MUST use the same base fingerprint")
         return False
 
 
@@ -123,7 +130,7 @@ def test_fingerprint_excludes_pid():
     print(f"Launcher call 2: {fp2}")
     print(f"Bot call 1:      {fp3}")
     
-    # Verify they all match
+    # Verify they all match (base fingerprints without symbol)
     if fp1 == fp2 == fp3:
         print("✅ PASS: Fingerprint is stable - does not include PID or other volatile data")
         return True
@@ -153,6 +160,59 @@ def test_fingerprint_format():
         return False
 
 
+def test_multi_symbol_fingerprints():
+    """Test that different symbols generate different fingerprints on the same device"""
+    print("\n" + "="*70)
+    print("TEST: Multi-Symbol Fingerprints")
+    print("="*70)
+    
+    # Generate fingerprints for different symbols
+    base_fp = get_bot_device_fingerprint()  # No symbol
+    es_fp = get_bot_device_fingerprint("ES")
+    nq_fp = get_bot_device_fingerprint("NQ")
+    mes_fp = get_bot_device_fingerprint("MES")
+    
+    print(f"Base fingerprint (no symbol): {base_fp}")
+    print(f"ES fingerprint:               {es_fp}")
+    print(f"NQ fingerprint:               {nq_fp}")
+    print(f"MES fingerprint:              {mes_fp}")
+    
+    # Verify all fingerprints are different
+    all_fps = [base_fp, es_fp, nq_fp, mes_fp]
+    if len(all_fps) == len(set(all_fps)):
+        print("✅ PASS: All symbol-specific fingerprints are unique")
+        print("  This allows multiple symbols to run on the same device")
+        return True
+    else:
+        print("❌ FAIL: Symbol-specific fingerprints are not unique!")
+        print("  This will cause session conflicts when running multiple symbols")
+        return False
+
+
+def test_symbol_fingerprint_consistency():
+    """Test that the same symbol generates the same fingerprint"""
+    print("\n" + "="*70)
+    print("TEST: Symbol Fingerprint Consistency")
+    print("="*70)
+    
+    # Generate fingerprints for ES multiple times
+    es_fp1 = get_bot_device_fingerprint("ES")
+    es_fp2 = get_bot_device_fingerprint("ES")
+    es_fp3 = get_bot_device_fingerprint("ES")
+    
+    print(f"ES fingerprint call 1: {es_fp1}")
+    print(f"ES fingerprint call 2: {es_fp2}")
+    print(f"ES fingerprint call 3: {es_fp3}")
+    
+    # Verify they all match
+    if es_fp1 == es_fp2 == es_fp3:
+        print("✅ PASS: Symbol fingerprints are consistent")
+        return True
+    else:
+        print("❌ FAIL: Symbol fingerprints are not consistent!")
+        return False
+
+
 def main():
     """Run all tests"""
     print("\n" + "="*70)
@@ -161,14 +221,20 @@ def main():
     
     results = []
     
-    # Test 1: Device fingerprint consistency
-    results.append(("Fingerprint Consistency", test_device_fingerprint_consistency()))
+    # Test 1: Device fingerprint consistency (base)
+    results.append(("Fingerprint Consistency (Base)", test_device_fingerprint_consistency()))
     
     # Test 2: Fingerprint excludes PID
     results.append(("Fingerprint Stability", test_fingerprint_excludes_pid()))
     
     # Test 3: Fingerprint format
     results.append(("Fingerprint Format", test_fingerprint_format()))
+    
+    # Test 4: Multi-symbol fingerprints are unique
+    results.append(("Multi-Symbol Fingerprints", test_multi_symbol_fingerprints()))
+    
+    # Test 5: Symbol fingerprint consistency
+    results.append(("Symbol Fingerprint Consistency", test_symbol_fingerprint_consistency()))
     
     # Print summary
     print("\n" + "="*70)

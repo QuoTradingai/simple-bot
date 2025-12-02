@@ -133,21 +133,29 @@ def get_application_path() -> 'Path':
     return application_path
 
 
-def get_device_fingerprint() -> str:
+def get_device_fingerprint(symbol: str = None) -> str:
     """
     Generate a unique device fingerprint for session locking.
-    One session per machine/user - shared between launcher and bot.
+    Supports multi-symbol mode: each symbol gets its own session on the same device.
     
     Components:
     - Machine ID (MAC address via uuid.getnode)
     - Username (from getpass)
     - Platform name (Windows/Linux/Darwin)
+    - Symbol (optional, for multi-symbol support)
+    
+    Args:
+        symbol: Optional trading symbol (e.g., 'ES', 'NQ'). When provided,
+               creates a symbol-specific fingerprint allowing multiple symbols
+               to run on the same device without session conflicts.
     
     Returns:
         Unique device fingerprint (hashed for privacy)
     
-    Security Note: Launcher creates session, bot reconnects to same session.
-    This prevents multiple instances while allowing launcher → bot handoff.
+    Security Note: 
+    - Launcher uses fingerprint without symbol (validates license once)
+    - Each bot instance uses fingerprint WITH symbol (creates symbol-specific session)
+    - This allows multiple symbols to run concurrently on the same device
     """
     import hashlib
     import platform
@@ -169,9 +177,12 @@ def get_device_fingerprint() -> str:
     # Get platform info
     platform_name = platform.system()  # Windows, Darwin (Mac), Linux
     
-    # Combine all components WITHOUT PID - one session per machine/user, not per process
-    # This allows launcher and bot to share the same session
-    fingerprint_raw = f"{machine_id}:{username}:{platform_name}"
+    # Combine all components - include symbol if provided for multi-symbol support
+    # Each symbol gets its own session to prevent conflicts when running multiple symbols
+    if symbol:
+        fingerprint_raw = f"{machine_id}:{username}:{platform_name}:{symbol}"
+    else:
+        fingerprint_raw = f"{machine_id}:{username}:{platform_name}"
     
     # Hash for privacy (don't send raw MAC address to server)
     fingerprint_hash = hashlib.sha256(fingerprint_raw.encode()).hexdigest()[:16]
@@ -305,6 +316,23 @@ cloud_api_client: Optional[CloudAPIClient] = None
 
 # Global bid/ask manager
 bid_ask_manager: Optional[BidAskManager] = None
+
+# Global trading symbol for multi-symbol session support
+# Set early in main() and used by session-related functions
+# Note: Each bot process runs independently with its own symbol (not thread-shared)
+current_trading_symbol: Optional[str] = None
+
+
+def get_current_symbol_for_session() -> str:
+    """
+    Get the current trading symbol for session-related operations.
+    Provides consistent fallback logic for all session functions.
+    
+    Returns:
+        Trading symbol from current_trading_symbol or CONFIG fallback
+    """
+    return current_trading_symbol if current_trading_symbol else CONFIG.get("instrument", "ES")
+
 
 # State management dictionary
 state: Dict[str, Any] = {}
@@ -548,7 +576,13 @@ def validate_license_at_startup() -> None:
     Validate license at bot startup BEFORE any initialization.
     This is the "login screen" - checks license and session lock.
     Called at the very beginning of main() to fail fast if license is invalid.
+    
+    Uses current_trading_symbol global (set in main before calling this)
+    to create symbol-specific sessions for multi-symbol support.
+    Falls back to CONFIG symbol if current_trading_symbol is not set.
     """
+    global current_trading_symbol
+    
     # Skip in backtest mode
     if is_backtest_mode():
         pass  # Silent - backtest mode initialization
@@ -569,19 +603,20 @@ def validate_license_at_startup() -> None:
         import requests
         api_url = os.getenv("QUOTRADING_API_URL", "https://quotrading-flask-api.azurewebsites.net")
         
-        # Get device fingerprint for debugging
-        device_fp = get_device_fingerprint()
+        # Get device fingerprint WITH symbol for multi-symbol session support
+        # Each symbol gets its own session to prevent conflicts
+        device_fp = get_device_fingerprint(get_current_symbol_for_session())
         import os as os_mod
         pid = os_mod.getpid()
         pass  # Silent - device fingerprint internal
         
         # Validate with server using /api/validate-license (session locking)
-        # Include device fingerprint for session locking
+        # Include device fingerprint for session locking (symbol-specific)
         response = requests.post(
             f"{api_url}/api/validate-license",
             json={
                 "license_key": license_key,
-                "device_fingerprint": device_fp,  # Session locking
+                "device_fingerprint": device_fp,  # Session locking (symbol-specific)
                 "check_only": False  # Create/claim session
             },
             timeout=10
@@ -7475,17 +7510,20 @@ def main(symbol_override: str = None) -> None:
         symbol_override: Optional symbol to trade (overrides CONFIG["instrument"])
                         Used for multi-symbol bot instances
     """
-    global event_loop, timer_manager, bid_ask_manager, cloud_api_client, rl_brain
+    global event_loop, timer_manager, bid_ask_manager, cloud_api_client, rl_brain, current_trading_symbol
+    
+    # CRITICAL: Determine trading symbol FIRST, before license validation
+    # This enables symbol-specific sessions for multi-symbol support
+    current_trading_symbol = symbol_override if symbol_override else CONFIG["instrument"]
+    trading_symbol = current_trading_symbol  # Keep local variable for compatibility
     
     # Track session start time for runtime display
     bot_status["session_start_time"] = datetime.now(pytz.timezone(CONFIG.get("timezone", "US/Eastern")))
     
     # CRITICAL: Validate license FIRST, before any initialization
     # This is the "login screen" - fail fast if license invalid or session conflict
+    # Uses current_trading_symbol for symbol-specific session (multi-symbol support)
     validate_license_at_startup()
-    
-    # Use symbol override if provided (for multi-symbol support)
-    trading_symbol = symbol_override if symbol_override else CONFIG["instrument"]
     
     # Professional startup header with GUI settings
     logger.info("=" * 80)
@@ -7919,6 +7957,7 @@ def handle_license_check_event(data: Dict[str, Any]) -> None:
             return
         
         # Send heartbeat to maintain session (don't use validate-license as it creates new sessions)
+        # Use symbol-specific fingerprint for multi-symbol session support
         import requests
         api_url = os.getenv("QUOTRADING_API_URL", "https://quotrading-flask-api.azurewebsites.net")
         
@@ -7926,7 +7965,7 @@ def handle_license_check_event(data: Dict[str, Any]) -> None:
             f"{api_url}/api/heartbeat",
             json={
                 "license_key": license_key,
-                "device_fingerprint": get_device_fingerprint()
+                "device_fingerprint": get_device_fingerprint(get_current_symbol_for_session())
             },
             timeout=10
         )
@@ -8191,8 +8230,10 @@ def send_heartbeat() -> None:
     Send bot heartbeat to cloud API for online status tracking.
     Called every 20 seconds to show bot is alive.
     Admin dashboard uses this to show online users and performance.
+    
+    Uses current_trading_symbol for symbol-specific session (multi-symbol support).
     """
-    global broker
+    global broker, current_trading_symbol
     
     # Skip in backtest mode
     if is_backtest_mode():
@@ -8207,8 +8248,8 @@ def send_heartbeat() -> None:
         if not license_key:
             return
         
-        # Collect performance metrics from symbol state
-        symbol = CONFIG.get("instrument", "ES")
+        # Use current_trading_symbol if set, otherwise fall back to CONFIG
+        symbol = current_trading_symbol if current_trading_symbol else CONFIG.get("instrument", "ES")
         
         # Get session stats if symbol state exists
         session_pnl = 0.0
@@ -8244,9 +8285,10 @@ def send_heartbeat() -> None:
         win_rate = (winning_trades / total_trades * 100) if total_trades > 0 else 0
         
         # Send heartbeat with bot status and performance
+        # Use symbol-specific fingerprint for multi-symbol session support
         payload = {
             "license_key": license_key,
-            "device_fingerprint": get_device_fingerprint(),  # For session locking
+            "device_fingerprint": get_device_fingerprint(symbol),  # For session locking (symbol-specific)
             "bot_version": "2.0.0",
             "status": "online" if bot_status.get("trading_enabled", False) else "idle",
             "metadata": {
@@ -8361,17 +8403,25 @@ def handle_shutdown_event(data: Dict[str, Any]) -> None:
 
 
 def release_session() -> None:
-    """Release session lock - called on ANY exit"""
+    """Release session lock - called on ANY exit.
+    
+    Uses current_trading_symbol for symbol-specific session (multi-symbol support).
+    Falls back to CONFIG symbol if current_trading_symbol is not set.
+    """
+    global current_trading_symbol
+    
     try:
         import requests
         license_key = os.getenv("QUOTRADING_LICENSE_KEY")
         if license_key:
             api_url = os.getenv("QUOTRADING_API_URL", "https://quotrading-flask-api.azurewebsites.net")
+            
+            # Use symbol-specific fingerprint for multi-symbol session support
             response = requests.post(
                 f"{api_url}/api/session/release",
                 json={
                     "license_key": license_key,
-                    "device_fingerprint": get_device_fingerprint()
+                    "device_fingerprint": get_device_fingerprint(get_current_symbol_for_session())
                 },
                 timeout=5
             )
