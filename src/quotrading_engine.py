@@ -49,6 +49,7 @@ For Multi-User Subscriptions:
 import os
 import sys
 import logging
+import argparse
 
 # CRITICAL: Suppress ALL project_x_py loggers BEFORE any other imports
 # Install a filter on the root logger to block all project_x_py child loggers
@@ -8491,6 +8492,37 @@ def cleanup_on_shutdown() -> None:
 
 
 if __name__ == "__main__":
+    # Parse command-line arguments for multi-symbol support
+    # Usage: python src/quotrading_engine.py [SYMBOL]
+    # Example: python src/quotrading_engine.py ES
+    #          python src/quotrading_engine.py NQ
+    parser = argparse.ArgumentParser(
+        description='QuoTrading AI - Professional Trading System',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  python src/quotrading_engine.py           # Uses symbol from config/env
+  python src/quotrading_engine.py ES        # Trade ES (E-mini S&P 500)
+  python src/quotrading_engine.py NQ        # Trade NQ (E-mini Nasdaq)
+  python src/quotrading_engine.py MES       # Trade MES (Micro E-mini S&P)
+
+Multi-Symbol Mode:
+  Launch separate terminals for each symbol:
+  - Window 1: python src/quotrading_engine.py ES
+  - Window 2: python src/quotrading_engine.py NQ
+  
+  Each window uses symbol-specific RL data from experiences/{symbol}/
+        """
+    )
+    parser.add_argument(
+        'symbol',
+        nargs='?',
+        default=None,
+        help='Trading symbol (e.g., ES, NQ, MES, MNQ). If not provided, uses symbol from config.'
+    )
+    
+    args = parser.parse_args()
+    
     # Display rainbow logo IMMEDIATELY when PowerShell opens (no initial clear screen)
     # This ensures the logo appears instantly instead of showing a black screen first
     if RAINBOW_LOGO_AVAILABLE:
@@ -8512,4 +8544,5 @@ if __name__ == "__main__":
             except:
                 pass  # Logger not initialized yet, silently continue
     
-    main()
+    # Pass symbol from command line to main function
+    main(symbol_override=args.symbol)
