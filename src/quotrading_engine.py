@@ -3094,9 +3094,16 @@ def check_for_signals(symbol: str) -> None:
     Check for trading signals on each completed 1-minute bar.
     Coordinates signal detection through helper functions.
     
+    In AI MODE: Signals are DISABLED. User trades manually, AI manages positions.
+    
     Args:
         symbol: Instrument symbol
     """
+    # AI MODE: Skip all signal generation - user trades manually
+    # AI Mode only manages positions, does not generate entry signals
+    if CONFIG.get("ai_mode", False):
+        return
+    
     # Check safety conditions first
     is_safe, reason = check_safety_conditions(symbol)
     if not is_safe:
@@ -7534,7 +7541,12 @@ def main(symbol_override: str = None) -> None:
     logger.info("=" * 80)
     
     # Display mode and connection
-    mode_str = "SIGNAL-ONLY MODE (Manual Trading)" if _bot_config.shadow_mode else "LIVE TRADING"
+    if _bot_config.ai_mode:
+        mode_str = "AI MODE (Position Management Only)"
+    elif _bot_config.shadow_mode:
+        mode_str = "SIGNAL-ONLY MODE (Manual Trading)"
+    else:
+        mode_str = "LIVE TRADING"
     logger.info(f"Mode: {mode_str}")
     logger.info(f"Symbol: {trading_symbol}")
     
@@ -7883,15 +7895,69 @@ def handle_position_reconciliation_event(data: Dict[str, Any]) -> None:
                 
             elif broker_position != 0 and bot_position == 0:
                 # Broker has position but bot thinks it's flat
-                logger.error("  Cause: Position opened externally or bot missed entry fill")
-                logger.error("  Action: CLOSING UNEXPECTED POSITION at market")
-                
-                # Emergency flatten the unexpected position
-                side = "sell" if broker_position > 0 else "buy"
-                quantity = abs(broker_position)
-                
-                logger.warning(f"Placing emergency market order: {side} {quantity} {symbol}")
-                broker.place_market_order(symbol, side, quantity)
+                # AI MODE: Adopt the external position and manage it
+                if CONFIG.get("ai_mode", False):
+                    logger.info("=" * 60)
+                    logger.info("🤖 AI MODE: External Position Detected")
+                    logger.info("=" * 60)
+                    logger.info(f"  Position: {abs(broker_position)} contracts {'LONG' if broker_position > 0 else 'SHORT'}")
+                    logger.info("  Action: ADOPTING position for AI management")
+                    
+                    # Get current price for entry price (best estimate since we don't know actual entry)
+                    current_price = state[symbol]["bars_1min"][-1]["close"] if state[symbol]["bars_1min"] else 0
+                    
+                    # Adopt the position
+                    position_side = "long" if broker_position > 0 else "short"
+                    state[symbol]["position"]["active"] = True
+                    state[symbol]["position"]["quantity"] = abs(broker_position)
+                    state[symbol]["position"]["side"] = position_side
+                    state[symbol]["position"]["entry_price"] = current_price
+                    state[symbol]["position"]["entry_time"] = get_current_time()
+                    
+                    # Calculate initial stop loss based on regime and settings
+                    current_regime = state[symbol].get("current_regime", "NORMAL")
+                    regime_params = REGIME_DEFINITIONS.get(current_regime, REGIME_DEFINITIONS["NORMAL"])
+                    atr = calculate_atr(symbol)
+                    if atr is None:
+                        atr = DEFAULT_FALLBACK_ATR
+                    
+                    # Set initial stop loss using regime parameters
+                    stop_distance = atr * regime_params.stop_mult
+                    max_stop_dollars = CONFIG.get("max_stop_loss_dollars", DEFAULT_MAX_STOP_LOSS_DOLLARS)
+                    tick_value = CONFIG.get("tick_value", 12.50)
+                    max_stop_ticks = max_stop_dollars / tick_value
+                    tick_size = CONFIG.get("tick_size", 0.25)
+                    max_stop_distance = max_stop_ticks * tick_size
+                    
+                    # Cap stop distance to max loss per trade
+                    if stop_distance > max_stop_distance:
+                        stop_distance = max_stop_distance
+                    
+                    if position_side == "long":
+                        stop_price = current_price - stop_distance
+                    else:
+                        stop_price = current_price + stop_distance
+                    
+                    state[symbol]["position"]["stop_price"] = stop_price
+                    state[symbol]["position"]["trailing_stop"] = stop_price
+                    state[symbol]["position"]["ai_mode_adopted"] = True
+                    
+                    logger.info(f"  Entry Price (estimated): ${current_price:.2f}")
+                    logger.info(f"  Stop Loss: ${stop_price:.2f}")
+                    logger.info(f"  Regime: {current_regime}")
+                    logger.info("  AI will now manage stop loss, trailing stops, and exits")
+                    logger.info("=" * 60)
+                else:
+                    # Normal mode: Close unexpected position
+                    logger.error("  Cause: Position opened externally or bot missed entry fill")
+                    logger.error("  Action: CLOSING UNEXPECTED POSITION at market")
+                    
+                    # Emergency flatten the unexpected position
+                    side = "sell" if broker_position > 0 else "buy"
+                    quantity = abs(broker_position)
+                    
+                    logger.warning(f"Placing emergency market order: {side} {quantity} {symbol}")
+                    broker.place_market_order(symbol, side, quantity)
                 
             else:
                 # Both have positions but quantities don't match
@@ -7907,6 +7973,10 @@ def handle_position_reconciliation_event(data: Dict[str, Any]) -> None:
             if recovery_manager:
                 recovery_manager.save_state(state)
                 logger.info("Corrected position state saved to disk")
+            
+            # AI Mode: Also save position state for recovery
+            if CONFIG.get("ai_mode", False):
+                save_position_state(symbol)
             
             logger.error("=" * 60)
             
