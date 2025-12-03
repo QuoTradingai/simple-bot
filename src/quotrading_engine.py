@@ -345,6 +345,135 @@ def get_symbol_tick_specs(symbol: str) -> Tuple[float, float]:
     return CONFIG.get("tick_size", 0.25), CONFIG.get("tick_value", 12.50)
 
 
+def normalize_symbol_to_standard(symbol: str) -> Optional[str]:
+    """
+    Normalize any symbol format to the standard trading symbol.
+    
+    Handles various symbol formats from different brokers:
+    - Standard: "ES", "NQ", "MNQ" -> returns as-is
+    - TopStep broker format: "F.US.EP" -> "ES", "F.US.MNQEP" -> "MNQ"
+    - Contract IDs: "CON.F.US.EP.Z25" -> "ES", "CON.F.US.MNQEP.Z25" -> "MNQ"
+    
+    This is critical for AI Mode which needs to match positions from the broker
+    with the symbol the user configured in the GUI.
+    
+    Args:
+        symbol: Trading symbol in any format
+        
+    Returns:
+        Standard trading symbol (e.g., "ES", "MNQ") or None if not found
+    """
+    if not symbol:
+        return None
+    
+    try:
+        from symbol_specs import SYMBOL_SPECS
+        symbol_upper = symbol.upper()
+        
+        # Direct lookup - already a standard symbol
+        if symbol_upper in SYMBOL_SPECS:
+            return symbol_upper
+        
+        # Check broker symbol mappings to find the standard symbol
+        # This reverses the mapping: broker format -> standard symbol
+        # Sort by TopStep symbol length (longest first) to avoid partial matches
+        # e.g., "F.US.MESEP" should match before "F.US.EP"
+        sorted_specs = sorted(
+            SYMBOL_SPECS.items(),
+            key=lambda x: len(x[1].broker_symbols.get('topstep', '')) if hasattr(x[1], 'broker_symbols') and x[1].broker_symbols else 0,
+            reverse=True
+        )
+        
+        for std_symbol, spec in sorted_specs:
+            if not hasattr(spec, 'broker_symbols') or not spec.broker_symbols:
+                continue
+            
+            topstep_symbol = spec.broker_symbols.get('topstep', '')
+            if not topstep_symbol:
+                continue
+            
+            topstep_upper = topstep_symbol.upper()
+            
+            # Check if the broker symbol matches or is contained in the input
+            # E.g., "F.US.MNQEP" in "CON.F.US.MNQEP.Z25"
+            # Using word boundary check: the broker symbol should be surrounded by
+            # dots or be at the start/end of the string
+            if topstep_upper in symbol_upper:
+                # Verify it's a proper match (not a partial word match)
+                # Find the position and check boundaries
+                idx = symbol_upper.find(topstep_upper)
+                if idx >= 0:
+                    # Check that it's at a boundary (start or preceded by .)
+                    before_ok = idx == 0 or symbol_upper[idx-1] == '.'
+                    # Check that it's at a boundary (end or followed by .)
+                    after_idx = idx + len(topstep_upper)
+                    after_ok = after_idx == len(symbol_upper) or symbol_upper[after_idx] == '.'
+                    if before_ok and after_ok:
+                        return std_symbol
+            
+            # Also check for the key part with dot boundaries
+            # E.g., ".MNQEP." in ".MNQEP." or ends with ".MNQEP"
+            broker_parts = topstep_upper.split('.')
+            if len(broker_parts) >= 2:
+                key_part = broker_parts[-1]  # Last part like "MNQEP" or "EP"
+                if f".{key_part}." in symbol_upper or symbol_upper.endswith(f".{key_part}"):
+                    return std_symbol
+        
+        # Check if a standard symbol name is directly in the input
+        # E.g., "MNQ" in "MNQZ24" or "MNQ" in some format
+        # Sort by symbol length (longest first) to avoid "ES" matching before "MES"
+        sorted_symbols = sorted(SYMBOL_SPECS.keys(), key=len, reverse=True)
+        for std_symbol in sorted_symbols:
+            # Check for word boundary match: symbol should be at start/end or surrounded by non-alpha chars
+            idx = symbol_upper.find(std_symbol)
+            if idx >= 0:
+                # Check before boundary
+                before_ok = idx == 0 or not symbol_upper[idx-1].isalpha()
+                # Check after boundary (allow alphanumeric for month codes like "Z24")
+                after_idx = idx + len(std_symbol)
+                after_ok = after_idx == len(symbol_upper) or not symbol_upper[after_idx].isalpha() or symbol_upper[after_idx:after_idx+1].isdigit() or symbol_upper[after_idx:after_idx+1] in 'FGHJKMNQUVXZ'  # Month codes
+                if before_ok and after_ok:
+                    return std_symbol
+        
+    except Exception:
+        pass
+    
+    return None
+
+
+def symbols_match(symbol1: str, symbol2: str) -> bool:
+    """
+    Check if two symbols refer to the same trading instrument.
+    
+    Handles cases where broker returns symbol in a different format
+    than what the user configured. For example:
+    - User configures "MNQ" in GUI
+    - Broker returns position with symbol "F.US.MNQEP" or contract_id
+    
+    Args:
+        symbol1: First symbol (e.g., from broker position)
+        symbol2: Second symbol (e.g., user's configured symbol)
+        
+    Returns:
+        True if both symbols refer to the same instrument
+    """
+    if not symbol1 or not symbol2:
+        return False
+    
+    # Direct comparison (case-insensitive)
+    if symbol1.upper() == symbol2.upper():
+        return True
+    
+    # Normalize both to standard symbols and compare
+    std1 = normalize_symbol_to_standard(symbol1)
+    std2 = normalize_symbol_to_standard(symbol2)
+    
+    if std1 and std2:
+        return std1 == std2
+    
+    return False
+
+
 # String constants
 MSG_LIVE_TRADING_NOT_IMPLEMENTED = "Live trading not implemented - SDK integration required"
 SEPARATOR_LINE = "=" * 60
@@ -1895,8 +2024,11 @@ def update_1min_bar(symbol: str, price: float, volume: int, dt: datetime) -> Non
             # Only display if bot has been running for at least 1 minute to avoid confusion
             # with rapid bar creation during startup
             # SILENCE DURING MAINTENANCE - no spam in logs
+            # SILENCE IN AI MODE - AI Mode just silently waits for user trades
             if bot_status.get("maintenance_idle", False):
                 pass  # Silent during maintenance - no market updates
+            elif CONFIG.get("ai_mode", False):
+                pass  # AI MODE: Silent - just waiting for user trades, no market spam
             elif bot_status.get("session_start_time"):
                 time_since_start = (get_current_time() - bot_status["session_start_time"]).total_seconds()
                 if time_since_start < 60:
@@ -1929,30 +2061,32 @@ def update_1min_bar(symbol: str, price: float, volume: int, dt: datetime) -> Non
                     logger.info(f"📊 Market: {symbol} @ ${current_bar['close']:.2f}{quote_info}{vol_info} | Bars: {bar_count}{vwap_info} | Condition: {market_cond} | Regime: {current_regime}")
             else:
                 # Fallback if session_start_time not set (shouldn't happen)
-                vwap_data = state[symbol].get("vwap", {})
-                market_cond = state[symbol].get("market_condition", "UNKNOWN")
-                current_regime = state[symbol].get("current_regime", "NORMAL")
-                
-                # Get current bid/ask from bid_ask_manager if available
-                quote_info = ""
-                if bid_ask_manager is not None:
-                    quote = bid_ask_manager.get_current_quote(symbol)
-                    if quote:
-                        spread = quote.ask_price - quote.bid_price
-                        quote_info = f" | Bid: ${quote.bid_price:.2f} x {quote.bid_size} | Ask: ${quote.ask_price:.2f} x {quote.ask_size} | Spread: ${spread:.2f}"
-                
-                # Get latest bar volume
-                vol_info = f" | Vol: {current_bar['volume']}"
-                
-                # Get VWAP if available
-                vwap_info = ""
-                if vwap_data and isinstance(vwap_data, dict):
-                    vwap_val = vwap_data.get('vwap', 0)
-                    std_dev = vwap_data.get('std_dev', 0)
-                    if vwap_val > 0:
-                        vwap_info = f" | VWAP: ${vwap_val:.2f} ± ${std_dev:.2f}"
-                
-                logger.info(f"📊 Market: {symbol} @ ${current_bar['close']:.2f}{quote_info}{vol_info} | Bars: {bar_count}{vwap_info} | Condition: {market_cond} | Regime: {current_regime}")
+                # Also suppress in AI Mode
+                if not CONFIG.get("ai_mode", False):
+                    vwap_data = state[symbol].get("vwap", {})
+                    market_cond = state[symbol].get("market_condition", "UNKNOWN")
+                    current_regime = state[symbol].get("current_regime", "NORMAL")
+                    
+                    # Get current bid/ask from bid_ask_manager if available
+                    quote_info = ""
+                    if bid_ask_manager is not None:
+                        quote = bid_ask_manager.get_current_quote(symbol)
+                        if quote:
+                            spread = quote.ask_price - quote.bid_price
+                            quote_info = f" | Bid: ${quote.bid_price:.2f} x {quote.bid_size} | Ask: ${quote.ask_price:.2f} x {quote.ask_size} | Spread: ${spread:.2f}"
+                    
+                    # Get latest bar volume
+                    vol_info = f" | Vol: {current_bar['volume']}"
+                    
+                    # Get VWAP if available
+                    vwap_info = ""
+                    if vwap_data and isinstance(vwap_data, dict):
+                        vwap_val = vwap_data.get('vwap', 0)
+                        std_dev = vwap_data.get('std_dev', 0)
+                        if vwap_val > 0:
+                            vwap_info = f" | VWAP: ${vwap_val:.2f} ± ${std_dev:.2f}"
+                    
+                    logger.info(f"📊 Market: {symbol} @ ${current_bar['close']:.2f}{quote_info}{vol_info} | Bars: {bar_count}{vwap_info} | Condition: {market_cond} | Regime: {current_regime}")
             
             # Update current regime after bar completion
             update_current_regime(symbol)
@@ -7924,8 +8058,9 @@ def main(symbol_override: str = None) -> None:
                 for pos in existing_positions:
                     pos_symbol = pos.get("symbol", "")
                     # Only adopt positions for the configured symbol
-                    if pos_symbol and pos_symbol == trading_symbol:
-                        logger.info(f"🤖 Found existing position on {pos_symbol} - adopting...")
+                    # Use symbols_match() to handle different symbol formats from broker
+                    if pos_symbol and symbols_match(pos_symbol, trading_symbol):
+                        logger.info(f"🤖 Found existing position on {pos_symbol} (configured: {trading_symbol}) - adopting...")
                         # Run position scan to adopt
                         _handle_ai_mode_position_scan()
                         break
@@ -8156,13 +8291,21 @@ def _handle_ai_mode_position_scan() -> None:
         
         # Check each broker position - only manage the configured symbol
         for pos in all_positions:
-            symbol = pos.get("symbol", "")
-            if not symbol:
+            broker_symbol = pos.get("symbol", "")
+            if not broker_symbol:
                 continue
             
             # ONLY manage positions for the configured symbol
-            if symbol != configured_symbol:
+            # Use symbols_match() to handle different symbol formats from broker
+            # (e.g., broker returns "F.US.MNQEP" or contract_id, user configured "MNQ")
+            if not symbols_match(broker_symbol, configured_symbol):
+                # Log skipped positions at debug level to help diagnose issues
+                logger.debug(f"🤖 AI MODE: Skipping position - symbol mismatch: broker={broker_symbol}, configured={configured_symbol}")
                 continue
+            
+            # Use the configured symbol for consistency in state management
+            # This ensures state[configured_symbol] is always used, even if broker returns different format
+            symbol = configured_symbol
             
             qty = pos.get("quantity", 0)
             signed_qty = pos.get("signed_quantity", qty)
