@@ -8288,6 +8288,7 @@ def _handle_ai_mode_position_scan() -> None:
             return
         
         # Check each broker position - only manage the configured symbol
+        matched_position = False
         for pos in all_positions:
             broker_symbol = pos.get("symbol", "")
             if not broker_symbol:
@@ -8297,9 +8298,11 @@ def _handle_ai_mode_position_scan() -> None:
             # Use symbols_match() to handle different symbol formats from broker
             # (e.g., broker returns "F.US.MNQEP" or contract_id, user configured "MNQ")
             if not symbols_match(broker_symbol, configured_symbol):
-                # Log skipped positions at debug level to help diagnose issues
-                logger.debug(f"🤖 AI MODE: Skipping position - symbol mismatch: broker={broker_symbol}, configured={configured_symbol}")
+                # Log skipped positions at INFO level to help diagnose symbol matching issues
+                logger.info(f"🤖 AI MODE: Position found but symbol doesn't match - broker returned '{broker_symbol}', you configured '{configured_symbol}'")
                 continue
+            
+            matched_position = True
             
             # Use the configured symbol for consistency in state management
             # This ensures state[configured_symbol] is always used, even if broker returns different format
