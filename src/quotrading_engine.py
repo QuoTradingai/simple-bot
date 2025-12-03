@@ -4903,6 +4903,15 @@ def check_breakeven_protection(symbol: str, current_price: float) -> None:
     # NORMAL = 1.0x (move at 1:1), CHOPPY = 0.75-0.95x (faster), TRENDING = 1.0x (standard)
     breakeven_threshold_ticks = initial_stop_distance_ticks * current_regime.breakeven_mult
     
+    # FIX: Cap breakeven threshold to prevent unreasonably high values
+    # This is especially important for micro contracts (MNQ, MES) where tick_value is small
+    # causing the stop distance in ticks to be very large (e.g., $200/$0.50 = 400 ticks)
+    # A reasonable breakeven threshold should be 8-20 ticks for most day trading
+    max_breakeven_threshold_ticks = CONFIG.get("max_breakeven_threshold_ticks", 20.0)
+    if breakeven_threshold_ticks > max_breakeven_threshold_ticks:
+        logger.debug(f"Breakeven threshold capped: {breakeven_threshold_ticks:.1f} -> {max_breakeven_threshold_ticks:.1f} ticks")
+        breakeven_threshold_ticks = max_breakeven_threshold_ticks
+    
     # Place stop +2 ticks in profit (not exactly breakeven) - locks in small profit
     breakeven_offset_ticks = 2  # Always lock in $50 profit minimum
     
@@ -8943,8 +8952,13 @@ def _handle_ai_mode_position_scan() -> None:
                         else:
                             stop_distance_ticks = (stop_price - current_price) / tick_size
                         
+                        # Get breakeven/trailing status
+                        breakeven_status = "BE" if position.get("breakeven_active", False) else "Initial"
+                        if position.get("trailing_stop_active", False):
+                            breakeven_status = "Trailing"
+                        
                         logger.info(f"🤖 AI MODE Status: {qty} {'LONG' if side == 'long' else 'SHORT'} @ {symbol}")
-                        logger.info(f"  {pnl_emoji} P&L: ${pnl_dollars:+.2f} ({pnl_ticks:+.1f} ticks) | Stop: {stop_distance_ticks:.1f} ticks away | Regime: {current_regime}")
+                        logger.info(f"  {pnl_emoji} P&L: ${pnl_dollars:+.2f} ({pnl_ticks:+.1f} ticks) | Stop: {stop_distance_ticks:.1f} ticks ({breakeven_status}) | Regime: {current_regime}")
     
     except Exception as e:
         logger.debug(f"AI Mode position scan error: {e}")
