@@ -8365,7 +8365,8 @@ def handle_position_reconciliation_event(data: Dict[str, Any]) -> None:
     Verifies bot's position state matches broker's actual position.
     Runs every 5 seconds (Live Mode) or 3 seconds (AI Mode) to detect and correct any desyncs.
     
-    AI MODE: Delegates to _handle_ai_mode_position_scan() which manages only the configured symbol.
+    AI MODE: Returns early after calling _handle_ai_mode_position_scan() which
+             handles all position detection and management for the configured symbol.
     LIVE MODE: Checks configured symbol for position mismatch and auto-corrects.
     
     CRITICAL FIX: Skip reconciliation when an entry order is pending to prevent
@@ -8397,11 +8398,15 @@ def handle_position_reconciliation_event(data: Dict[str, Any]) -> None:
                 bot_status["entry_order_pending_symbol"] = None
                 bot_status["entry_order_pending_id"] = None
     
-    # AI MODE: Check ALL positions from broker, not just configured symbol
+    # AI MODE: Handle position management separately and return early
+    # All AI Mode logic is in _handle_ai_mode_position_scan()
     if CONFIG.get("ai_mode", False):
         _handle_ai_mode_position_scan()
         return
     
+    # ============================================================
+    # LIVE MODE ONLY: Position reconciliation for configured symbol
+    # ============================================================
     symbol = CONFIG["instrument"]
     
     if symbol not in state:
@@ -8460,8 +8465,7 @@ def handle_position_reconciliation_event(data: Dict[str, Any]) -> None:
                 state[symbol]["position"]["entry_price"] = None
                 
             elif broker_position != 0 and bot_position == 0:
-                # Broker has position but bot thinks it's flat
-                # LIVE MODE: Close unexpected position (AI Mode doesn't reach here - returns early)
+                # Broker has position but bot thinks it's flat - close the unexpected position
                 logger.error("  Cause: Position opened externally or bot missed entry fill")
                 logger.error("  Action: CLOSING UNEXPECTED POSITION at market")
                 
