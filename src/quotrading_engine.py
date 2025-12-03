@@ -576,9 +576,14 @@ FLATTEN_IN_PROGRESS_TIMEOUT = 30
 # to be detected as "new" multiple times after close
 AI_MODE_POSITION_COOLDOWN_SECONDS = 60
 
+# AI MODE: Price tolerance for matching recently closed positions (0.5% = 0.005)
+# Positions within this tolerance are considered the same position
+AI_MODE_PRICE_MATCH_TOLERANCE = 0.005
+
 # AI MODE: Track recently closed positions to prevent re-adoption spam
 # Key: symbol, Value: dict with close_time, entry_price, side
 # This prevents re-adopting a position that was just closed due to API latency
+# Note: This is accessed from a single event loop, so thread safety is not required
 _recently_closed_positions: Dict[str, Dict[str, Any]] = {}
 
 
@@ -638,10 +643,10 @@ def _is_position_recently_closed(symbol: str, entry_price: float, side: str) -> 
     closed_entry = closed_info.get("entry_price", 0)
     closed_side = closed_info.get("side", "")
     
-    # Allow a small tolerance for price comparison (0.5% difference)
+    # Allow a small tolerance for price comparison
     if closed_entry > 0 and entry_price > 0:
         price_diff_pct = abs(entry_price - closed_entry) / closed_entry
-        if price_diff_pct < 0.005 and side == closed_side:  # Same position
+        if price_diff_pct < AI_MODE_PRICE_MATCH_TOLERANCE and side == closed_side:  # Same position
             logger.debug(f"Position {symbol} matches recently closed (entry={entry_price}, closed_entry={closed_entry})")
             return True
     
