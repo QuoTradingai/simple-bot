@@ -6,6 +6,10 @@ STRATEGY: Capitulation Reversal
 - Wait for panic selling/buying (flush)
 - Enter on exhaustion confirmation
 - Target VWAP for mean reversion
+
+STOP LOSS: User configurable via GUI
+- Primary stop: 2 ticks below flush low (long) or above flush high (short)
+- Emergency max: max_stop_loss_dollars setting (user configurable via GUI)
 """
 
 import os
@@ -16,13 +20,10 @@ from dataclasses import dataclass, field
 import pytz
 
 # Default configuration constants
-# The default max stop loss is $400 for capitulation strategy which requires wider stops
-# because we're entering after large flushes (20+ ticks) and need to place stops
-# 2-4 ticks beyond the flush extreme. This is a higher risk per trade but is offset by:
-# 1. Lower trade frequency (only trading real capitulation events)
-# 2. Higher win rate from exhaustion confirmation
-# 3. Better risk/reward targeting VWAP as mean reversion destination
-DEFAULT_MAX_STOP_LOSS_DOLLARS = 400.0  # Default max loss per trade in dollars (capitulation needs wider stops)
+# This is the EMERGENCY MAX stop loss - user can configure this via GUI
+# The actual stop is placed 2 ticks beyond the flush extreme
+# This setting acts as a safety net in case of gaps or broken logic
+DEFAULT_MAX_STOP_LOSS_DOLLARS = 400.0  # Default emergency max loss per trade (user configurable via GUI)
 
 
 @dataclass
@@ -73,10 +74,10 @@ class BotConfiguration:
     use_volume_filter: bool = True  # Volume spike is key exhaustion signal
     use_macd_filter: bool = False
     
-    # RSI Settings - CAPITULATION REVERSAL (Extreme thresholds)
+    # RSI Settings - CAPITULATION REVERSAL (Exact thresholds from spec)
     rsi_period: int = 14  # Standard RSI period
-    rsi_oversold: int = 20  # Extreme oversold for capitulation detection
-    rsi_overbought: int = 80  # Extreme overbought for capitulation detection
+    rsi_oversold: int = 25  # RSI < 25 for long entry (per spec)
+    rsi_overbought: int = 75  # RSI > 75 for short entry (per spec)
     
     # MACD - Keep for reference but disabled
     macd_fast: int = 12
@@ -88,7 +89,7 @@ class BotConfiguration:
     volume_lookback: int = 20
     
     # Time Windows (US Eastern - CME Futures Wall-Clock Schedule)
-    # These times NEVER change - always same wall-clock time regardless of DST
+    # Note: Bot can trade anytime when market is open. These are for maintenance only.
     market_open_time: time = field(default_factory=lambda: time(9, 30))  # Legacy stock market alignment - not used for VWAP reset
     entry_start_time: time = field(default_factory=lambda: time(18, 0))  # 6:00 PM Eastern - CME futures session opens
     entry_end_time: time = field(default_factory=lambda: time(16, 0))  # 4:00 PM Eastern - no new entries after this (can hold positions until 4:45 PM)

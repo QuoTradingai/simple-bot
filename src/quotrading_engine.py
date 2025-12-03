@@ -3136,16 +3136,16 @@ def check_long_signal_conditions(symbol: str, prev_bar: Dict[str, Any],
     """
     Check if long signal conditions are met - CAPITULATION REVERSAL STRATEGY.
     
-    Strategy: Wait for panic selling (flush DOWN), then enter long when exhaustion
-    confirmed. Target: Mean reversion to VWAP.
-    
-    Entry conditions:
-    1. Flush detected (price dropped 20+ ticks in 5-10 min, 2x ATR)
-    2. Regime is tradeable (HIGH_VOL_TRENDING or HIGH_VOL_CHOPPY)
-    3. Exhaustion confirmed (60%+ score)
-    4. Bullish reversal candle formed
-    5. RSI < 20 (extreme oversold)
-    6. Price stretched from VWAP
+    ALL 9 CONDITIONS MUST BE TRUE:
+    1. Flush Happened - Range of last 10 bars >= 20 ticks
+    2. Flush Was Fast - Velocity >= 4 ticks per bar
+    3. We Are Near The Bottom - Within 5 ticks of flush low
+    4. RSI Is Extreme Oversold - RSI < 25
+    5. Volume Spiked - Current volume >= 2x 20-bar average
+    6. Flush Stopped Making New Lows - Current bar low >= previous bar low
+    7. Reversal Candle - Current bar closes green (close > open)
+    8. Price Is Below VWAP - Current close < VWAP
+    9. Regime Allows Trading - HIGH_VOL_TRENDING or HIGH_VOL_CHOPPY
     
     Args:
         symbol: Instrument symbol
@@ -3153,89 +3153,57 @@ def check_long_signal_conditions(symbol: str, prev_bar: Dict[str, Any],
         current_bar: Current 1-minute bar
     
     Returns:
-        True if long signal detected (after flush down + exhaustion)
+        True if ALL 9 conditions are met
     """
     vwap = state[symbol]["vwap"]
     bars = state[symbol]["bars_1min"]
     rsi = state[symbol]["rsi"]
-    
-    # STEP 0: Check regime - only trade in HIGH_VOL regimes
     current_regime = state[symbol].get("current_regime", "NORMAL")
-    if not is_regime_tradeable(current_regime):
-        logger.debug(f"Long rejected - regime {current_regime} not tradeable (need HIGH_VOL)")
-        return False
     
     # CRITICAL: VWAP is required for capitulation strategy (it's the target)
     if vwap is None or vwap <= 0:
         logger.debug("Long rejected - VWAP not available (required for mean reversion target)")
         return False
     
+    # Need at least 10 bars for flush detection
+    if len(bars) < 10:
+        logger.debug("Long rejected - insufficient bars for flush detection")
+        return False
+    
+    # Calculate 20-bar average volume
+    if len(bars) >= 20:
+        recent_volumes = [bar.get("volume", 0) for bar in list(bars)[-20:]]
+        avg_volume_20 = sum(recent_volumes) / len(recent_volumes) if recent_volumes else 1
+    else:
+        avg_volume_20 = current_bar.get("volume", 1)
+    
     # Get capitulation detector
     tick_size = CONFIG.get("tick_size", 0.25)
     tick_value = CONFIG.get("tick_value", 12.50)
     cap_detector = get_capitulation_detector(tick_size, tick_value)
     
-    # Get current ATR
-    atr = calculate_atr_1min(symbol, CONFIG.get("atr_period", 14))
-    if atr is None:
-        logger.debug("Long rejected - ATR not available")
-        return False
-    
-    # Calculate average volume
-    if len(bars) >= 20:
-        recent_volumes = [bar["volume"] for bar in list(bars)[-20:]]
-        avg_volume = sum(recent_volumes) / len(recent_volumes)
-    else:
-        avg_volume = current_bar.get("volume", 1)
-    
-    # STEP 1: Check for capitulation entry signal
-    should_enter, side, entry_details = cap_detector.get_entry_signal(
+    # Check ALL 9 conditions
+    all_passed, details = cap_detector.check_all_long_conditions(
         bars=bars,
         current_bar=current_bar,
-        current_atr=atr,
+        prev_bar=prev_bar,
         rsi=rsi,
-        avg_volume=avg_volume,
+        avg_volume_20=avg_volume_20,
         current_price=current_bar["close"],
-        vwap=vwap
+        vwap=vwap,
+        regime=current_regime
     )
     
-    # Only accept LONG signals (after flush DOWN)
-    if not should_enter or side != "long":
-        if entry_details.get("reason"):
-            logger.debug(f"Long rejected: {entry_details['reason']}")
+    if not all_passed:
+        # Log periodically which conditions are failing (for debugging)
+        if details.get("reason"):
+            logger.debug(f"Long rejected: {details['reason']}")
         return False
     
-    # Store flush and entry details for position management
-    state[symbol]["last_flush"] = entry_details.get("flush")
-    state[symbol]["entry_details"] = entry_details
-    
-    # Build detailed signal log
-    flush = entry_details.get("flush")
-    exhaustion = entry_details.get("exhaustion")
-    
-    signal_details = []
-    signal_details.append(f"Price: ${current_bar['close']:.2f}")
-    
-    if flush:
-        signal_details.append(f"Flush: {flush.flush_size_ticks:.0f} ticks DOWN")
-        signal_details.append(f"ATR: {flush.atr_multiple:.1f}x")
-    
-    if exhaustion:
-        signal_details.append(f"Exhaustion: {exhaustion.exhaustion_score:.0%}")
-        if exhaustion.reversal_candle_type:
-            signal_details.append(f"Pattern: {exhaustion.reversal_candle_type}")
-    
-    if rsi is not None:
-        signal_details.append(f"RSI: {rsi:.1f}")
-    
-    if vwap is not None:
-        vwap_dist = abs(current_bar["close"] - vwap) / tick_size
-        signal_details.append(f"VWAP Dist: {vwap_dist:.0f} ticks")
-    
-    signal_details.append(f"Regime: {current_regime}")
-    
-    logger.info(f"🚨📈 CAPITULATION LONG SIGNAL: Flush exhaustion reversal")
-    logger.info(f"  └─ {' | '.join(signal_details)}")
+    # Store entry details for position management
+    state[symbol]["entry_details"] = details
+    state[symbol]["flush_low"] = details.get("flush_low")
+    state[symbol]["flush_high"] = details.get("flush_high")
     
     return True
 
@@ -3245,16 +3213,16 @@ def check_short_signal_conditions(symbol: str, prev_bar: Dict[str, Any],
     """
     Check if short signal conditions are met - CAPITULATION REVERSAL STRATEGY.
     
-    Strategy: Wait for panic buying (flush UP), then enter short when exhaustion
-    confirmed. Target: Mean reversion to VWAP.
-    
-    Entry conditions:
-    1. Flush detected (price pumped 20+ ticks in 5-10 min, 2x ATR)
-    2. Regime is tradeable (HIGH_VOL_TRENDING or HIGH_VOL_CHOPPY)
-    3. Exhaustion confirmed (60%+ score)
-    4. Bearish reversal candle formed
-    5. RSI > 80 (extreme overbought)
-    6. Price stretched from VWAP
+    ALL 9 CONDITIONS MUST BE TRUE:
+    1. Pump Happened - Range of last 10 bars >= 20 ticks
+    2. Pump Was Fast - Velocity >= 4 ticks per bar
+    3. We Are Near The Top - Within 5 ticks of flush high
+    4. RSI Is Extreme Overbought - RSI > 75
+    5. Volume Spiked - Current volume >= 2x 20-bar average
+    6. Pump Stopped Making New Highs - Current bar high <= previous bar high
+    7. Reversal Candle - Current bar closes red (close < open)
+    8. Price Is Above VWAP - Current close > VWAP
+    9. Regime Allows Trading - HIGH_VOL_TRENDING or HIGH_VOL_CHOPPY
     
     Args:
         symbol: Instrument symbol
@@ -3262,89 +3230,57 @@ def check_short_signal_conditions(symbol: str, prev_bar: Dict[str, Any],
         current_bar: Current 1-minute bar
     
     Returns:
-        True if short signal detected (after flush up + exhaustion)
+        True if ALL 9 conditions are met
     """
     vwap = state[symbol]["vwap"]
     bars = state[symbol]["bars_1min"]
     rsi = state[symbol]["rsi"]
-    
-    # STEP 0: Check regime - only trade in HIGH_VOL regimes
     current_regime = state[symbol].get("current_regime", "NORMAL")
-    if not is_regime_tradeable(current_regime):
-        logger.debug(f"Short rejected - regime {current_regime} not tradeable (need HIGH_VOL)")
-        return False
     
     # CRITICAL: VWAP is required for capitulation strategy (it's the target)
     if vwap is None or vwap <= 0:
         logger.debug("Short rejected - VWAP not available (required for mean reversion target)")
         return False
     
+    # Need at least 10 bars for flush detection
+    if len(bars) < 10:
+        logger.debug("Short rejected - insufficient bars for flush detection")
+        return False
+    
+    # Calculate 20-bar average volume
+    if len(bars) >= 20:
+        recent_volumes = [bar.get("volume", 0) for bar in list(bars)[-20:]]
+        avg_volume_20 = sum(recent_volumes) / len(recent_volumes) if recent_volumes else 1
+    else:
+        avg_volume_20 = current_bar.get("volume", 1)
+    
     # Get capitulation detector
     tick_size = CONFIG.get("tick_size", 0.25)
     tick_value = CONFIG.get("tick_value", 12.50)
     cap_detector = get_capitulation_detector(tick_size, tick_value)
     
-    # Get current ATR
-    atr = calculate_atr_1min(symbol, CONFIG.get("atr_period", 14))
-    if atr is None:
-        logger.debug("Short rejected - ATR not available")
-        return False
-    
-    # Calculate average volume
-    if len(bars) >= 20:
-        recent_volumes = [bar["volume"] for bar in list(bars)[-20:]]
-        avg_volume = sum(recent_volumes) / len(recent_volumes)
-    else:
-        avg_volume = current_bar.get("volume", 1)
-    
-    # STEP 1: Check for capitulation entry signal
-    should_enter, side, entry_details = cap_detector.get_entry_signal(
+    # Check ALL 9 conditions
+    all_passed, details = cap_detector.check_all_short_conditions(
         bars=bars,
         current_bar=current_bar,
-        current_atr=atr,
+        prev_bar=prev_bar,
         rsi=rsi,
-        avg_volume=avg_volume,
+        avg_volume_20=avg_volume_20,
         current_price=current_bar["close"],
-        vwap=vwap
+        vwap=vwap,
+        regime=current_regime
     )
     
-    # Only accept SHORT signals (after flush UP)
-    if not should_enter or side != "short":
-        if entry_details.get("reason"):
-            logger.debug(f"Short rejected: {entry_details['reason']}")
+    if not all_passed:
+        # Log periodically which conditions are failing (for debugging)
+        if details.get("reason"):
+            logger.debug(f"Short rejected: {details['reason']}")
         return False
     
-    # Store flush and entry details for position management
-    state[symbol]["last_flush"] = entry_details.get("flush")
-    state[symbol]["entry_details"] = entry_details
-    
-    # Build detailed signal log
-    flush = entry_details.get("flush")
-    exhaustion = entry_details.get("exhaustion")
-    
-    signal_details = []
-    signal_details.append(f"Price: ${current_bar['close']:.2f}")
-    
-    if flush:
-        signal_details.append(f"Flush: {flush.flush_size_ticks:.0f} ticks UP")
-        signal_details.append(f"ATR: {flush.atr_multiple:.1f}x")
-    
-    if exhaustion:
-        signal_details.append(f"Exhaustion: {exhaustion.exhaustion_score:.0%}")
-        if exhaustion.reversal_candle_type:
-            signal_details.append(f"Pattern: {exhaustion.reversal_candle_type}")
-    
-    if rsi is not None:
-        signal_details.append(f"RSI: {rsi:.1f}")
-    
-    if vwap is not None:
-        vwap_dist = abs(current_bar["close"] - vwap) / tick_size
-        signal_details.append(f"VWAP Dist: {vwap_dist:.0f} ticks")
-    
-    signal_details.append(f"Regime: {current_regime}")
-    
-    logger.info(f"🚨📉 CAPITULATION SHORT SIGNAL: Flush exhaustion reversal")
-    logger.info(f"  └─ {' | '.join(signal_details)}")
+    # Store entry details for position management
+    state[symbol]["entry_details"] = details
+    state[symbol]["flush_low"] = details.get("flush_low")
+    state[symbol]["flush_high"] = details.get("flush_high")
     
     return True
 
