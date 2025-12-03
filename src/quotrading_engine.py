@@ -567,6 +567,32 @@ bot_status: Dict[str, Any] = {
     "flatten_in_progress_symbol": None,  # Symbol being flattened
 }
 
+# Timeout for flatten in progress check (seconds)
+FLATTEN_IN_PROGRESS_TIMEOUT = 30
+
+
+def clear_flatten_flags() -> None:
+    """
+    Clear all flatten-related flags in bot_status.
+    Call this when position flatten is confirmed complete.
+    """
+    bot_status["flatten_in_progress"] = False
+    bot_status["flatten_in_progress_since"] = None
+    bot_status["flatten_in_progress_symbol"] = None
+
+
+def set_flatten_flags(symbol: str) -> None:
+    """
+    Set flatten flags to indicate a flatten operation is in progress.
+    Call this before initiating a flatten order.
+    
+    Args:
+        symbol: Symbol being flattened
+    """
+    bot_status["flatten_in_progress"] = True
+    bot_status["flatten_in_progress_since"] = datetime.now()
+    bot_status["flatten_in_progress_symbol"] = symbol
+
 
 def setup_logging() -> logging.Logger:
     """Configure logging for the bot - Console only (no log files for customers)"""
@@ -5694,14 +5720,15 @@ def check_exit_conditions(symbol: str) -> None:
             flatten_since = bot_status.get("flatten_in_progress_since")
             if flatten_since:
                 elapsed = (datetime.now() - flatten_since).total_seconds()
-                # Allow up to 30 seconds for flatten to complete before retrying
-                if elapsed < 30:
+                # Allow up to FLATTEN_IN_PROGRESS_TIMEOUT seconds for flatten to complete before retrying
+                if elapsed < FLATTEN_IN_PROGRESS_TIMEOUT:
                     logger.debug(f"Flatten already in progress for {elapsed:.1f}s - skipping duplicate attempt")
                     return
                 else:
                     # Flatten has been pending too long - clear and retry
                     logger.warning(f"Flatten pending for {elapsed:.1f}s - clearing flag and retrying")
-                    bot_status["flatten_in_progress"] = False
+                    clear_flatten_flags()
+                    clear_flatten_flags()
         
         logger.critical(SEPARATOR_LINE)
         logger.critical("MARKET CLOSING - AUTO-FLATTENING POSITION")
@@ -5710,9 +5737,7 @@ def check_exit_conditions(symbol: str) -> None:
         logger.critical(SEPARATOR_LINE)
         
         # FIX: Set flatten in progress BEFORE placing order to prevent spam
-        bot_status["flatten_in_progress"] = True
-        bot_status["flatten_in_progress_since"] = datetime.now()
-        bot_status["flatten_in_progress_symbol"] = symbol
+        set_flatten_flags(symbol)
         
         # Force close immediately
         close_side = "sell" if side == "long" else "buy"
@@ -8377,9 +8402,7 @@ def _handle_ai_mode_position_scan() -> None:
                 state[configured_symbol]["position"]["flatten_pending"] = False
                 
                 # FIX: Clear flatten in progress flag now that position is confirmed closed
-                bot_status["flatten_in_progress"] = False
-                bot_status["flatten_in_progress_since"] = None
-                bot_status["flatten_in_progress_symbol"] = None
+                clear_flatten_flags()
             return
         
         # Check each broker position - only manage the configured symbol
@@ -8667,9 +8690,7 @@ def handle_position_reconciliation_event(data: Dict[str, Any]) -> None:
         if broker_position == 0 and flatten_pending:
             logger.info("Position flatten confirmed - broker position is now flat")
             state[symbol]["position"]["flatten_pending"] = False
-            bot_status["flatten_in_progress"] = False
-            bot_status["flatten_in_progress_since"] = None
-            bot_status["flatten_in_progress_symbol"] = None
+            clear_flatten_flags()
             return  # No mismatch to handle
         
         # Check for mismatch
@@ -8713,9 +8734,7 @@ def handle_position_reconciliation_event(data: Dict[str, Any]) -> None:
                 state[symbol]["position"]["flatten_pending"] = False
                 
                 # FIX: Clear flatten in progress flag now that position is confirmed closed
-                bot_status["flatten_in_progress"] = False
-                bot_status["flatten_in_progress_since"] = None
-                bot_status["flatten_in_progress_symbol"] = None
+                clear_flatten_flags()
                 
             elif broker_position != 0 and bot_position == 0:
                 # Broker has position but bot thinks it's flat - close the unexpected position
