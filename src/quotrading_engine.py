@@ -7674,17 +7674,15 @@ def main(symbol_override: str = None) -> None:
     
     # Display mode and connection
     if _bot_config.ai_mode:
-        mode_str = "AI MODE (Position Management Only)"
+        mode_str = "AI MODE"
     elif _bot_config.shadow_mode:
         mode_str = "SIGNAL-ONLY MODE (Manual Trading)"
     else:
         mode_str = "LIVE TRADING"
     logger.info(f"Mode: {mode_str}")
     
-    # AI Mode: Symbol is optional - will detect from broker positions
-    if _bot_config.ai_mode and not trading_symbol:
-        logger.info("Symbol: Auto-detect (will manage any position)")
-    else:
+    # AI Mode: Don't show symbol - it manages ANY symbol the user trades
+    if not _bot_config.ai_mode:
         logger.info(f"Symbol: {trading_symbol}")
     
     # Show broker connection status (will be updated after broker connects)
@@ -7771,19 +7769,26 @@ def main(symbol_override: str = None) -> None:
     # Update header with broker connection status and starting equity
     logger.info(f"✅ Broker Connected | Starting Equity: ${bot_status['starting_equity']:.2f}")
     logger.info("")
-    logger.info("📊 Waiting for market data... (Bars and quotes will appear once data flows)")
-    logger.info("")
+    
+    # AI MODE: Clean startup - no "waiting for data" message
+    # LIVE MODE: Show waiting for data message
+    if not _bot_config.ai_mode:
+        logger.info("📊 Waiting for market data... (Bars and quotes will appear once data flows)")
+        logger.info("")
     
     # Initialize state for instrument (use override symbol if provided)
-    initialize_state(trading_symbol)
+    # AI MODE: Only initialize state for default symbol, will add more as positions detected
+    if not _bot_config.ai_mode:
+        initialize_state(trading_symbol)
     
     # CRITICAL: Try to restore position state from disk if bot was restarted
     pass  # Silent - checking for saved position state
-    position_restored = load_position_state(trading_symbol)
-    if position_restored:
-        logger.warning(f"[{trading_symbol}] ΓÜá∩╕Å  BOT RESTARTED WITH ACTIVE POSITION - Managing existing trade")
-    else:
-        pass  # Silent - no saved position
+    if not _bot_config.ai_mode:
+        position_restored = load_position_state(trading_symbol)
+        if position_restored:
+            logger.warning(f"[{trading_symbol}] ⚠️  BOT RESTARTED WITH ACTIVE POSITION - Managing existing trade")
+        else:
+            pass  # Silent - no saved position
     
     # Skip historical bars fetching in live mode - not needed for real-time trading
     # The bot will build bars from live tick data
@@ -7823,41 +7828,44 @@ def main(symbol_override: str = None) -> None:
     timer_manager = TimerManager(event_loop, CONFIG, tz)
     timer_manager.start()
     
-    # Subscribe to market data (trades) - use trading_symbol
-    subscribe_market_data(trading_symbol, on_tick)
+    # AI MODE: Don't stream market data at startup - wait for user to trade
+    # When user opens a position, AI mode will auto-detect and subscribe to that symbol
+    if _bot_config.ai_mode:
+        # AI Mode: No upfront streaming - just wait for positions
+        pass
+    else:
+        # LIVE MODE: Subscribe to market data (trades) - use trading_symbol
+        subscribe_market_data(trading_symbol, on_tick)
+        
+        # Subscribe to bid/ask quotes if broker supports it
+        if broker is not None and hasattr(broker, 'subscribe_quotes'):
+            pass  # Silent - quote subscription
+            try:
+                broker.subscribe_quotes(trading_symbol, on_quote)
+            except Exception as e:
+                logger.warning(f"Failed to subscribe to quotes: {e}")
+                logger.warning("Continuing without bid/ask quote data")
     
-    # Subscribe to bid/ask quotes if broker supports it
-    if broker is not None and hasattr(broker, 'subscribe_quotes'):
-        pass  # Silent - quote subscription
-        try:
-            broker.subscribe_quotes(trading_symbol, on_quote)
-        except Exception as e:
-            logger.warning(f"Failed to subscribe to quotes: {e}")
-            logger.warning("Continuing without bid/ask quote data")
-    
-    # AI MODE: Scan for existing positions at startup and subscribe to their symbols
-    # This ensures we have market data flowing for regime detection from the start
+    # AI MODE: Scan for existing positions at startup
+    # If user already has positions, adopt them immediately
     if _bot_config.ai_mode:
         try:
             existing_positions = get_all_open_positions()
             if existing_positions:
-                logger.info("🤖 AI MODE: Scanning for existing positions...")
+                logger.info("🤖 Existing positions found - adopting...")
                 for pos in existing_positions:
                     pos_symbol = pos.get("symbol", "")
-                    if pos_symbol and pos_symbol != trading_symbol:
+                    if pos_symbol:
                         # Initialize state and subscribe to this symbol
                         if pos_symbol not in state:
                             initialize_state(pos_symbol)
                             try:
                                 subscribe_market_data(pos_symbol, on_tick)
-                                logger.info(f"  Subscribed to {pos_symbol}")
                             except Exception as e:
                                 logger.debug(f"Could not subscribe to {pos_symbol}: {e}")
                 
                 # Run position scan to adopt any existing positions
                 _handle_ai_mode_position_scan()
-            else:
-                logger.info("🤖 AI MODE: No existing positions found - waiting for trades...")
         except Exception as e:
             logger.debug(f"AI Mode startup scan error: {e}")
     
@@ -7871,14 +7879,11 @@ def main(symbol_override: str = None) -> None:
     logger.info(f"📅 {current_time.strftime('%A, %B %d, %Y at %I:%M %p %Z')}")
     logger.info("")
     if _bot_config.ai_mode:
-        logger.info("🤖 AI MODE Ready - Managing Your Trades")
-        logger.info("  • Position detection: every 3 seconds")
-        logger.info("  • Stop loss: based on max_loss_per_trade setting")
-        logger.info("  • Trailing stops: enabled (regime-aware)")
-        logger.info("  • Works with: ANY symbol you trade")
+        logger.info("🤖 AI MODE Ready - Waiting for your trades...")
+        logger.info("")
     else:
         logger.info("🚀 Bot Ready - Monitoring for Signals")
-    logger.info("")
+        logger.info("")
     
     # Run event loop (blocks until shutdown signal)
     try:

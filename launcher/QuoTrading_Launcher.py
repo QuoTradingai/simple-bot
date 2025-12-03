@@ -2254,7 +2254,8 @@ AI Mode: {ai_mode}
         """Launch bot processes after countdown completes.
         
         Multi-Symbol Architecture:
-        - Spawns a SEPARATE PowerShell window for each selected symbol
+        - AI MODE: Only launches ONE PowerShell window (user trades manually, bot detects positions)
+        - LIVE MODE: Spawns a SEPARATE PowerShell window for each selected symbol
         - Each window runs independently with its own:
           * Symbol-specific RL data (experiences/{symbol}/signal_experience.json)
           * Independent connection to broker
@@ -2272,20 +2273,19 @@ AI Mode: {ai_mode}
             # Track all launched processes
             self.bot_processes = []
             
-            # Launch a SEPARATE PowerShell window for each symbol
-            # MULTI-SYMBOL FIX: Add small delay between launches to avoid session race conditions
-            # Each bot creates its own symbol-specific session with the server
-            for i, symbol in enumerate(selected_symbols):
-                # PowerShell command to run the QuoTrading AI bot with symbol argument
-                # Each window gets its own symbol via command-line argument
+            # AI MODE: Only launch ONE PowerShell window
+            # AI mode doesn't need per-symbol windows - it detects whatever the user trades
+            if self.ai_mode_var.get():
+                # Use first symbol just for the window title and initial data feed
+                symbol = selected_symbols[0] if selected_symbols else "ES"
+                
                 ps_command = [
                     "powershell.exe",
-                    "-NoExit",  # Keep window open
+                    "-NoExit",
                     "-Command",
-                    f"$host.UI.RawUI.WindowTitle = 'QuoTrading AI - {symbol}'; cd '{bot_dir}'; python src/quotrading_engine.py {symbol}"
+                    f"$host.UI.RawUI.WindowTitle = 'QuoTrading AI - AI Mode'; cd '{bot_dir}'; python src/quotrading_engine.py {symbol}"
                 ]
                 
-                # Start PowerShell process in a NEW CONSOLE WINDOW
                 process = subprocess.Popen(
                     ps_command,
                     creationflags=subprocess.CREATE_NEW_CONSOLE,
@@ -2293,12 +2293,34 @@ AI Mode: {ai_mode}
                 )
                 
                 self.bot_processes.append((symbol, process))
-                
-                # MULTI-SYMBOL FIX: Wait between launching each symbol
-                # This ensures each bot completes its session registration before the next starts
-                # Prevents race conditions where multiple bots try to create sessions simultaneously
-                if i < len(selected_symbols) - 1:  # Don't wait after the last symbol
-                    time.sleep(MULTI_SYMBOL_LAUNCH_DELAY_SECONDS)
+            else:
+                # LIVE MODE: Launch a SEPARATE PowerShell window for each symbol
+                # MULTI-SYMBOL FIX: Add small delay between launches to avoid session race conditions
+                # Each bot creates its own symbol-specific session with the server
+                for i, symbol in enumerate(selected_symbols):
+                    # PowerShell command to run the QuoTrading AI bot with symbol argument
+                    # Each window gets its own symbol via command-line argument
+                    ps_command = [
+                        "powershell.exe",
+                        "-NoExit",  # Keep window open
+                        "-Command",
+                        f"$host.UI.RawUI.WindowTitle = 'QuoTrading AI - {symbol}'; cd '{bot_dir}'; python src/quotrading_engine.py {symbol}"
+                    ]
+                    
+                    # Start PowerShell process in a NEW CONSOLE WINDOW
+                    process = subprocess.Popen(
+                        ps_command,
+                        creationflags=subprocess.CREATE_NEW_CONSOLE,
+                        cwd=str(bot_dir)
+                    )
+                    
+                    self.bot_processes.append((symbol, process))
+                    
+                    # MULTI-SYMBOL FIX: Wait between launching each symbol
+                    # This ensures each bot completes its session registration before the next starts
+                    # Prevents race conditions where multiple bots try to create sessions simultaneously
+                    if i < len(selected_symbols) - 1:  # Don't wait after the last symbol
+                        time.sleep(MULTI_SYMBOL_LAUNCH_DELAY_SECONDS)
             
             # CREATE ACCOUNT LOCK with ALL bot PIDs
             # Lock tracks all processes so stale lock detection works properly
