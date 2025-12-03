@@ -3554,8 +3554,18 @@ def check_for_signals(symbol: str) -> None:
     # Validate signal requirements
     is_valid, reason = validate_signal_requirements(symbol, bar_time)
     if not is_valid:
-        pass  # Silent - signal validation is internal check
+        # PERIODIC STATUS: Log validation failures periodically so users know why signals aren't generating
+        # This helps users understand the bot is running but conditions aren't met
+        validation_fail_counter = state[symbol].get("validation_fail_counter", 0) + 1
+        state[symbol]["validation_fail_counter"] = validation_fail_counter
+        
+        # Log every 15 minutes (15 bars) - just show the reason, not strategy details
+        if validation_fail_counter % 15 == 0:
+            logger.info(f"📋 Signal check: {reason} - bot is monitoring and will trade when conditions allow")
         return
+    
+    # Reset validation fail counter when validation passes
+    state[symbol]["validation_fail_counter"] = 0
     
     # Get bars for signal check
     prev_bar = state[symbol]["bars_1min"][-2]
@@ -3566,24 +3576,14 @@ def check_for_signals(symbol: str) -> None:
     logger.debug(f"Signal check: trend={trend}, prev_low={prev_bar['low']:.2f}, "
                 f"current_close={current_bar['close']:.2f}, lower_band_2={vwap_bands['lower_2']:.2f}")
     
-    # PERIODIC STATUS LOG: Show users the bot is actively checking for signals
-    # Log every 15 minutes (15 bars) to confirm the bot is running and show why no signals yet
+    # PERIODIC HEARTBEAT: Show bot is actively scanning for signals (every 15 minutes)
+    # Does NOT reveal strategy details - just confirms bot is running
     signal_check_counter = state[symbol].get("signal_check_counter", 0) + 1
     state[symbol]["signal_check_counter"] = signal_check_counter
     
     if signal_check_counter % 15 == 0:  # Every 15 minutes
-        rsi = state[symbol].get("rsi") or 0
         price = current_bar["close"]
-        lower_band = vwap_bands.get("lower_2") or 0
-        upper_band = vwap_bands.get("upper_2") or 0
-        
-        # Calculate distance to signal zones (validate all values before division)
-        dist_to_lower = ((price - lower_band) / price * 100) if price > 0 and lower_band > 0 else 0
-        dist_to_upper = ((upper_band - price) / price * 100) if price > 0 and upper_band > 0 else 0
-        
-        logger.info(f"📊 SIGNAL CHECK STATUS | Price: ${price:.2f} | RSI: {rsi:.1f}")
-        logger.info(f"   VWAP Bands: Lower=${lower_band:.2f} ({dist_to_lower:+.2f}%) | Upper=${upper_band:.2f} ({dist_to_upper:+.2f}%)")
-        logger.info(f"   Waiting for: Price to touch VWAP bands + RSI extreme + Volume spike")
+        logger.info(f"📊 Bot active | Price: ${price:.2f} | Scanning for entry signals...")
     
     # Declare global RL brain for both signal checks
     global rl_brain
