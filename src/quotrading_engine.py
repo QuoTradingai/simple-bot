@@ -7890,7 +7890,7 @@ def main(symbol_override: str = None) -> None:
     # User chooses symbols in GUI, AI Mode manages positions only for those symbols
     if _bot_config.ai_mode:
         # AI Mode: Subscribe to market data for configured symbol to enable position management
-        initialize_state(trading_symbol)
+        # State is already initialized earlier in startup, just subscribe to data
         subscribe_market_data(trading_symbol, on_tick)
         
         # Also subscribe to quotes for better price data
@@ -8124,16 +8124,19 @@ def _handle_ai_mode_position_scan() -> None:
         
         if not all_positions:
             # No positions - check if we had any we were tracking for configured symbol
-            if configured_symbol in state and state[configured_symbol]["position"]["active"]:
+            # Add null checks to prevent KeyError on partially initialized state
+            if (configured_symbol in state and 
+                state[configured_symbol].get("position") and 
+                state[configured_symbol]["position"].get("active")):
                 # Position was closed externally
                 logger.info(f"🤖 AI MODE: Position {configured_symbol} closed by user")
                 
                 # Calculate P&L if possible
                 entry_price = state[configured_symbol]["position"].get("entry_price", 0)
-                if state[configured_symbol]["bars_1min"]:
+                if state[configured_symbol].get("bars_1min"):
                     exit_price = state[configured_symbol]["bars_1min"][-1]["close"]
-                    side = state[configured_symbol]["position"]["side"]
-                    qty = state[configured_symbol]["position"]["quantity"]
+                    side = state[configured_symbol]["position"].get("side")
+                    qty = state[configured_symbol]["position"].get("quantity", 0)
                     tick_size, tick_value = get_symbol_tick_specs(configured_symbol)
                     
                     if side == "long":
