@@ -57,36 +57,69 @@ class BotConfiguration:
     commission_per_contract: float = 2.50  # Round-turn commission (adjust to your broker)
         # Total cost per round-trip: ~3 ticks slippage + $2.50 commission = ~$42.50/contract
     
-    # VWAP bands (standard deviation multipliers) - ITERATION 3 (PROVEN WINNER!)
-    vwap_std_dev_1: float = 2.5  # Warning zone (potential reversal area)
-    vwap_std_dev_2: float = 2.1  # Entry zone - Iteration 3
-    vwap_std_dev_3: float = 3.7  # Exit/stop zone - Iteration 3
+    # ==========================================================================
+    # CAPITULATION REVERSAL STRATEGY PARAMETERS
+    # ==========================================================================
+    # These are the EXACT parameters for the capitulation reversal strategy.
+    # NO regime-based adjustments - same rules for all trades.
     
-    # Trend Filter Parameters
-    trend_ema_period: int = 21  # Optimizer best
+    # FLUSH DETECTION (Signal Conditions 1-3)
+    flush_min_ticks: int = 20  # Minimum 20 ticks (5 dollars on ES)
+    flush_lookback_bars: int = 10  # Look back last 10 one-minute bars
+    flush_min_velocity: float = 4.0  # At least 4 ticks per bar
+    flush_near_extreme_ticks: int = 5  # Must be within 5 ticks of flush extreme
+    
+    # RSI Settings (Signal Condition 4)
+    rsi_period: int = 14  # Standard RSI period
+    rsi_extreme_long: int = 25  # RSI < 25 for long entry (per spec)
+    rsi_extreme_short: int = 75  # RSI > 75 for short entry (per spec)
+    
+    # Volume Settings (Signal Condition 5)
+    volume_climax_mult: float = 2.0  # 2x 20-bar average volume for flush detection
+    volume_lookback: int = 20
+    
+    # STOP LOSS
+    stop_buffer_ticks: int = 2  # 2 ticks below flush low (long) / above flush high (short)
+    # Emergency max stop uses max_stop_loss_dollars (GUI configurable)
+    
+    # TRADE MANAGEMENT - FIXED RULES (no regime adjustments)
+    breakeven_trigger_ticks: int = 12  # Move stop to breakeven after 12 ticks profit
+    breakeven_offset_ticks: int = 1  # Stop at entry + 1 tick (locks in 1 tick profit)
+    trailing_trigger_ticks: int = 15  # Start trailing after 15 ticks profit
+    trailing_distance_ticks: int = 8  # Trail 8 ticks behind peak
+    time_stop_bars: int = 20  # Optional: exit after 20 bars if no resolution
+    time_stop_enabled: bool = False  # Disabled by default - user preference
+    
+    # ==========================================================================
+    # LEGACY PARAMETERS (kept for backwards compatibility, not used in new strategy)
+    # ==========================================================================
+    # VWAP bands - NOT USED in capitulation strategy (VWAP is target, not entry zone)
+    vwap_std_dev_1: float = 2.5  # Legacy - not used
+    vwap_std_dev_2: float = 2.1  # Legacy - not used
+    vwap_std_dev_3: float = 3.7  # Legacy - not used
+    
+    # Technical Filters - All handled by CapitulationDetector now
+    use_trend_filter: bool = False  # NOT USED - replaced by regime go/no-go filter
+    use_rsi_filter: bool = True  # RSI still used but with new thresholds (25/75)
+    use_vwap_direction_filter: bool = False  # NOT USED - VWAP is target, not filter
+    use_volume_filter: bool = True  # Volume still used but with 2x threshold
+    use_macd_filter: bool = False  # NOT USED - removed from strategy
+    
+    # Legacy RSI settings (kept for backwards compatibility)
+    rsi_oversold: int = 25  # Now using rsi_extreme_long
+    rsi_overbought: int = 75  # Now using rsi_extreme_short
+    
+    # Legacy trend settings - NOT USED
+    trend_ema_period: int = 21
     trend_threshold: float = 0.0001
     
-    # Technical Filters - CAPITULATION REVERSAL STRATEGY
-    # Filters are handled by CapitulationDetector, not config toggles
-    use_trend_filter: bool = False  # Disabled - regime filter handles this
-    use_rsi_filter: bool = True  # RSI used for exhaustion confirmation
-    use_vwap_direction_filter: bool = True  # VWAP is target, not filter
-    use_volume_filter: bool = True  # Volume spike is key exhaustion signal
-    use_macd_filter: bool = False
-    
-    # RSI Settings - CAPITULATION REVERSAL (Exact thresholds from spec)
-    rsi_period: int = 14  # Standard RSI period
-    rsi_oversold: int = 25  # RSI < 25 for long entry (per spec)
-    rsi_overbought: int = 75  # RSI > 75 for short entry (per spec)
-    
-    # MACD - Keep for reference but disabled
+    # Legacy MACD - NOT USED
     macd_fast: int = 12
     macd_slow: int = 26
     macd_signal: int = 9
     
-    # Volume Filter - ENABLED for capitulation detection
-    volume_spike_multiplier: float = 2.0  # 2x volume for flush detection
-    volume_lookback: int = 20
+    # Legacy volume settings (kept for reference)
+    volume_spike_multiplier: float = 2.0  # Now using volume_climax_mult
     
     # Time Windows (US Eastern - CME Futures Wall-Clock Schedule)
     # Note: Bot can trade anytime when market is open. These are for maintenance only.

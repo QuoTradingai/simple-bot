@@ -4615,24 +4615,36 @@ def execute_entry(symbol: str, side: str, entry_price: float) -> None:
         logger.warning(f"ATR not calculable, using fallback value: {DEFAULT_FALLBACK_ATR}")
     
     entry_regime = regime_detector.detect_regime(bars, atr, CONFIG.get("atr_period", 14))
-    base_trail = CONFIG.get("trailing_stop_distance_ticks", 8)
+    
+    # CAPITULATION REVERSAL: Fixed trade management rules (no regime adjustments)
+    breakeven_trigger = CONFIG.get("breakeven_trigger_ticks", 12)
+    breakeven_offset = CONFIG.get("breakeven_offset_ticks", 1)
+    trailing_trigger = CONFIG.get("trailing_trigger_ticks", 15)
+    trailing_distance = CONFIG.get("trailing_distance_ticks", 8)
+    time_stop_bars = CONFIG.get("time_stop_bars", 20)
+    time_stop_enabled = CONFIG.get("time_stop_enabled", False)
+    
     logger.info(f"")
-    logger.info(f"  ≡ƒôè PROFESSIONAL RISK MANAGEMENT")
+    logger.info(f"  📊 CAPITULATION REVERSAL - FIXED RULES")
     logger.info(f"  Entry Regime: {entry_regime.name}")
     logger.info(f"")
-    logger.info(f"  Initial Stop Loss:")
-    logger.info(f"    Stop Multiplier: {entry_regime.stop_mult}x ATR")
+    logger.info(f"  Stop Loss:")
+    logger.info(f"    Primary: 2 ticks beyond flush extreme")
     logger.info(f"    Stop Distance: {stop_distance_ticks:.1f} ticks (${abs(actual_fill_price - stop_price):.2f})")
     logger.info(f"    Stop Price: ${stop_price:.2f}")
     logger.info(f"")
-    logger.info(f"  Target (Trailing Stop Activation):")
-    logger.info(f"    Activation: {stop_distance_ticks * entry_regime.breakeven_mult:.1f} ticks profit (1:1 risk-reward)")
-    logger.info(f"    After activation: Trailing stop {base_trail * entry_regime.trailing_mult:.1f} ticks behind peak")
-    logger.info(f"    Locks minimum: +$50 profit at breakeven")
+    logger.info(f"  Breakeven Protection:")
+    logger.info(f"    Trigger: {breakeven_trigger} ticks profit")
+    logger.info(f"    Action: Move stop to entry + {breakeven_offset} tick")
     logger.info(f"")
-    logger.info(f"  Timeout Protection:")
-    logger.info(f"    Sideways: {entry_regime.sideways_timeout} minutes")
-    logger.info(f"    Underwater: {entry_regime.underwater_timeout} minutes")
+    logger.info(f"  Trailing Stop:")
+    logger.info(f"    Trigger: {trailing_trigger} ticks profit")
+    logger.info(f"    Trail Distance: {trailing_distance} ticks behind peak")
+    logger.info(f"")
+    if time_stop_enabled:
+        logger.info(f"  Time Stop: Exit after {time_stop_bars} bars")
+    else:
+        logger.info(f"  Time Stop: Disabled (trade to target or stop)")
     
     # Update position tracking
     state[symbol]["position"] = {
@@ -4840,9 +4852,10 @@ def check_breakeven_protection(symbol: str, current_price: float) -> None:
     """
     Check if breakeven protection should be activated and move stop to breakeven.
     
-    Uses regime-based parameters:
-    - breakeven_profit_threshold_ticks: Calculated from regime breakeven_mult
-    - breakeven_stop_offset_ticks: Stop offset from entry (default: 1 tick)
+    CAPITULATION REVERSAL STRATEGY - FIXED RULES (no regime adjustments):
+    - Trigger: After 12 ticks profit
+    - Action: Move stop to entry + 1 tick
+    - Same rule every time, no exceptions
     
     Args:
         symbol: Instrument symbol
@@ -4860,35 +4873,11 @@ def check_breakeven_protection(symbol: str, current_price: float) -> None:
     # Use symbol-specific tick values for accurate P&L calculation across different instruments
     tick_size, tick_value = get_symbol_tick_specs(symbol)
     
-    # Get regime-based breakeven threshold
-    # PROFESSIONAL APPROACH: Base threshold = initial stop distance (1:1 risk-reward)
-    # This adapts to each trade's actual risk and adjusts per regime
-    entry_price = position["entry_price"]
-    original_stop = position["original_stop_price"]
-    # Note: tick_size and tick_value already obtained from get_symbol_tick_specs() on line ~4885
+    # CAPITULATION REVERSAL: Fixed breakeven threshold at 12 ticks (no regime adjustment)
+    breakeven_threshold_ticks = CONFIG.get("breakeven_trigger_ticks", 12)
     
-    # Calculate initial stop distance in ticks
-    initial_stop_distance_ticks = abs(entry_price - original_stop) / tick_size
-    
-    # Get current regime (or use entry regime if not set)
-    current_regime_name = position.get("current_regime", position.get("entry_regime", "NORMAL"))
-    current_regime = REGIME_DEFINITIONS.get(current_regime_name, REGIME_DEFINITIONS["NORMAL"])
-    
-    # Apply regime multiplier to actual stop distance (professional standard)
-    # NORMAL = 1.0x (move at 1:1), CHOPPY = 0.75-0.95x (faster), TRENDING = 1.0x (standard)
-    breakeven_threshold_ticks = initial_stop_distance_ticks * current_regime.breakeven_mult
-    
-    # FIX: Cap breakeven threshold to prevent unreasonably high values
-    # This is especially important for micro contracts (MNQ, MES) where tick_value is small
-    # causing the stop distance in ticks to be very large (e.g., $200/$0.50 = 400 ticks)
-    # A reasonable breakeven threshold should be 8-20 ticks for most day trading
-    max_breakeven_threshold_ticks = CONFIG.get("max_breakeven_threshold_ticks", 20.0)
-    if breakeven_threshold_ticks > max_breakeven_threshold_ticks:
-        logger.debug(f"Breakeven threshold capped: {breakeven_threshold_ticks:.1f} -> {max_breakeven_threshold_ticks:.1f} ticks")
-        breakeven_threshold_ticks = max_breakeven_threshold_ticks
-    
-    # Place stop +2 ticks in profit (not exactly breakeven) - locks in small profit
-    breakeven_offset_ticks = 2  # Always lock in $50 profit minimum
+    # Stop at entry + 1 tick (locks in 1 tick profit)
+    breakeven_offset_ticks = CONFIG.get("breakeven_offset_ticks", 1)
     
     # Step 2 - Calculate current profit in ticks
     if side == "long":
@@ -4921,9 +4910,9 @@ def check_breakeven_protection(symbol: str, current_price: float) -> None:
         if old_stop_order_id:
             cancel_success = cancel_order(symbol, old_stop_order_id)
             if cancel_success:
-                logger.debug(f"Γ£ô Replaced stop order: {old_stop_order_id} ΓåÆ {new_stop_order.get('order_id')}")
+                logger.debug(f"✔ Replaced stop order: {old_stop_order_id} → {new_stop_order.get('order_id')}")
             else:
-                logger.warning(f"ΓÜá New stop active but failed to cancel old stop {old_stop_order_id}")
+                logger.warning(f"⚠ New stop active but failed to cancel old stop {old_stop_order_id}")
     
     if new_stop_order:
         # Update position tracking
@@ -4934,26 +4923,19 @@ def check_breakeven_protection(symbol: str, current_price: float) -> None:
         if new_stop_order.get("order_id"):
             position["stop_order_id"] = new_stop_order.get("order_id")
         
-        # Calculate profit locked in (tick_value obtained from get_symbol_tick_specs() at function start)
+        # Calculate profit locked in
         profit_locked_ticks = (new_stop_price - entry_price) / tick_size if side == "long" else (entry_price - new_stop_price) / tick_size
         profit_locked_dollars = profit_locked_ticks * tick_value * contracts
         
         # Step 6 - Log activation
         logger.info("=" * 60)
-        logger.info("BREAKEVEN PROTECTION ACTIVATED")
+        logger.info("🛡️ BREAKEVEN PROTECTION ACTIVATED")
         logger.info("=" * 60)
-        logger.info(f"  Regime: {current_regime_name} (BE mult: {current_regime.breakeven_mult}x)")
-        logger.info(f"  Initial Risk: {initial_stop_distance_ticks:.1f} ticks")
-        logger.info(f"  Breakeven Threshold: {breakeven_threshold_ticks:.1f} ticks (1:1 risk-reward)")
+        logger.info(f"  Trigger: {breakeven_threshold_ticks} ticks profit reached")
         logger.info(f"  Current Profit: {profit_ticks:.1f} ticks")
         logger.info(f"  Original Stop: ${original_stop:.2f}")
-        logger.info(f"  New Stop: ${new_stop_price:.2f} (+{breakeven_offset_ticks} ticks in profit)")
-        logger.info(f"  Profit Locked: ${profit_locked_dollars:.2f} (minimum guaranteed)")
-        logger.info("=" * 60)
-        logger.info(f"  New Breakeven Stop: ${new_stop_price:.2f}")
-        logger.info(f"  Profit Locked In: {profit_locked_ticks:.1f} ticks (${profit_locked_dollars:+.2f})")
-        logger.info(f"  Entry Price: ${entry_price:.2f}")
-        logger.info(f"  Current Price: ${current_price:.2f}")
+        logger.info(f"  New Stop: ${new_stop_price:.2f} (entry + {breakeven_offset_ticks} tick)")
+        logger.info(f"  Profit Locked: ${profit_locked_dollars:.2f}")
         logger.info("=" * 60)
     else:
         logger.error("Failed to place breakeven stop order")
@@ -4967,9 +4949,10 @@ def check_trailing_stop(symbol: str, current_price: float) -> None:
     """
     Check and update trailing stop based on price movement.
     
-    Uses regime-based parameters:
-    - trailing_stop_distance_ticks: Calculated from regime trailing_mult
-    - trailing_stop_min_profit_ticks: Minimum profit to activate (default: 12 ticks)
+    CAPITULATION REVERSAL STRATEGY - FIXED RULES (no regime adjustments):
+    - Trigger: After 15 ticks profit
+    - Trail: 8 ticks behind the peak profit
+    - Same rule every time, no exceptions
     
     Runs AFTER breakeven check. Only processes positions where breakeven is already active.
     Continuously updates stop to follow profitable price movement while protecting gains.
@@ -4990,17 +4973,9 @@ def check_trailing_stop(symbol: str, current_price: float) -> None:
     # Use symbol-specific tick values for accurate P&L calculation across different instruments
     tick_size, tick_value = get_symbol_tick_specs(symbol)
     
-    # Get regime-based trailing distance
-    # Base distance from config, scaled by regime trailing multiplier
-    base_trailing_ticks = CONFIG.get("trailing_stop_distance_ticks", 8)
-    
-    # Get current regime (or use entry regime if not set)
-    current_regime_name = position.get("current_regime", position.get("entry_regime", "NORMAL"))
-    current_regime = REGIME_DEFINITIONS.get(current_regime_name, REGIME_DEFINITIONS["NORMAL"])
-    
-    # Apply regime multiplier to base trailing distance
-    trailing_distance_ticks = base_trailing_ticks * current_regime.trailing_mult
-    min_profit_ticks = CONFIG.get("trailing_stop_min_profit_ticks", 12)
+    # CAPITULATION REVERSAL: Fixed trailing parameters (no regime adjustment)
+    trailing_distance_ticks = CONFIG.get("trailing_distance_ticks", 8)
+    min_profit_ticks = CONFIG.get("trailing_trigger_ticks", 15)
     
     # Calculate current profit
     if side == "long":
@@ -5066,16 +5041,16 @@ def check_trailing_stop(symbol: str, current_price: float) -> None:
         if old_stop_order_id:
             cancel_success = cancel_order(symbol, old_stop_order_id)
             if cancel_success:
-                logger.debug(f"Γ£ô Replaced stop order: {old_stop_order_id} ΓåÆ {new_stop_order.get('order_id')}")
+                logger.debug(f"✔ Replaced stop order: {old_stop_order_id} → {new_stop_order.get('order_id')}")
             else:
-                logger.warning(f"ΓÜá New trailing stop active but failed to cancel old stop {old_stop_order_id}")
+                logger.warning(f"⚠ New trailing stop active but failed to cancel old stop {old_stop_order_id}")
     
     if new_stop_order:
         # Activate trailing stop flag if not already active
         if not position["trailing_stop_active"]:
             position["trailing_stop_active"] = True
             position["trailing_activated_time"] = get_current_time()
-            logger.info(f"TRAILING STOP ACTIVATED - Regime: {current_regime_name} (trail mult: {current_regime.trailing_mult}x)")
+            logger.info(f"📈 TRAILING STOP ACTIVATED - Trail distance: {trailing_distance_ticks} ticks")
         
         # Update position tracking
         old_stop = position["stop_price"]
@@ -5084,13 +5059,13 @@ def check_trailing_stop(symbol: str, current_price: float) -> None:
         if new_stop_order.get("order_id"):
             position["stop_order_id"] = new_stop_order.get("order_id")
         
-        # Calculate profit now locked in (tick_value obtained from get_symbol_tick_specs() at function start)
+        # Calculate profit now locked in
         profit_locked_ticks = (new_trailing_stop - entry_price) / tick_size if side == "long" else (entry_price - new_trailing_stop) / tick_size
         profit_locked_dollars = profit_locked_ticks * tick_value * contracts
         
         # Step 6 - Log updates
         logger.info("=" * 60)
-        logger.info("TRAILING STOP UPDATED")
+        logger.info("📈 TRAILING STOP UPDATED")
         logger.info("=" * 60)
         logger.info(f"  Side: {side.upper()}")
         logger.info(f"  Price Extreme: ${price_extreme:.2f}")
@@ -5246,16 +5221,16 @@ def check_sideways_timeout(symbol: str, current_price: float, current_time: date
 
 def check_underwater_timeout(symbol: str, current_price: float, current_time: datetime) -> Tuple[bool, Optional[float]]:
     """
-    Check if position should exit due to underwater timeout (continuous loss).
+    Check if position should exit due to time stop (optional).
     
-    Uses regime-based underwater_timeout parameter (6-10 minutes depending on regime).
+    CAPITULATION REVERSAL STRATEGY - SIMPLIFIED:
+    - Optional time stop: exit after 20 bars if no resolution
+    - Controlled by CONFIG.time_stop_enabled and CONFIG.time_stop_bars
+    - This is optional and can be disabled if you prefer to let trades play out
     
-    KEY BEHAVIOR:
-    - Timer always counts TOTAL elapsed time since entry (never resets)
-    - When position profitable: Underwater timeout disabled (not checking)
-    - When position losing AND trailing NOT active: Underwater timeout active using total elapsed time
-    - If position flips redΓåÆgreenΓåÆred: Total time used (red5min + green2min + red = 7min total)
-    - If trailing stop active: This check is skipped entirely
+    Why time stop?
+    Dead trades tie up capital and attention. If the reversal was going to work,
+    it should have worked by now. Extended consolidation means the edge is gone.
     
     Args:
         symbol: Instrument symbol
@@ -5270,7 +5245,13 @@ def check_underwater_timeout(symbol: str, current_price: float, current_time: da
     if not position["active"]:
         return False, None
     
-    # PRIORITY CHECK: If trailing stop active, skip underwater timeout entirely
+    # Check if time stop is enabled
+    time_stop_enabled = CONFIG.get("time_stop_enabled", False)
+    if not time_stop_enabled:
+        return False, None
+    
+    # PRIORITY CHECK: If trailing stop active, skip time stop entirely
+    # Trade is working, let it run
     if position.get("trailing_stop_active", False):
         return False, None
     
@@ -5283,55 +5264,32 @@ def check_underwater_timeout(symbol: str, current_price: float, current_time: da
     if not entry_time:
         return False, None
     
-    # Calculate current P&L in ticks
-    if side == "long":
-        pnl_ticks = (current_price - entry_price) / tick_size
-    else:  # short
-        pnl_ticks = (entry_price - current_price) / tick_size
+    # CAPITULATION REVERSAL: Fixed time stop at 20 bars (20 minutes on 1-min chart)
+    time_stop_bars = CONFIG.get("time_stop_bars", 20)
+    time_stop_minutes = time_stop_bars  # 1 bar = 1 minute
     
-    # Check if currently underwater (losing)
-    if pnl_ticks >= 0:
-        # Position is profitable or breakeven - underwater timeout disabled (not active)
-        # But timer keeps running in background
-        return False, None
-    
-    # Position is underwater (losing) and trailing NOT active - underwater timeout is ACTIVE
-    # Get current regime and its underwater timeout
-    current_regime_name = position.get("current_regime", position.get("entry_regime", "NORMAL"))
-    current_regime = REGIME_DEFINITIONS.get(current_regime_name, REGIME_DEFINITIONS["NORMAL"])
-    underwater_timeout_minutes = current_regime.underwater_timeout
-    
-    # Calculate TOTAL elapsed time since entry (never resets)
+    # Calculate TOTAL elapsed time since entry
     total_elapsed_minutes = (current_time - entry_time).total_seconds() / 60.0
     
-    # Check if total elapsed time exceeds underwater timeout
-    # This means: if trade has been alive for 7 minutes total and underwater timeout is 6 min, exit
-    if total_elapsed_minutes >= underwater_timeout_minutes:
-        # Total time since entry exceeds underwater timeout while position is losing
-        # tick_value already obtained from get_symbol_tick_specs() above
-        loss_dollars = pnl_ticks * tick_value * position["quantity"]
+    # Check if total elapsed time exceeds time stop
+    if total_elapsed_minutes >= time_stop_minutes:
+        # Calculate current P&L
+        if side == "long":
+            pnl_ticks = (current_price - entry_price) / tick_size
+        else:  # short
+            pnl_ticks = (entry_price - current_price) / tick_size
         
-        # Enhanced logging for backtesting
-        if is_backtest_mode():
-            logger.info("=" * 60)
-            logger.info("[EXIT] UNDERWATER TIMEOUT - CUTTING LOSS")
-            logger.info("=" * 60)
-            logger.info(f"  Regime: {current_regime_name}")
-            logger.info(f"  Timeout: {underwater_timeout_minutes} minutes")
-            logger.info(f"  Total Elapsed Time: {total_elapsed_minutes:.1f} minutes (since entry)")
-            logger.info(f"  Current Loss: {abs(pnl_ticks):.1f} ticks (${loss_dollars:.2f})")
-            logger.info(f"  Entry: ${entry_price:.2f}, Current: ${current_price:.2f}")
-            logger.info("=" * 60)
-        else:
-            logger.warning("=" * 60)
-            logger.warning("UNDERWATER TIMEOUT - CUTTING LOSS")
-            logger.warning("=" * 60)
-            logger.warning(f"  Regime: {current_regime_name}")
-            logger.warning(f"  Timeout: {underwater_timeout_minutes} minutes")
-            logger.warning(f"  Total Elapsed Time: {total_elapsed_minutes:.1f} minutes (since entry)")
-            logger.warning(f"  Current Loss: {abs(pnl_ticks):.1f} ticks (${loss_dollars:.2f})")
-            logger.warning(f"  Entry: ${entry_price:.2f}, Current: ${current_price:.2f}")
-            logger.warning("=" * 60)
+        pnl_dollars = pnl_ticks * tick_value * position["quantity"]
+        
+        # Log the time stop exit
+        logger.info("=" * 60)
+        logger.info("⏰ TIME STOP - EXITING DEAD TRADE")
+        logger.info("=" * 60)
+        logger.info(f"  Time Elapsed: {total_elapsed_minutes:.1f} minutes ({time_stop_bars} bars)")
+        logger.info(f"  Current P&L: {pnl_ticks:.1f} ticks (${pnl_dollars:+.2f})")
+        logger.info(f"  Entry: ${entry_price:.2f}, Current: ${current_price:.2f}")
+        logger.info(f"  Reason: Trade did not resolve within time limit")
+        logger.info("=" * 60)
         
         return True, current_price
     
@@ -5779,117 +5737,21 @@ def check_regime_change(symbol: str, current_price: float) -> None:
     position["regime_history"].append({
         "from_regime": entry_regime_name,
         "to_regime": current_regime.name,
-        "timestamp": change_time,
-        "stop_mult_change": f"{REGIME_DEFINITIONS[entry_regime_name].stop_mult:.2f}x ΓåÆ {current_regime.stop_mult:.2f}x",
-        "trailing_mult_change": f"{REGIME_DEFINITIONS[entry_regime_name].trailing_mult:.2f}x ΓåÆ {current_regime.trailing_mult:.2f}x"
+        "timestamp": change_time
     })
     
-    # Calculate new stop distance based on new regime (pure regime multiplier, no confidence scaling)
-    side = position["side"]
-    entry_price = position["entry_price"]
-    tick_size = CONFIG["tick_size"]
-    current_stop = position["stop_price"]
+    # CAPITULATION REVERSAL: Regime change is informational only
+    # Trade management uses fixed rules, not regime-based adjustments
+    # Stop loss, breakeven, and trailing are set at entry and don't change with regime
     
-    # Calculate new stop distance from entry using regime multiplier
-    new_stop_distance = current_atr * current_regime.stop_mult
-    
-    if side == "long":
-        new_stop_price = entry_price - new_stop_distance
-    else:  # short
-        new_stop_price = entry_price + new_stop_distance
-    
-    new_stop_price = round_to_tick(new_stop_price)
-    
-    # CRITICAL RULE: Never move stop closer to entry (backward)
-    should_update_stop = False
-    if side == "long":
-        # For longs, new stop must be >= current stop (never worse)
-        if new_stop_price >= current_stop:
-            should_update_stop = True
-    else:  # short
-        # For shorts, new stop must be <= current stop (never worse)
-        if new_stop_price <= current_stop:
-            should_update_stop = True
-    
-    if should_update_stop:
-        # Update stop with continuous protection
-        # PROFESSIONAL APPROACH: Place new stop FIRST, then cancel old
-        stop_side = "SELL" if side == "long" else "BUY"
-        contracts = position["quantity"]
-        
-        # ANTI-SPAM: Track consecutive stop order failures to prevent log spam
-        stop_fail_count = position.get("stop_order_fail_count", 0)
-        if stop_fail_count >= 3:
-            # Already failed 3+ times - silently skip to prevent spam
-            # Log only once every 10 failures
-            if stop_fail_count % 10 == 0:
-                logger.warning(f"Stop order placement still failing ({stop_fail_count} attempts) - connection may be dead")
-            position["stop_order_fail_count"] = stop_fail_count + 1
-            return
-        
-        new_stop_order = place_stop_order(symbol, stop_side, contracts, new_stop_price)
-        
-        if new_stop_order:
-            # Reset failure counter on success
-            position["stop_order_fail_count"] = 0
-            
-            # New regime-adjusted stop confirmed - now safe to cancel old stop
-            old_stop_order_id = position.get("stop_order_id")
-            if old_stop_order_id:
-                cancel_success = cancel_order(symbol, old_stop_order_id)
-                if cancel_success:
-                    logger.info(f"  ✔ Replaced stop order: {old_stop_order_id} → {new_stop_order.get('order_id')}")
-                else:
-                    logger.warning(f"  ⚠️ New stop active but failed to cancel old stop {old_stop_order_id}")
-        
-        if new_stop_order:
-            old_stop = position["stop_price"]
-            position["stop_price"] = new_stop_price
-            if new_stop_order.get("order_id"):
-                position["stop_order_id"] = new_stop_order.get("order_id")
-            
-            # Get old regime parameters for comparison
-            old_regime = REGIME_DEFINITIONS[entry_regime_name]
-            
-            # Calculate initial stop distance for logging
-            entry_price = position["entry_price"]
-            original_stop = position.get("original_stop_price", position["stop_price"])
-            initial_stop_distance_ticks = abs(entry_price - original_stop) / tick_size
-            
-            # Professional regime change notification
-            logger.info("=" * 60)
-            logger.info(f"⚠️  REGIME CHANGE: {entry_regime_name} → {current_regime.name}")
-            logger.info("=" * 60)
-            logger.info(f"  Time: {get_current_time().strftime('%H:%M:%S')}")
-            logger.info(f"  Stop Adjusted: ${old_stop:.2f} → ${new_stop_price:.2f}")
-            
-            # Show what changed in simple terms
-            if current_regime.stop_mult < old_regime.stop_mult:
-                logger.info(f"  Action: Tighter stops ({current_regime.stop_mult:.2f}x vs {old_regime.stop_mult:.2f}x)")
-            elif current_regime.stop_mult > old_regime.stop_mult:
-                logger.info(f"  Action: Wider stops ({current_regime.stop_mult:.2f}x vs {old_regime.stop_mult:.2f}x)")
-            
-            if current_regime.trailing_mult != old_regime.trailing_mult:
-                base_trailing_ticks = CONFIG.get("trailing_stop_distance_ticks", 8)
-                new_trailing_distance = base_trailing_ticks * current_regime.trailing_mult
-                logger.info(f"  Trailing: {new_trailing_distance:.1f} ticks ({current_regime.trailing_mult:.2f}x)")
-            
-            logger.info("=" * 60)
-        else:
-            # Increment failure counter
-            position["stop_order_fail_count"] = stop_fail_count + 1
-            if stop_fail_count == 0:  # Only log first failure
-                logger.error("Failed to update stop after regime change")
-    else:
-        # Stop would move backward - log but don't update
-        old_regime = REGIME_DEFINITIONS[entry_regime_name]
-        logger.info("=" * 60)
-        logger.info(f"⚠️  REGIME CHANGE: {entry_regime_name} → {current_regime.name}")
-        logger.info("=" * 60)
-        logger.info(f"  Time: {get_current_time().strftime('%H:%M:%S')}")
-        logger.info(f"  Stop Protected: ${current_stop:.2f} (would worsen to ${new_stop_price:.2f})")
-        logger.info(f"  Trailing Updated: {current_regime.trailing_mult:.2f}x")
-        logger.info("=" * 60)
+    # Log the regime change for awareness
+    logger.info("=" * 60)
+    logger.info(f"📊 REGIME CHANGE: {entry_regime_name} → {current_regime.name}")
+    logger.info("=" * 60)
+    logger.info(f"  Time: {get_current_time().strftime('%H:%M:%S')}")
+    logger.info(f"  Note: Trade management uses fixed rules (no regime adjustments)")
+    logger.info(f"  Breakeven: 12 ticks | Trailing: 8 ticks | Stop: Unchanged")
+    logger.info("=" * 60)
     
     # Update breakeven threshold based on new regime (if not already active)
     pass  # Silent - breakeven threshold adjustment is internal
