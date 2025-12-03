@@ -5739,6 +5739,22 @@ def check_exit_conditions(symbol: str) -> None:
         # FIX: Set flatten in progress BEFORE placing order to prevent spam
         set_flatten_flags(symbol)
         
+        # SAFEGUARD: Verify with broker that we actually have this position before flattening
+        # This prevents over-flattening if multiple flatten attempts are made
+        broker_position = get_position_quantity(symbol)
+        if broker_position == 0:
+            logger.warning("Position already flat at broker - skipping flatten order")
+            position["active"] = False
+            position["flatten_pending"] = False
+            clear_flatten_flags()
+            return
+        
+        # Use the actual broker position quantity (in case it differs from bot state)
+        actual_quantity = abs(broker_position)
+        if actual_quantity != position["quantity"]:
+            logger.warning(f"Position quantity mismatch: bot={position['quantity']}, broker={actual_quantity} - using broker quantity")
+            position["quantity"] = actual_quantity  # Update to use broker's actual quantity
+        
         # Force close immediately
         close_side = "sell" if side == "long" else "buy"
         flatten_price = get_flatten_price(symbol, side, current_bar["close"])
@@ -5748,7 +5764,7 @@ def check_exit_conditions(symbol: str) -> None:
             "Market closed - auto-flattening position for 24/7 operation",
             {
                 "side": side,
-                "quantity": position["quantity"],
+                "quantity": actual_quantity,  # Use verified broker quantity
                 "entry_price": f"${entry_price:.2f}",
                 "exit_price": f"${flatten_price:.2f}",
                 "time": bar_time.strftime('%H:%M:%S %Z')
@@ -5775,6 +5791,14 @@ def check_exit_conditions(symbol: str) -> None:
             # FIX: Check if flatten is already in progress
             if bot_status.get("flatten_in_progress", False):
                 logger.debug("Flatten already in progress - skipping emergency flatten")
+                return
+            
+            # SAFEGUARD: Verify with broker that we actually have this position
+            broker_position_check = get_position_quantity(symbol)
+            if broker_position_check == 0:
+                logger.warning("Position already flat at broker - skipping emergency flatten")
+                position["active"] = False
+                position["flatten_pending"] = False
                 return
             
             logger.warning(SEPARATOR_LINE)
