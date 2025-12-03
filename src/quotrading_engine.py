@@ -425,6 +425,12 @@ bot_status: Dict[str, Any] = {
     "early_close_saves": 0,
     "flatten_mode": False,
     "session_start_time": None,  # Track when bot started for session runtime display
+    # CRITICAL FIX: Track pending entry orders to prevent duplicate orders
+    # When an entry order is inflight, position reconciliation should not clear state
+    "entry_order_pending": False,  # True when an entry order is being processed
+    "entry_order_pending_since": None,  # Timestamp when entry started
+    "entry_order_pending_symbol": None,  # Symbol being traded
+    "entry_order_pending_id": None,  # Order ID of pending order (for verification)
 }
 
 
@@ -3638,6 +3644,15 @@ def place_entry_order_with_retry(symbol: str, side: str, contracts: int,
         max_retries: Maximum retry attempts
     
     Returns:
+        Tuple of (order, fill_price, order_type_used) where order_type_used is one of:
+        - "passive": Passive limit order filled
+        - "passive_partial": Passive limit order partially filled
+        - "passive_uncertain": Cancel failed, original order may have filled
+        - "aggressive": Aggressive limit order filled
+        - "mixed": Mixed strategy (part passive, part aggressive)
+        - "failed": All retries exhausted
+    
+    Returns:
         Tuple of (order, fill_price, order_type_used)
     """
     order_side = "BUY" if side == "long" else "SELL"
@@ -3682,14 +3697,37 @@ def place_entry_order_with_retry(symbol: str, side: str, contracts: int,
                             else:
                                 logger.warning(f"  [WARN] Queue monitor: {queue_reason}")
                                 
-                                if queue_reason == "timeout" and attempt < max_retries:
-                                    # Timeout - switch to aggressive
+                                # CRITICAL FIX: Handle cancel_failed case
+                                # When cancel fails, DO NOT place another order - the original
+                                # order may still be pending and could fill, causing duplicate orders
+                                if queue_reason == "cancel_failed":
+                                    logger.error(f"  [CRITICAL] Cancel failed - waiting for original order")
+                                    logger.error(f"  [CRITICAL] Not placing new order to avoid duplicates")
+                                    
+                                    # Wait a bit to see if the original order fills
+                                    # Note: This timeout could be made configurable via CONFIG if needed
+                                    cancel_failed_wait = 2  # seconds
+                                    time_module.sleep(cancel_failed_wait)
+                                    
+                                    # Check if it filled
+                                    actual_filled = abs(get_position_quantity(symbol))
+                                    if actual_filled >= contracts:
+                                        logger.info(f"  [FILLED] Original order filled after cancel failure")
+                                        return order, limit_price, "passive"
+                                    
+                                    # Original order didn't fill - return the order we have
+                                    # Position reconciliation will handle any discrepancies later
+                                    logger.warning(f"  [WARN] Returning with original order - position may need manual verification")
+                                    return order, limit_price, "passive_uncertain"
+                                
+                                elif queue_reason == "timeout" and attempt < max_retries:
+                                    # Timeout - switch to aggressive (cancel succeeded)
                                     logger.info(f"  [SWITCH] Switching to aggressive (market) entry")
                                     order_params['strategy'] = 'aggressive'
                                     order_params['limit_price'] = order_params.get('fallback_price', limit_price)
                                     continue
                                 elif queue_reason == "price_moved_away" and attempt < max_retries:
-                                    # Price moved - retry with new price
+                                    # Price moved - retry with new price (cancel succeeded)
                                     logger.info(f"  [RETRY] Reassessing entry with updated quote")
                                     time_module.sleep(0.5)
                                     continue
@@ -4016,45 +4054,37 @@ def execute_entry(symbol: str, side: str, entry_price: float) -> None:
     actual_fill_price = entry_price
     order = None
     
-    # ===== FIX #2 & #3: Retry Logic + Partial Fill Handling =====
-    if bid_ask_manager is not None:
-        try:
-            # Get order parameters from bid/ask manager
-            order_params = bid_ask_manager.get_entry_order_params(symbol, side, contracts)
-            
-            logger.info(f"  Order Strategy: {order_params['strategy']}")
-            logger.info(f"  Reason: {order_params['reason']}")
-            
-            # Use retry-enabled order placement with full execution protection
-            order, actual_fill_price, order_type_used = place_entry_order_with_retry(
-                symbol, side, contracts, order_params, max_retries=3
-            )
-            
-            if order is None:
-                logger.error("[FAIL] Failed to place entry after retries - TRADE SKIPPED")
-                return
-            
-            # CRITICAL: IMMEDIATELY save minimal position state to prevent loss on crash
-            # This creates a recovery checkpoint before any further processing
-            state[symbol]["position"]["active"] = True
-            state[symbol]["position"]["side"] = side
-            state[symbol]["position"]["quantity"] = contracts
-            state[symbol]["position"]["entry_price"] = actual_fill_price
-            state[symbol]["position"]["entry_time"] = entry_time
-            state[symbol]["position"]["order_id"] = order.get("order_id")
-            save_position_state(symbol)
-            logger.info(f"  [CHECKPOINT] Emergency position state saved (crash protection)")
-            
-            logger.info(f"  [OK] Order placed successfully using {order_type_used} strategy")
-            
-        except Exception as e:
-            logger.error(f"Error using bid/ask manager for entry: {e}")
-            logger.info("Falling back to market order")
-            order = place_market_order(symbol, order_side, contracts)
-            actual_fill_price = entry_price
-            
-            # CRITICAL: Save emergency checkpoint for fallback path too
-            if order is not None:
+    # CRITICAL FIX: Set entry order pending flag BEFORE placing order
+    # This prevents position reconciliation from clearing state while order is inflight
+    bot_status["entry_order_pending"] = True
+    bot_status["entry_order_pending_since"] = datetime.now()
+    bot_status["entry_order_pending_symbol"] = symbol
+    bot_status["entry_order_pending_id"] = None  # Will be set after order is placed
+    
+    try:
+        # ===== FIX #2 & #3: Retry Logic + Partial Fill Handling =====
+        if bid_ask_manager is not None:
+            try:
+                # Get order parameters from bid/ask manager
+                order_params = bid_ask_manager.get_entry_order_params(symbol, side, contracts)
+                
+                logger.info(f"  Order Strategy: {order_params['strategy']}")
+                logger.info(f"  Reason: {order_params['reason']}")
+                
+                # Use retry-enabled order placement with full execution protection
+                order, actual_fill_price, order_type_used = place_entry_order_with_retry(
+                    symbol, side, contracts, order_params, max_retries=3
+                )
+                
+                if order is None:
+                    logger.error("[FAIL] Failed to place entry after retries - TRADE SKIPPED")
+                    return
+                
+                # Update pending order ID
+                bot_status["entry_order_pending_id"] = order.get("order_id")
+                
+                # CRITICAL: IMMEDIATELY save minimal position state to prevent loss on crash
+                # This creates a recovery checkpoint before any further processing
                 state[symbol]["position"]["active"] = True
                 state[symbol]["position"]["side"] = side
                 state[symbol]["position"]["quantity"] = contracts
@@ -4062,27 +4092,56 @@ def execute_entry(symbol: str, side: str, entry_price: float) -> None:
                 state[symbol]["position"]["entry_time"] = entry_time
                 state[symbol]["position"]["order_id"] = order.get("order_id")
                 save_position_state(symbol)
-                logger.info(f"  [CHECKPOINT] Emergency position state saved (fallback path)")
-    else:
-        # No bid/ask manager, use traditional market order
-        logger.info("  Using market order (no bid/ask manager)")
+                logger.info(f"  [CHECKPOINT] Emergency position state saved (crash protection)")
+                
+                logger.info(f"  [OK] Order placed successfully using {order_type_used} strategy")
+                
+            except Exception as e:
+                logger.error(f"Error using bid/ask manager for entry: {e}")
+                logger.info("Falling back to market order")
+                order = place_market_order(symbol, order_side, contracts)
+                actual_fill_price = entry_price
+                
+                # CRITICAL: Save emergency checkpoint for fallback path too
+                if order is not None:
+                    bot_status["entry_order_pending_id"] = order.get("order_id")
+                    state[symbol]["position"]["active"] = True
+                    state[symbol]["position"]["side"] = side
+                    state[symbol]["position"]["quantity"] = contracts
+                    state[symbol]["position"]["entry_price"] = actual_fill_price
+                    state[symbol]["position"]["entry_time"] = entry_time
+                    state[symbol]["position"]["order_id"] = order.get("order_id")
+                    save_position_state(symbol)
+                    logger.info(f"  [CHECKPOINT] Emergency position state saved (fallback path)")
+        else:
+            # No bid/ask manager, use traditional market order
+            logger.info("  Using market order (no bid/ask manager)")
+            
+            order = place_market_order(symbol, order_side, contracts)
+            
+            # CRITICAL: Save emergency checkpoint for no-manager path
+            if order is not None:
+                bot_status["entry_order_pending_id"] = order.get("order_id")
+                state[symbol]["position"]["active"] = True
+                state[symbol]["position"]["side"] = side
+                state[symbol]["position"]["quantity"] = contracts
+                state[symbol]["position"]["entry_price"] = entry_price
+                state[symbol]["position"]["entry_time"] = entry_time
+                state[symbol]["position"]["order_id"] = order.get("order_id")
+                save_position_state(symbol)
+                logger.info(f"  [CHECKPOINT] Emergency position state saved (no manager path)")
         
-        order = place_market_order(symbol, order_side, contracts)
-        
-        # CRITICAL: Save emergency checkpoint for no-manager path
-        if order is not None:
-            state[symbol]["position"]["active"] = True
-            state[symbol]["position"]["side"] = side
-            state[symbol]["position"]["quantity"] = contracts
-            state[symbol]["position"]["entry_price"] = entry_price
-            state[symbol]["position"]["entry_time"] = entry_time
-            state[symbol]["position"]["order_id"] = order.get("order_id")
-            save_position_state(symbol)
-            logger.info(f"  [CHECKPOINT] Emergency position state saved (no manager path)")
+        if order is None:
+            logger.error("Failed to place entry order")
+            return
     
-    if order is None:
-        logger.error("Failed to place entry order")
-        return
+    finally:
+        # CRITICAL FIX: Clear entry order pending flag when entry completes (success or failure)
+        # This allows position reconciliation to resume
+        bot_status["entry_order_pending"] = False
+        bot_status["entry_order_pending_since"] = None
+        bot_status["entry_order_pending_symbol"] = None
+        bot_status["entry_order_pending_id"] = None
     
     # ===== CRITICAL FIX #7: Entry Fill Validation (Live Trading) =====
     # Validate actual entry fill price vs expected (critical for live trading)
@@ -8176,6 +8235,7 @@ def _handle_ai_mode_position_scan() -> None:
                 max_stop_dollars = CONFIG.get("max_stop_loss_dollars", DEFAULT_MAX_STOP_LOSS_DOLLARS)
                 max_stop_ticks = max_stop_dollars / tick_value
                 stop_distance = max_stop_ticks * tick_size
+                stop_distance_ticks = max_stop_ticks
                 
                 if side == "long":
                     stop_price = entry_price - stop_distance
@@ -8189,9 +8249,49 @@ def _handle_ai_mode_position_scan() -> None:
                 state[symbol]["position"]["trailing_stop"] = stop_price
                 state[symbol]["position"]["ai_mode_adopted"] = True
                 
+                # CRITICAL FIX: Set all fields needed for trade management (breakeven, trailing, etc.)
+                # These fields were missing, causing breakeven/trailing stops to not work
+                state[symbol]["position"]["original_stop_price"] = stop_price  # Needed for breakeven calculation
+                state[symbol]["position"]["breakeven_active"] = False
+                state[symbol]["position"]["breakeven_activated_time"] = None
+                state[symbol]["position"]["trailing_stop_active"] = False
+                state[symbol]["position"]["trailing_stop_price"] = None
+                state[symbol]["position"]["trailing_activated_time"] = None
+                # MFE/MAE tracking
+                state[symbol]["position"]["highest_price_reached"] = entry_price if side == "long" else None
+                state[symbol]["position"]["lowest_price_reached"] = entry_price if side == "short" else None
+                # Time-decay and partial exits
+                state[symbol]["position"]["time_decay_50_triggered"] = False
+                state[symbol]["position"]["time_decay_75_triggered"] = False
+                state[symbol]["position"]["time_decay_90_triggered"] = False
+                state[symbol]["position"]["original_stop_distance_ticks"] = stop_distance_ticks
+                state[symbol]["position"]["current_stop_distance_ticks"] = stop_distance_ticks
+                state[symbol]["position"]["initial_risk_ticks"] = stop_distance_ticks
+                state[symbol]["position"]["partial_exit_1_completed"] = False
+                state[symbol]["position"]["partial_exit_2_completed"] = False
+                state[symbol]["position"]["partial_exit_3_completed"] = False
+                state[symbol]["position"]["original_quantity"] = qty
+                state[symbol]["position"]["remaining_quantity"] = qty
+                state[symbol]["position"]["partial_exit_history"] = []
+                
                 logger.info(f"  Entry: ${entry_price:.2f} | Stop: ${stop_price:.2f}")
                 logger.info(f"  Max Loss: ${max_stop_dollars:.0f} ({max_stop_ticks:.0f} ticks)")
                 logger.info(f"  Market Regime: {current_regime} (BE mult: {regime_params.breakeven_mult}x, Trail mult: {regime_params.trailing_mult}x)")
+                
+                # CRITICAL FIX: Actually place the stop order with the broker!
+                # AI Mode was calculating stop price but NOT placing the order
+                stop_side = "SELL" if side == "long" else "BUY"
+                stop_order = place_stop_order(symbol, stop_side, qty, stop_price)
+                
+                if stop_order:
+                    state[symbol]["position"]["stop_order_id"] = stop_order.get("order_id")
+                    logger.info(f"  ✅ Stop order placed: ${stop_price:.2f} | Order ID: {stop_order.get('order_id')}")
+                else:
+                    # Stop order failed - log warning but continue managing position
+                    # The trailing stop logic will still work to protect the trade
+                    logger.warning(f"  ⚠️ Could not place stop order at ${stop_price:.2f}")
+                    logger.warning(f"  Trade will be managed with trailing stop logic")
+                
                 logger.info("=" * 60)
                 
                 # Save position state for recovery
@@ -8259,7 +8359,36 @@ def handle_position_reconciliation_event(data: Dict[str, Any]) -> None:
     
     AI MODE: Scans ALL positions from broker to detect any position on any symbol.
     LIVE MODE: Checks configured symbol for position mismatch and auto-corrects.
+    
+    CRITICAL FIX: Skip reconciliation when an entry order is pending to prevent
+    clearing position state while order is still being processed. This prevents
+    duplicate orders and state corruption.
     """
+    # CRITICAL FIX: Skip reconciliation when entry order is pending
+    # This prevents the race condition where:
+    # 1. Bot places order
+    # 2. Reconciliation runs before fill is confirmed
+    # 3. Reconciliation sees broker=0, bot=1 (order not yet filled)
+    # 4. Reconciliation clears bot state
+    # 5. Bot then places another order (duplicate!)
+    if bot_status.get("entry_order_pending", False):
+        pending_since = bot_status.get("entry_order_pending_since")
+        if pending_since:
+            elapsed = (datetime.now() - pending_since).total_seconds()
+            # Give orders up to 60 seconds to complete before forcing reconciliation
+            # Note: This timeout could be made configurable via CONFIG if needed
+            max_pending_seconds = 60
+            if elapsed < max_pending_seconds:
+                logger.debug(f"Skipping reconciliation - entry order pending for {elapsed:.1f}s")
+                return
+            else:
+                # Order has been pending too long - something is wrong
+                logger.warning(f"Entry order pending for {elapsed:.1f}s - forcing reconciliation")
+                bot_status["entry_order_pending"] = False
+                bot_status["entry_order_pending_since"] = None
+                bot_status["entry_order_pending_symbol"] = None
+                bot_status["entry_order_pending_id"] = None
+    
     # AI MODE: Check ALL positions from broker, not just configured symbol
     if CONFIG.get("ai_mode", False):
         _handle_ai_mode_position_scan()
@@ -8295,6 +8424,26 @@ def handle_position_reconciliation_event(data: Dict[str, Any]) -> None:
             # Determine corrective action
             if broker_position == 0 and bot_position != 0:
                 # Broker is flat but bot thinks it has a position
+                # CRITICAL FIX: Check if we recently placed an order - if so, wait for fill confirmation
+                # This prevents clearing state when broker API just hasn't caught up yet
+                position = state[symbol].get("position", {})
+                entry_time = position.get("entry_time")
+                
+                if entry_time:
+                    # Check how long ago we entered
+                    if isinstance(entry_time, datetime):
+                        time_since_entry = (get_current_time() - entry_time).total_seconds()
+                    else:
+                        time_since_entry = 999  # Unknown, don't skip
+                    
+                    # If we entered less than 10 seconds ago, don't clear - wait for broker to catch up
+                    # Note: This grace period could be made configurable via CONFIG if needed
+                    reconciliation_grace_period = 10  # seconds
+                    if time_since_entry < reconciliation_grace_period:
+                        logger.warning(f"  [WAIT] Position entered {time_since_entry:.1f}s ago - waiting for broker confirmation")
+                        logger.warning(f"  [WAIT] Not clearing state yet - broker may not have reported fill")
+                        return
+                
                 logger.error("  Cause: Position was closed externally or bot missed exit fill")
                 logger.error("  Action: Clearing bot's position state")
                 state[symbol]["position"]["active"] = False
