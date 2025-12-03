@@ -560,6 +560,11 @@ bot_status: Dict[str, Any] = {
     "entry_order_pending_since": None,  # Timestamp when entry started
     "entry_order_pending_symbol": None,  # Symbol being traded
     "entry_order_pending_id": None,  # Order ID of pending order (for verification)
+    # FIX: Track flatten in progress to prevent spam
+    # When a flatten operation is initiated, prevent repeated attempts
+    "flatten_in_progress": False,  # True when a flatten order has been placed
+    "flatten_in_progress_since": None,  # Timestamp when flatten started
+    "flatten_in_progress_symbol": None,  # Symbol being flattened
 }
 
 
@@ -5683,11 +5688,31 @@ def check_exit_conditions(symbol: str) -> None:
     
     # AUTO-FLATTEN: Market closing - ALWAYS flatten (no config option)
     if trading_state == "closed" and position["active"]:
+        # FIX: Check if flatten is already in progress to prevent spam
+        # This prevents repeated flatten attempts when order is already placed
+        if bot_status.get("flatten_in_progress", False):
+            flatten_since = bot_status.get("flatten_in_progress_since")
+            if flatten_since:
+                elapsed = (datetime.now() - flatten_since).total_seconds()
+                # Allow up to 30 seconds for flatten to complete before retrying
+                if elapsed < 30:
+                    logger.debug(f"Flatten already in progress for {elapsed:.1f}s - skipping duplicate attempt")
+                    return
+                else:
+                    # Flatten has been pending too long - clear and retry
+                    logger.warning(f"Flatten pending for {elapsed:.1f}s - clearing flag and retrying")
+                    bot_status["flatten_in_progress"] = False
+        
         logger.critical(SEPARATOR_LINE)
         logger.critical("MARKET CLOSING - AUTO-FLATTENING POSITION")
         logger.critical(f"Time: {bar_time.strftime('%H:%M:%S %Z')}")
         logger.critical(f"Position: {side.upper()} {position['quantity']} @ ${entry_price:.2f}")
         logger.critical(SEPARATOR_LINE)
+        
+        # FIX: Set flatten in progress BEFORE placing order to prevent spam
+        bot_status["flatten_in_progress"] = True
+        bot_status["flatten_in_progress_since"] = datetime.now()
+        bot_status["flatten_in_progress_symbol"] = symbol
         
         # Force close immediately
         close_side = "sell" if side == "long" else "buy"
@@ -5707,12 +5732,26 @@ def check_exit_conditions(symbol: str) -> None:
         
         # Execute close order
         handle_exit_orders(symbol, position, flatten_price, "market_close")
+        
+        # FIX: Mark position as inactive AFTER placing the flatten order
+        # This prevents repeated flatten attempts while order is being processed
+        # Position reconciliation will verify the actual state with broker
+        position["active"] = False
+        position["flatten_pending"] = True  # Track that we're waiting for flatten confirmation
+        
         logger.info("Position flattened - bot will continue running and auto-resume when market opens")
         return
     
     # Market closed - Force close all positions
+    # NOTE: This block should not trigger because the first block handles market close
+    # and sets position["active"] = False. This is a safety fallback.
     if trading_state == "closed":
-        if position["active"]:
+        if position["active"] and not position.get("flatten_pending", False):
+            # FIX: Check if flatten is already in progress
+            if bot_status.get("flatten_in_progress", False):
+                logger.debug("Flatten already in progress - skipping emergency flatten")
+                return
+            
             logger.warning(SEPARATOR_LINE)
             logger.warning("MARKET CLOSED - EMERGENCY POSITION FLATTEN")
             logger.warning(f"Time: {bar_time.strftime('%H:%M:%S %Z')}")
@@ -5753,6 +5792,10 @@ def check_exit_conditions(symbol: str) -> None:
                 )
             except Exception as e:
                 logger.debug(f"Failed to send emergency flatten alert: {e}")
+            
+            # FIX: Mark position as inactive to prevent spam
+            position["active"] = False
+            position["flatten_pending"] = True
         
         # Don't process bars when market is closed
         return
@@ -7554,8 +7597,47 @@ def get_trading_state(dt: datetime = None) -> str:
     if backtest_current_time is None:  # Live mode only
         azure_state = bot_status.get("azure_trading_state")
         if azure_state:
-            # Use cached Azure state (updated every 30s by check_azure_time_service)
-            return azure_state
+            # FIX: Sanity check - verify Azure "closed" state against local time
+            # This prevents false positives where Azure incorrectly returns trading_allowed=False
+            if azure_state == "closed":
+                # Get local Eastern time to verify
+                eastern_tz = pytz.timezone('US/Eastern')
+                local_dt = datetime.now(eastern_tz) if dt is None else dt
+                if local_dt.tzinfo is None:
+                    local_dt = eastern_tz.localize(local_dt)
+                eastern_time = local_dt.astimezone(eastern_tz)
+                weekday = eastern_time.weekday()
+                current_time_local = eastern_time.time()
+                
+                # Quick local validation of market hours
+                # Market should only be "closed" during these times:
+                # - Saturday (all day)
+                # - Sunday before 6:00 PM ET
+                # - Mon-Thu 4:45 PM - 6:00 PM ET (maintenance)
+                # - Friday after 4:45 PM ET
+                is_actually_closed = False
+                
+                if weekday == 5:  # Saturday
+                    is_actually_closed = True
+                elif weekday == 6 and current_time_local < datetime_time(18, 0):  # Sunday before 6 PM
+                    is_actually_closed = True
+                elif weekday == 4 and current_time_local >= datetime_time(16, 45):  # Friday after 4:45 PM
+                    is_actually_closed = True
+                elif weekday < 4 and datetime_time(16, 45) <= current_time_local < datetime_time(18, 0):  # Mon-Thu maintenance
+                    is_actually_closed = True
+                
+                if not is_actually_closed:
+                    # Azure says closed but local time says market should be open
+                    # Don't trust Azure - fall through to local logic
+                    logger.warning(f"Azure reports 'closed' but local time ({eastern_time.strftime('%H:%M %Z')}) indicates market should be open - using local time")
+                    # Clear the bad Azure state
+                    bot_status["azure_trading_state"] = None
+                else:
+                    # Azure and local agree - market is closed
+                    return azure_state
+            else:
+                # Azure says entry_window - trust it
+                return azure_state
     
     # FALLBACK: Local Eastern time logic (backtest mode or Azure unreachable)
     # Get current time in Eastern
@@ -8261,9 +8343,15 @@ def _handle_ai_mode_position_scan() -> None:
             # Add null checks to prevent KeyError on partially initialized state
             if (configured_symbol in state and 
                 state[configured_symbol].get("position") and 
-                state[configured_symbol]["position"].get("active")):
-                # Position was closed externally
-                logger.info(f"🤖 AI MODE: Position {configured_symbol} closed by user")
+                (state[configured_symbol]["position"].get("active") or 
+                 state[configured_symbol]["position"].get("flatten_pending"))):
+                # Position was closed externally or by flatten
+                was_flatten_pending = state[configured_symbol]["position"].get("flatten_pending", False)
+                
+                if was_flatten_pending:
+                    logger.info(f"🤖 AI MODE: Position {configured_symbol} flattened successfully")
+                else:
+                    logger.info(f"🤖 AI MODE: Position {configured_symbol} closed by user")
                 
                 # Calculate P&L if possible
                 entry_price = state[configured_symbol]["position"].get("entry_price", 0)
@@ -8286,6 +8374,12 @@ def _handle_ai_mode_position_scan() -> None:
                 state[configured_symbol]["position"]["active"] = False
                 state[configured_symbol]["position"]["quantity"] = 0
                 state[configured_symbol]["position"]["side"] = None
+                state[configured_symbol]["position"]["flatten_pending"] = False
+                
+                # FIX: Clear flatten in progress flag now that position is confirmed closed
+                bot_status["flatten_in_progress"] = False
+                bot_status["flatten_in_progress_since"] = None
+                bot_status["flatten_in_progress_symbol"] = None
             return
         
         # Check each broker position - only manage the configured symbol
@@ -8560,12 +8654,23 @@ def handle_position_reconciliation_event(data: Dict[str, Any]) -> None:
         
         # Get bot's tracked position
         bot_active = state[symbol]["position"]["active"]
+        flatten_pending = state[symbol]["position"].get("flatten_pending", False)
+        
         if bot_active:
             bot_qty = state[symbol]["position"]["quantity"]
             bot_side = state[symbol]["position"]["side"]
             bot_position = bot_qty if bot_side == "long" else -bot_qty
         else:
             bot_position = 0
+        
+        # FIX: If broker is flat and we had a flatten pending, confirm the flatten completed
+        if broker_position == 0 and flatten_pending:
+            logger.info("Position flatten confirmed - broker position is now flat")
+            state[symbol]["position"]["flatten_pending"] = False
+            bot_status["flatten_in_progress"] = False
+            bot_status["flatten_in_progress_since"] = None
+            bot_status["flatten_in_progress_symbol"] = None
+            return  # No mismatch to handle
         
         # Check for mismatch
         if broker_position != bot_position:
@@ -8605,6 +8710,12 @@ def handle_position_reconciliation_event(data: Dict[str, Any]) -> None:
                 state[symbol]["position"]["quantity"] = 0
                 state[symbol]["position"]["side"] = None
                 state[symbol]["position"]["entry_price"] = None
+                state[symbol]["position"]["flatten_pending"] = False
+                
+                # FIX: Clear flatten in progress flag now that position is confirmed closed
+                bot_status["flatten_in_progress"] = False
+                bot_status["flatten_in_progress_since"] = None
+                bot_status["flatten_in_progress_symbol"] = None
                 
             elif broker_position != 0 and bot_position == 0:
                 # Broker has position but bot thinks it's flat - close the unexpected position
