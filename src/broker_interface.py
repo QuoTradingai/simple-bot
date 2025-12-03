@@ -770,11 +770,22 @@ class BrokerSDKImplementation(BrokerInterface):
                         side = "long" if pos.position_type.value == "LONG" else "short"
                         signed_qty = qty if side == "long" else -qty
                         
+                        # Try to get the actual entry price from the position object
+                        # TopStep SDK typically provides avg_price or average_price
+                        entry_price = None
+                        for price_attr in ['avg_price', 'average_price', 'avgPrice', 'averagePrice', 'entry_price', 'entryPrice', 'price']:
+                            if hasattr(pos, price_attr):
+                                entry_price = getattr(pos, price_attr)
+                                if entry_price and float(entry_price) > 0:
+                                    entry_price = float(entry_price)
+                                    break
+                        
                         result.append({
                             "symbol": pos_symbol,
                             "quantity": qty,
                             "signed_quantity": signed_qty,
-                            "side": side
+                            "side": side,
+                            "entry_price": entry_price  # Actual entry price from broker
                         })
                     
                     self._record_success()

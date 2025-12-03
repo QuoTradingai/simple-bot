@@ -8055,6 +8055,7 @@ def _handle_ai_mode_position_scan() -> None:
             qty = pos.get("quantity", 0)
             signed_qty = pos.get("signed_quantity", qty)
             side = pos.get("side", "long")
+            broker_entry_price = pos.get("entry_price")  # Actual entry price from broker
             
             # Ensure state exists for this symbol
             if symbol not in state:
@@ -8076,18 +8077,22 @@ def _handle_ai_mode_position_scan() -> None:
                 logger.info("🤖 AI MODE: New Position Detected")
                 logger.info(f"  {qty} {'LONG' if side == 'long' else 'SHORT'} @ {symbol}")
                 
-                # Get current price for entry estimate
-                # Try multiple sources: bars, bid/ask manager, or broker quote
-                current_price = None
-                if state[symbol]["bars_1min"]:
-                    current_price = state[symbol]["bars_1min"][-1]["close"]
-                elif bid_ask_manager is not None:
-                    quote = bid_ask_manager.get_current_quote(symbol)
-                    if quote:
-                        current_price = (quote.bid_price + quote.ask_price) / 2
+                # Use actual entry price from broker if available
+                # This is the REAL entry price, not just the current market price
+                entry_price = broker_entry_price
                 
-                # If still no price, try to get from broker directly
-                if (current_price is None or current_price <= 0) and broker is not None:
+                # Fallback to current price only if broker doesn't provide entry price
+                if entry_price is None or entry_price <= 0:
+                    # Get current price as fallback
+                    if state[symbol]["bars_1min"]:
+                        entry_price = state[symbol]["bars_1min"][-1]["close"]
+                    elif bid_ask_manager is not None:
+                        quote = bid_ask_manager.get_current_quote(symbol)
+                        if quote:
+                            entry_price = (quote.bid_price + quote.ask_price) / 2
+                
+                # If still no entry price, try to get from broker directly
+                if (entry_price is None or entry_price <= 0) and broker is not None:
                     try:
                         # Try to get a quote from broker
                         if hasattr(broker, 'get_quote'):
@@ -8095,36 +8100,48 @@ def _handle_ai_mode_position_scan() -> None:
                             if quote:
                                 # Handle both dict-like and object quote formats
                                 if hasattr(quote, 'get'):
-                                    current_price = quote.get('last_price') or quote.get('mid_price')
+                                    entry_price = quote.get('last_price') or quote.get('mid_price')
                                 elif hasattr(quote, 'last_price'):
-                                    current_price = quote.last_price
+                                    entry_price = quote.last_price
                                 elif hasattr(quote, 'mid_price'):
-                                    current_price = quote.mid_price
+                                    entry_price = quote.mid_price
                     except Exception:
                         pass
                 
-                if current_price is None or current_price <= 0:
+                if entry_price is None or entry_price <= 0:
                     logger.info("  Waiting for price data...")
                     logger.info("=" * 60)
                     continue
+                
+                # Log if we're using actual entry price vs estimated
+                if broker_entry_price and broker_entry_price > 0:
+                    logger.info(f"  Using actual entry price from broker: ${entry_price:.2f}")
+                else:
+                    logger.info(f"  Using estimated entry price: ${entry_price:.2f}")
+                
+                # Detect current market regime for better trade management
+                current_regime = state[symbol].get("current_regime", "NORMAL")
+                regime_params = REGIME_DEFINITIONS.get(current_regime, REGIME_DEFINITIONS["NORMAL"])
                 
                 # Adopt the position
                 state[symbol]["position"]["active"] = True
                 state[symbol]["position"]["quantity"] = qty
                 state[symbol]["position"]["side"] = side
-                state[symbol]["position"]["entry_price"] = current_price
+                state[symbol]["position"]["entry_price"] = entry_price
                 state[symbol]["position"]["entry_time"] = get_current_time()
+                state[symbol]["position"]["entry_regime"] = current_regime  # Store regime at entry
+                state[symbol]["position"]["current_regime"] = current_regime  # Track current regime
                 
-                # Calculate stop loss using max_loss_per_trade
+                # Calculate stop loss using max_loss_per_trade from the ACTUAL entry price
                 tick_size, tick_value = get_symbol_tick_specs(symbol)
                 max_stop_dollars = CONFIG.get("max_stop_loss_dollars", DEFAULT_MAX_STOP_LOSS_DOLLARS)
                 max_stop_ticks = max_stop_dollars / tick_value
                 stop_distance = max_stop_ticks * tick_size
                 
                 if side == "long":
-                    stop_price = current_price - stop_distance
+                    stop_price = entry_price - stop_distance
                 else:
-                    stop_price = current_price + stop_distance
+                    stop_price = entry_price + stop_distance
                 
                 # Round to tick
                 stop_price = round(stop_price / tick_size) * tick_size
@@ -8133,8 +8150,9 @@ def _handle_ai_mode_position_scan() -> None:
                 state[symbol]["position"]["trailing_stop"] = stop_price
                 state[symbol]["position"]["ai_mode_adopted"] = True
                 
-                logger.info(f"  Entry: ${current_price:.2f} | Stop: ${stop_price:.2f}")
+                logger.info(f"  Entry: ${entry_price:.2f} | Stop: ${stop_price:.2f}")
                 logger.info(f"  Max Loss: ${max_stop_dollars:.0f} ({max_stop_ticks:.0f} ticks)")
+                logger.info(f"  Market Regime: {current_regime} (BE mult: {regime_params.breakeven_mult}x, Trail mult: {regime_params.trailing_mult}x)")
                 logger.info("=" * 60)
                 
                 # Save position state for recovery
