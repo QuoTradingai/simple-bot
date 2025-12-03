@@ -356,9 +356,10 @@ class TimerManager:
                 
                 # Position reconciliation check
                 # AI Mode: Check every 3 seconds for instant position detection
-                # Normal Mode: Check every 5 minutes
+                # Live Mode: Check every 5 seconds for quick position sync
+                # (Previously 5 minutes, now faster to ensure bot always knows position state)
                 ai_mode = self.config.get("ai_mode", False)
-                reconciliation_interval = 3 if ai_mode else 300
+                reconciliation_interval = 3 if ai_mode else 5
                 if self._should_check("position_reconciliation", current_time, reconciliation_interval):
                     self.event_loop.post_event(
                         EventType.POSITION_RECONCILIATION,

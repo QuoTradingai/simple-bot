@@ -8156,9 +8156,10 @@ def handle_position_reconciliation_event(data: Dict[str, Any]) -> None:
     """
     Handle periodic position reconciliation check.
     Verifies bot's position state matches broker's actual position.
-    Runs every 5 minutes to detect and correct any desyncs.
+    Runs every 5 seconds (Live Mode) or 3 seconds (AI Mode) to detect and correct any desyncs.
     
     AI MODE: Scans ALL positions from broker to detect any position on any symbol.
+    LIVE MODE: Checks configured symbol for position mismatch and auto-corrects.
     """
     # AI MODE: Check ALL positions from broker, not just configured symbol
     if CONFIG.get("ai_mode", False):
