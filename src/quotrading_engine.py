@@ -376,7 +376,15 @@ def normalize_symbol_to_standard(symbol: str) -> Optional[str]:
         
         # Check broker symbol mappings to find the standard symbol
         # This reverses the mapping: broker format -> standard symbol
-        for std_symbol, spec in SYMBOL_SPECS.items():
+        # Sort by TopStep symbol length (longest first) to avoid partial matches
+        # e.g., "F.US.MESEP" should match before "F.US.EP"
+        sorted_specs = sorted(
+            SYMBOL_SPECS.items(),
+            key=lambda x: len(x[1].broker_symbols.get('topstep', '')) if hasattr(x[1], 'broker_symbols') and x[1].broker_symbols else 0,
+            reverse=True
+        )
+        
+        for std_symbol, spec in sorted_specs:
             if not hasattr(spec, 'broker_symbols') or not spec.broker_symbols:
                 continue
             
@@ -388,10 +396,23 @@ def normalize_symbol_to_standard(symbol: str) -> Optional[str]:
             
             # Check if the broker symbol matches or is contained in the input
             # E.g., "F.US.MNQEP" in "CON.F.US.MNQEP.Z25"
+            # Using word boundary check: the broker symbol should be surrounded by
+            # dots or be at the start/end of the string
             if topstep_upper in symbol_upper:
-                return std_symbol
+                # Verify it's a proper match (not a partial word match)
+                # Find the position and check boundaries
+                idx = symbol_upper.find(topstep_upper)
+                if idx >= 0:
+                    # Check that it's at a boundary (start or preceded by .)
+                    before_ok = idx == 0 or symbol_upper[idx-1] == '.'
+                    # Check that it's at a boundary (end or followed by .)
+                    after_idx = idx + len(topstep_upper)
+                    after_ok = after_idx == len(symbol_upper) or symbol_upper[after_idx] == '.'
+                    if before_ok and after_ok:
+                        return std_symbol
             
-            # Also check for the key part (e.g., "MNQEP" in ".MNQEP.")
+            # Also check for the key part with dot boundaries
+            # E.g., ".MNQEP." in ".MNQEP." or ends with ".MNQEP"
             broker_parts = topstep_upper.split('.')
             if len(broker_parts) >= 2:
                 key_part = broker_parts[-1]  # Last part like "MNQEP" or "EP"
@@ -400,9 +421,19 @@ def normalize_symbol_to_standard(symbol: str) -> Optional[str]:
         
         # Check if a standard symbol name is directly in the input
         # E.g., "MNQ" in "MNQZ24" or "MNQ" in some format
-        for std_symbol in SYMBOL_SPECS.keys():
-            if std_symbol in symbol_upper:
-                return std_symbol
+        # Sort by symbol length (longest first) to avoid "ES" matching before "MES"
+        sorted_symbols = sorted(SYMBOL_SPECS.keys(), key=len, reverse=True)
+        for std_symbol in sorted_symbols:
+            # Check for word boundary match: symbol should be at start/end or surrounded by non-alpha chars
+            idx = symbol_upper.find(std_symbol)
+            if idx >= 0:
+                # Check before boundary
+                before_ok = idx == 0 or not symbol_upper[idx-1].isalpha()
+                # Check after boundary (allow alphanumeric for month codes like "Z24")
+                after_idx = idx + len(std_symbol)
+                after_ok = after_idx == len(symbol_upper) or not symbol_upper[after_idx].isalpha() or symbol_upper[after_idx:after_idx+1].isdigit() or symbol_upper[after_idx:after_idx+1] in 'FGHJKMNQUVXZ'  # Month codes
+                if before_ok and after_ok:
+                    return std_symbol
         
     except Exception:
         pass
