@@ -13332,9 +13332,9 @@
     }
   ],
   "stats": {
-    "total_signals": 427,
+    "total_signals": 426,
     "taken": 403,
-    "skipped": 24,
+    "skipped": 23,
     "take_rate": 0,
     "recent_pnl": 0,
     "recent_win_rate": 0
