@@ -1308,16 +1308,10 @@ class QuoTradingLauncher:
         
         self.shadow_mode_var = tk.BooleanVar(value=self.config.get("shadow_mode", False))
         
-        def on_shadow_mode_toggle():
-            """When Shadow mode is enabled, disable AI mode (mutually exclusive)"""
-            if self.shadow_mode_var.get():
-                self.ai_mode_var.set(False)
-        
         tk.Checkbutton(
             shadow_mode_frame,
             text="👁 Shadow Mode",
             variable=self.shadow_mode_var,
-            command=on_shadow_mode_toggle,
             font=("Segoe UI", 8, "bold"),
             bg=self.colors['card'],
             fg=self.colors['text'],
@@ -1330,39 +1324,6 @@ class QuoTradingLauncher:
         tk.Label(
             shadow_mode_frame,
             text="View signals without auto-trading",
-            font=("Segoe UI", 7, "bold"),
-            bg=self.colors['card'],
-            fg=self.colors['text_light']
-        ).pack(anchor=tk.W, padx=(20, 0))
-        
-        # AI Mode (Position Management Mode)
-        ai_mode_frame = tk.Frame(modes_section, bg=self.colors['card'])
-        ai_mode_frame.pack(fill=tk.X, pady=(0, 5))
-        
-        self.ai_mode_var = tk.BooleanVar(value=self.config.get("ai_mode", False))
-        
-        def on_ai_mode_toggle():
-            """When AI mode is enabled, disable Shadow mode (mutually exclusive)"""
-            if self.ai_mode_var.get():
-                self.shadow_mode_var.set(False)
-        
-        tk.Checkbutton(
-            ai_mode_frame,
-            text="🤖 AI Mode",
-            variable=self.ai_mode_var,
-            command=on_ai_mode_toggle,
-            font=("Segoe UI", 8, "bold"),
-            bg=self.colors['card'],
-            fg=self.colors['text'],
-            selectcolor=self.colors['secondary'],
-            activebackground=self.colors['card'],
-            activeforeground=self.colors['success'],
-            cursor="hand2"
-        ).pack(anchor=tk.W)
-        
-        tk.Label(
-            ai_mode_frame,
-            text="You trade, AI manages stops and exits",
             font=("Segoe UI", 7, "bold"),
             bg=self.colors['card'],
             fg=self.colors['text_light']
@@ -2024,21 +1985,15 @@ class QuoTradingLauncher:
     
     def start_bot(self):
         """Validate settings and start the trading AI."""
-        # Validate at least one symbol selected (unless AI mode is enabled)
+        # Validate at least one symbol selected
         selected_symbols = [code for code, var in self.symbol_vars.items() if var.get()]
         
-        # AI Mode: Symbol is optional - bot will detect from broker positions
-        if not selected_symbols and not self.ai_mode_var.get():
+        if not selected_symbols:
             messagebox.showerror(
                 "No Symbols Selected",
                 "Please select at least one trading symbol."
             )
             return
-        
-        # AI Mode without symbol: use default ES for data feed subscription
-        # The bot will detect and manage any position the user opens
-        if not selected_symbols and self.ai_mode_var.get():
-            selected_symbols = [self.DEFAULT_SYMBOL]  # ES as default for data feed
         
         # Validate account size
         try:
@@ -2095,7 +2050,6 @@ class QuoTradingLauncher:
         self.config["max_trades"] = self.trades_var.get()
         self.config["confidence_threshold"] = self.confidence_var.get()
         self.config["shadow_mode"] = self.shadow_mode_var.get()
-        self.config["ai_mode"] = self.ai_mode_var.get()
         self.config["time_exit_enabled"] = self.time_exit_var.get()
         self.config["selected_account"] = self.account_dropdown_var.get()
         
@@ -2221,7 +2175,6 @@ class QuoTradingLauncher:
         max_trades = self.trades_var.get()
         confidence = self.confidence_var.get()
         shadow_mode = "ON" if self.shadow_mode_var.get() else "OFF"
-        ai_mode = "ON" if self.ai_mode_var.get() else "OFF"
         time_exit = "ON" if self.time_exit_var.get() else "OFF"
         max_loss_per_trade = self.config.get("max_loss_per_trade", 200)
         
@@ -2235,7 +2188,6 @@ Daily Loss Limit: ${loss_limit}
 Max Trades/Day: {max_trades}
 Confidence Threshold: {confidence}%
 Shadow Mode: {shadow_mode}
-AI Mode: {ai_mode}
 Time-Based Exit: {time_exit}
         """
         
@@ -2317,19 +2269,20 @@ Time-Based Exit: {time_exit}
             # Track all launched processes
             self.bot_processes = []
             
-            # AI MODE: Only launch ONE PowerShell window
-            # AI mode doesn't need per-symbol windows - it detects whatever the user trades
-            if self.ai_mode_var.get():
-                # Use first symbol just for the window title and initial data feed
-                symbol = selected_symbols[0] if selected_symbols else "ES"
-                
+            # LIVE MODE: Launch a SEPARATE PowerShell window for each symbol
+            # MULTI-SYMBOL FIX: Add small delay between launches to avoid session race conditions
+            # Each bot creates its own symbol-specific session with the server
+            for i, symbol in enumerate(selected_symbols):
+                # PowerShell command to run the QuoTrading AI bot with symbol argument
+                # Each window gets its own symbol via command-line argument
                 ps_command = [
                     "powershell.exe",
-                    "-NoExit",
+                    "-NoExit",  # Keep window open
                     "-Command",
-                    f"$host.UI.RawUI.WindowTitle = 'QuoTrading AI - AI Mode'; cd '{bot_dir}'; python src/quotrading_engine.py {symbol}"
+                    f"$host.UI.RawUI.WindowTitle = 'QuoTrading AI - {symbol}'; cd '{bot_dir}'; python src/quotrading_engine.py {symbol}"
                 ]
                 
+                # Start PowerShell process in a NEW CONSOLE WINDOW
                 process = subprocess.Popen(
                     ps_command,
                     creationflags=subprocess.CREATE_NEW_CONSOLE,
@@ -2337,34 +2290,12 @@ Time-Based Exit: {time_exit}
                 )
                 
                 self.bot_processes.append((symbol, process))
-            else:
-                # LIVE MODE: Launch a SEPARATE PowerShell window for each symbol
-                # MULTI-SYMBOL FIX: Add small delay between launches to avoid session race conditions
-                # Each bot creates its own symbol-specific session with the server
-                for i, symbol in enumerate(selected_symbols):
-                    # PowerShell command to run the QuoTrading AI bot with symbol argument
-                    # Each window gets its own symbol via command-line argument
-                    ps_command = [
-                        "powershell.exe",
-                        "-NoExit",  # Keep window open
-                        "-Command",
-                        f"$host.UI.RawUI.WindowTitle = 'QuoTrading AI - {symbol}'; cd '{bot_dir}'; python src/quotrading_engine.py {symbol}"
-                    ]
-                    
-                    # Start PowerShell process in a NEW CONSOLE WINDOW
-                    process = subprocess.Popen(
-                        ps_command,
-                        creationflags=subprocess.CREATE_NEW_CONSOLE,
-                        cwd=str(bot_dir)
-                    )
-                    
-                    self.bot_processes.append((symbol, process))
-                    
-                    # MULTI-SYMBOL FIX: Wait between launching each symbol
-                    # This ensures each bot completes its session registration before the next starts
-                    # Prevents race conditions where multiple bots try to create sessions simultaneously
-                    if i < len(selected_symbols) - 1:  # Don't wait after the last symbol
-                        time.sleep(MULTI_SYMBOL_LAUNCH_DELAY_SECONDS)
+                
+                # MULTI-SYMBOL FIX: Wait between launching each symbol
+                # This ensures each bot completes its session registration before the next starts
+                # Prevents race conditions where multiple bots try to create sessions simultaneously
+                if i < len(selected_symbols) - 1:  # Don't wait after the last symbol
+                    time.sleep(MULTI_SYMBOL_LAUNCH_DELAY_SECONDS)
             
             # CREATE ACCOUNT LOCK with ALL bot PIDs
             # Lock tracks all processes so stale lock detection works properly
@@ -3351,10 +3282,6 @@ BOT_CONFIDENCE_THRESHOLD={self.confidence_var.get()}
 # Trading Mode (Shadow Trading / Shadow Mode)
 BOT_SHADOW_MODE={'true' if self.shadow_mode_var.get() else 'false'}
 # When true: Bot provides signals only, no automatic trade execution (manual trading)
-
-# AI Mode (Position Management Mode)
-BOT_AI_MODE={'true' if self.ai_mode_var.get() else 'false'}
-# When true: User trades manually, AI manages positions (stop loss, trailing stops, exits)
 
 # Time-Based Exit (User Configurable)
 BOT_TIME_EXIT_ENABLED={'true' if self.time_exit_var.get() else 'false'}

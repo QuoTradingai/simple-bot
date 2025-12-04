@@ -293,7 +293,6 @@ class BotConfiguration:
     
     # Operational Parameters
     shadow_mode: bool = False  # Signal-only mode - shows trading signals without executing trades (manual trading)
-    ai_mode: bool = False  # AI position management mode - user trades manually, AI manages stops/exits
     max_bars_storage: int = 200
     
     # Bid/Ask Trading Strategy Parameters
@@ -497,7 +496,6 @@ class BotConfiguration:
             
             # Operational Mode
             "shadow_mode": self.shadow_mode,
-            "ai_mode": self.ai_mode,
             "max_bars_storage": self.max_bars_storage,
             
             # Exit Management - HARDCODED (trailing stop handles all exits)
@@ -618,9 +616,6 @@ def load_from_env() -> BotConfiguration:
     
     if os.getenv("BOT_SHADOW_MODE"):
         config.shadow_mode = os.getenv("BOT_SHADOW_MODE").lower() in ("true", "1", "yes")
-    
-    if os.getenv("BOT_AI_MODE"):
-        config.ai_mode = os.getenv("BOT_AI_MODE").lower() in ("true", "1", "yes")
     
     # Time-Based Exit (USER CONFIGURABLE via GUI checkbox)
     if os.getenv("BOT_TIME_EXIT_ENABLED"):
@@ -785,8 +780,6 @@ def load_config(environment: Optional[str] = None, backtest_mode: bool = False) 
         env_vars_set.add("dry_run")
     if os.getenv("BOT_SHADOW_MODE"):
         env_vars_set.add("shadow_mode")
-    if os.getenv("BOT_AI_MODE"):
-        env_vars_set.add("ai_mode")
     if os.getenv("BOT_ENVIRONMENT"):
         env_vars_set.add("environment")
     if os.getenv("BOT_BROKER") or os.getenv("BROKER"):
