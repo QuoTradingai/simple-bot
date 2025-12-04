@@ -154,14 +154,14 @@ def initialize_rl_brains_for_backtest(bot_config) -> Tuple[Any, ModuleType]:
     symbol = bot_config.instrument
     
     # Initialize RL brain with symbol-specific experience file
-    # For saturation learning: 30% exploration, 40% confidence threshold
+    # Testing relaxed settings: 100% exploration, 0% confidence threshold
     signal_exp_file = os.path.join(PROJECT_ROOT, f"experiences/{symbol}/signal_experience.json")
     rl_brain = SignalConfidenceRL(
         experience_file=signal_exp_file,
         backtest_mode=True,
-        confidence_threshold=0.40,  # 40% threshold for saturation learning
-        exploration_rate=0.30,  # 30% exploration for saturation learning
-        min_exploration=0.30,   # Keep at 30% for consistent learning
+        confidence_threshold=0.0,  # 0% threshold - take ALL signals for testing
+        exploration_rate=1.0,  # 100% exploration - take every signal
+        min_exploration=1.0,   # Keep at 100% for full learning
         exploration_decay=1.0  # No decay - maintain exploration rate
     )
     
