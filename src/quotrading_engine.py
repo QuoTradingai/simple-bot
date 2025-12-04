@@ -4232,17 +4232,15 @@ def is_market_moving_too_fast(symbol: str) -> Tuple[bool, str]:
 
 def execute_entry(symbol: str, side: str, entry_price: float) -> None:
     """
-    Execute entry order with stop loss and target.
-    Uses intelligent bid/ask order placement strategy with FULL EXECUTION RISK PROTECTION.
+    Execute entry order with stop loss.
+    
+    SIMPLE EXECUTION:
+    - All entries use MARKET ORDER for immediate execution
+    - Stop loss placed immediately based on user's max_loss_per_trade GUI setting
+    - Position state validation (prevents double positioning)
+    - Fast market detection (skips dangerous entries)
     
     SHADOW MODE: Logs signal without placing actual orders.
-    
-    NEW: Production-ready execution with:
-    - Position state validation (prevents double positioning)
-    - Price deterioration protection (max 3 ticks from signal)
-    - Partial fill handling (detects and manages)
-    - Order rejection recovery (3 retries with exponential backoff)
-    - Fast market detection (skips dangerous entries)
     
     Args:
         symbol: Instrument symbol
@@ -4381,20 +4379,8 @@ def execute_entry(symbol: str, side: str, entry_price: float) -> None:
     logger.info(f"  Time: {entry_time.strftime('%Y-%m-%d %H:%M:%S %Z')}")
     logger.info(f"  Symbol: {symbol}")
     
-    # Spread-aware position sizing (Requirement 10)
-    original_contracts = contracts
-    if bid_ask_manager is not None:
-        try:
-            expected_profit_ticks = 20  # Use reasonable default for spread calculation
-            adjusted_contracts, cost_breakdown = bid_ask_manager.calculate_spread_aware_position_size(
-                symbol, contracts, expected_profit_ticks
-            )
-            if adjusted_contracts != original_contracts:
-                logger.warning(f"  Position size adjusted: {original_contracts} -> {adjusted_contracts} contracts")
-                logger.info(f"  Spread cost: {cost_breakdown['cost_percentage']:.1f}% of expected profit")
-                contracts = adjusted_contracts
-        except Exception as e:
-            logger.warning(f"  Spread-aware sizing unavailable: {e}")
+    # Position size is fixed based on user's GUI settings
+    # No spread-aware adjustments - keep it simple
     
     logger.info(f"  Contracts: {contracts}")
     logger.info(f"  Stop Loss: ${stop_price:.2f}")
@@ -4416,74 +4402,23 @@ def execute_entry(symbol: str, side: str, entry_price: float) -> None:
     bot_status["entry_order_pending_id"] = None  # Will be set after order is placed
     
     try:
-        # ===== FIX #2 & #3: Retry Logic + Partial Fill Handling =====
-        if bid_ask_manager is not None:
-            try:
-                # Get order parameters from bid/ask manager
-                order_params = bid_ask_manager.get_entry_order_params(symbol, side, contracts)
-                
-                logger.info(f"  Order Strategy: {order_params['strategy']}")
-                logger.info(f"  Reason: {order_params['reason']}")
-                
-                # Use retry-enabled order placement with full execution protection
-                order, actual_fill_price, order_type_used = place_entry_order_with_retry(
-                    symbol, side, contracts, order_params, max_retries=3
-                )
-                
-                if order is None:
-                    logger.error("[FAIL] Failed to place entry after retries - TRADE SKIPPED")
-                    return
-                
-                # Update pending order ID
-                bot_status["entry_order_pending_id"] = order.get("order_id")
-                
-                # CRITICAL: IMMEDIATELY save minimal position state to prevent loss on crash
-                # This creates a recovery checkpoint before any further processing
-                state[symbol]["position"]["active"] = True
-                state[symbol]["position"]["side"] = side
-                state[symbol]["position"]["quantity"] = contracts
-                state[symbol]["position"]["entry_price"] = actual_fill_price
-                state[symbol]["position"]["entry_time"] = entry_time
-                state[symbol]["position"]["order_id"] = order.get("order_id")
-                save_position_state(symbol)
-                logger.info(f"  [CHECKPOINT] Emergency position state saved (crash protection)")
-                
-                logger.info(f"  [OK] Order placed successfully using {order_type_used} strategy")
-                
-            except Exception as e:
-                logger.error(f"Error using bid/ask manager for entry: {e}")
-                logger.info("Falling back to market order")
-                order = place_market_order(symbol, order_side, contracts)
-                actual_fill_price = entry_price
-                
-                # CRITICAL: Save emergency checkpoint for fallback path too
-                if order is not None:
-                    bot_status["entry_order_pending_id"] = order.get("order_id")
-                    state[symbol]["position"]["active"] = True
-                    state[symbol]["position"]["side"] = side
-                    state[symbol]["position"]["quantity"] = contracts
-                    state[symbol]["position"]["entry_price"] = actual_fill_price
-                    state[symbol]["position"]["entry_time"] = entry_time
-                    state[symbol]["position"]["order_id"] = order.get("order_id")
-                    save_position_state(symbol)
-                    logger.info(f"  [CHECKPOINT] Emergency position state saved (fallback path)")
-        else:
-            # No bid/ask manager, use traditional market order
-            logger.info("  Using market order (no bid/ask manager)")
-            
-            order = place_market_order(symbol, order_side, contracts)
-            
-            # CRITICAL: Save emergency checkpoint for no-manager path
-            if order is not None:
-                bot_status["entry_order_pending_id"] = order.get("order_id")
-                state[symbol]["position"]["active"] = True
-                state[symbol]["position"]["side"] = side
-                state[symbol]["position"]["quantity"] = contracts
-                state[symbol]["position"]["entry_price"] = entry_price
-                state[symbol]["position"]["entry_time"] = entry_time
-                state[symbol]["position"]["order_id"] = order.get("order_id")
-                save_position_state(symbol)
-                logger.info(f"  [CHECKPOINT] Emergency position state saved (no manager path)")
+        # SIMPLE ENTRY: Always use market order for immediate execution
+        # Stop loss is placed immediately based on user's max_loss_per_trade setting
+        logger.info(f"  Entry: MARKET ORDER")
+        order = place_market_order(symbol, order_side, contracts)
+        order_type_used = "market"
+        
+        if order is not None:
+            bot_status["entry_order_pending_id"] = order.get("order_id")
+            # CRITICAL: IMMEDIATELY save minimal position state to prevent loss on crash
+            state[symbol]["position"]["active"] = True
+            state[symbol]["position"]["side"] = side
+            state[symbol]["position"]["quantity"] = contracts
+            state[symbol]["position"]["entry_price"] = entry_price
+            state[symbol]["position"]["entry_time"] = entry_time
+            state[symbol]["position"]["order_id"] = order.get("order_id")
+            save_position_state(symbol)
+            logger.info(f"  [OK] Market order placed successfully")
         
         if order is None:
             logger.error("Failed to place entry order")
