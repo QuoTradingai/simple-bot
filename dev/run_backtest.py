@@ -441,15 +441,17 @@ def run_backtest(args: argparse.Namespace) -> Dict[str, Any]:
     
     # Save RL experiences at the end
     print("Saving RL experiences...")
+    symbol = args.symbol if args.symbol else bot_config.instrument
+    experience_path = f"experiences/{symbol}/signal_experience.json"
     if rl_brain is not None and hasattr(rl_brain, 'save_experience'):
         rl_brain.save_experience()
         final_experience_count = len(rl_brain.experiences)
         new_experiences = final_experience_count - initial_experience_count
-        print(f"[OK] Signal RL experiences saved to data/signal_experience.json")
+        print(f"[OK] Signal RL experiences saved to {experience_path}")
         print(f"   Total experiences: {final_experience_count}")
         print(f"   New experiences this backtest: {new_experiences}")
     else:
-        print("ΓÜá∩╕Å  No RL brain to save")
+        print("⚠️  No RL brain to save")
     
     # Return results
     return results
