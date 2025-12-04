@@ -12988,15 +12988,46 @@
       "order_type_used": "market",
       "entry_slippage_ticks": 0.0,
       "exit_reason": "stop_loss"
+    },
+    {
+      "timestamp": "2025-11-20T01:57:00-05:00",
+      "symbol": "ES",
+      "price": 6745.0,
+      "flush_size_ticks": 17.0,
+      "flush_velocity": 2.43,
+      "flush_direction": "UP",
+      "bars_since_flush_start": 0,
+      "distance_from_flush_low": 8.0,
+      "rsi": 64.7,
+      "volume_climax_ratio": 1.63,
+      "vwap_distance_ticks": 41.3,
+      "reversal_candle": true,
+      "no_new_extreme": true,
+      "atr": 1.6607,
+      "hour": 1,
+      "session": "ETH",
+      "regime": "NORMAL_TRENDING",
+      "stop_distance_ticks": 11.0,
+      "target_distance_ticks": 41.3,
+      "risk_reward_ratio": 3.76,
+      "pnl": 667.5,
+      "duration": 27.0,
+      "took_trade": true,
+      "exploration_rate": 0.3,
+      "mfe": 325.0,
+      "mae": 262.5,
+      "order_type_used": "market",
+      "entry_slippage_ticks": 0.0,
+      "exit_reason": "stop_loss"
     }
   ],
   "stats": {
-    "total_signals": 420,
-    "taken": 420,
-    "skipped": 0,
-    "take_rate": 100.0,
-    "recent_pnl": 3486.737741062052,
-    "recent_win_rate": 75.0,
-    "exploration_rate": 100.0
+    "total_signals": 421,
+    "taken": 417,
+    "skipped": 4,
+    "take_rate": 99.04988123515439,
+    "recent_pnl": 667.5,
+    "recent_win_rate": 100.0,
+    "exploration_rate": 30.0
   }
 }
