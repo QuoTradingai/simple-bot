@@ -4788,7 +4788,11 @@ def check_stop_hit(symbol: str, current_bar: Dict[str, Any], position: Dict[str,
 
 def check_reversal_signal(symbol: str, current_bar: Dict[str, Any], position: Dict[str, Any]) -> Tuple[bool, Optional[float]]:
     """
-    Check for signal reversal (price crossing back to opposite band).
+    Check if price has reverted to VWAP (mean reversion target achieved).
+    
+    CAPITULATION REVERSAL STRATEGY:
+    The target is VWAP (fair value). When price reaches VWAP from an extreme
+    (flush low for longs, flush high for shorts), the mean reversion is complete.
     
     Args:
         symbol: Instrument symbol
@@ -4796,20 +4800,23 @@ def check_reversal_signal(symbol: str, current_bar: Dict[str, Any], position: Di
         position: Position dictionary
     
     Returns:
-        Tuple of (reversal_detected, exit_price)
+        Tuple of (target_reached, exit_price)
     """
-    vwap_bands = state[symbol]["vwap_bands"]
-    trend = state[symbol]["trend_direction"]
+    vwap = state[symbol].get("vwap")
     side = position["side"]
     
-    if side == "long" and trend == "up":
-        # If price crosses back above upper band 2, bounce is complete
-        if current_bar["close"] > vwap_bands["upper_2"]:
+    # VWAP not available - cannot check target
+    if vwap is None or vwap <= 0:
+        return False, None
+    
+    # For long positions: price reaching or exceeding VWAP means target hit
+    if side == "long":
+        if current_bar["close"] >= vwap:
             return True, current_bar["close"]
     
-    if side == "short" and trend == "down":
-        # If price crosses back below lower band 1, bounce is complete
-        if current_bar["close"] < vwap_bands["lower_1"]:
+    # For short positions: price reaching or falling below VWAP means target hit
+    if side == "short":
+        if current_bar["close"] <= vwap:
             return True, current_bar["close"]
     
     return False, None
@@ -6094,10 +6101,10 @@ def check_exit_conditions(symbol: str) -> None:
     # EIGHTH - Time-decay tightening (last priority, gradual adjustment)
     check_time_decay_tightening(symbol, bar_time)
     
-    # Check for signal reversal (lowest priority)
-    reversal, price = check_reversal_signal(symbol, current_bar, position)
-    if reversal:
-        execute_exit(symbol, price, "signal_reversal")
+    # Check for VWAP target hit (mean reversion complete)
+    target_hit, price = check_reversal_signal(symbol, current_bar, position)
+    if target_hit:
+        execute_exit(symbol, price, "target_hit")
         return
 
 
