@@ -4221,7 +4221,7 @@ def execute_entry(symbol: str, side: str, entry_price: float) -> None:
             symbol=symbol,
             price=actual_fill_price,
             contracts=contracts,
-            side="LONG" if side == 'buy' else "SHORT"
+            side="LONG" if side == 'long' else "SHORT"
         )
     except Exception as e:
         logger.debug(f"Failed to send entry alert: {e}")
