@@ -1204,7 +1204,14 @@ def check_broker_connection() -> None:
                 logger.critical("  [RECONNECT] Connecting to broker...")
                 success = broker.connect(max_retries=3)
                 if success:
-                    logger.critical("  [RECONNECT] [OK] Broker connected - Data feed active")
+                    logger.critical("  [RECONNECT] [OK] Broker connected")
+                    
+                    # CRITICAL FIX: Re-subscribe to market data after reconnection
+                    # Without this, the bot reconnects but no data flows because
+                    # subscriptions were lost when the websocket was disconnected
+                    logger.critical("  [RECONNECT] Re-subscribing to data feeds...")
+                    resubscribe_market_data_after_reconnect()
+                    
                     bot_status["maintenance_idle"] = False
                     bot_status["idle_type"] = None
                     bot_status["trading_enabled"] = True
@@ -1242,7 +1249,14 @@ def check_broker_connection() -> None:
             logger.critical("⚠️  RECONNECTING TO TOPSTEP")
             success = broker.connect(max_retries=3)
             if success:
-                logger.critical("✅ Reconnection successful - Trading resumed")
+                logger.critical("✅ Reconnection successful")
+                
+                # CRITICAL FIX: Re-subscribe to market data after reconnection
+                # Without this, the bot reconnects but no data flows because
+                # subscriptions were lost when the websocket was disconnected
+                resubscribe_market_data_after_reconnect()
+                
+                logger.critical("✅ Trading resumed")
                 logger.critical("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
                 
                 # Send success notification
@@ -1706,6 +1720,41 @@ def subscribe_market_data(symbol: str, callback: Callable[[str, float, int, int]
             RecoveryErrorType.DATA_FEED_INTERRUPTION,
             {"symbol": symbol, "error": str(e)}
         )
+
+
+def resubscribe_market_data_after_reconnect() -> bool:
+    """
+    Re-subscribe to market data after broker reconnection.
+    
+    This is called after the broker reconnects from maintenance mode or
+    after a connection loss during trading hours. It re-establishes the
+    market data and quote subscriptions that were lost when the websocket
+    was disconnected.
+    
+    Returns:
+        True if all subscriptions successful, False if any failed
+    """
+    trading_symbol = get_current_symbol_for_session()
+    success = True
+    
+    # Re-subscribe to market data (tick/trade data)
+    try:
+        subscribe_market_data(trading_symbol, on_tick)
+        logger.critical(f"  [RECONNECT] ✅ Market data subscription active for {trading_symbol}")
+    except Exception as e:
+        logger.error(f"  [RECONNECT] ❌ Failed to subscribe to market data: {e}")
+        success = False
+    
+    # Re-subscribe to quotes (bid/ask data)
+    try:
+        if broker is not None and hasattr(broker, 'subscribe_quotes'):
+            broker.subscribe_quotes(trading_symbol, on_quote)
+            logger.critical("  [RECONNECT] ✅ Quote data subscription active")
+    except Exception as e:
+        logger.error(f"  [RECONNECT] ❌ Failed to subscribe to quote data: {e}")
+        success = False
+    
+    return success
 
 
 def fetch_historical_bars(symbol: str, timeframe: int, count: int) -> List[Dict[str, Any]]:
