@@ -4,14 +4,15 @@ Run this script to test the user profile endpoint functionality
 """
 import requests
 import json
+import os
 from datetime import datetime
 
 # API base URL
-BASE_URL = "https://quotrading-flask-api.azurewebsites.net"
+BASE_URL = os.getenv("QUOTRADING_API_URL", "https://quotrading-flask-api.azurewebsites.net")
 # BASE_URL = "http://localhost:5000"  # Uncomment for local testing
 
-# Test license key (replace with a real license key for testing)
-TEST_LICENSE_KEY = "TEST-LICENSE-KEY-123"
+# Test license key from environment variable (for security)
+TEST_LICENSE_KEY = os.getenv("TEST_LICENSE_KEY", "TEST-LICENSE-KEY-123")
 
 def test_profile_endpoint():
     """Test the /api/profile endpoint with various scenarios"""

@@ -3427,31 +3427,26 @@ def get_user_profile():
         if not license_key:
             return jsonify({"error": "License key required. Use ?license_key=KEY or Authorization: Bearer KEY"}), 400
         
-        # Rate limiting to prevent abuse
+        # Rate limiting to prevent abuse (global limit of 100 requests per minute)
         allowed, rate_msg = check_rate_limit(license_key, '/api/profile')
         if not allowed:
             logging.warning(f"⚠️ Rate limit exceeded for /api/profile: {mask_sensitive(license_key)}")
             return jsonify({"error": rate_msg}), 429
         
         # Validate license key
-        is_valid, msg, user_data = validate_license(license_key)
+        is_valid, msg, expiration = validate_license(license_key)
         if not is_valid:
             logging.warning(f"⚠️ Invalid license key in /api/profile: {mask_sensitive(license_key)}")
             return jsonify({"error": "Invalid license key"}), 401
         
-        # Check if account is suspended
-        if user_data.get('license_status', '').upper() == 'SUSPENDED':
-            logging.warning(f"⚠️ Suspended account tried to access profile: {mask_sensitive(license_key)}")
-            return jsonify({"error": "Account suspended. Contact support."}), 403
-        
-        # Get database connection
+        # Get database connection to check user status
         conn = get_db_connection()
         if not conn:
             return jsonify({"error": "Database connection failed"}), 500
         
         try:
             with conn.cursor(cursor_factory=RealDictCursor) as cursor:
-                # 1. Get user profile details
+                # 1. Get user profile details and check status
                 cursor.execute("""
                     SELECT account_id, email, license_type, license_status,
                            license_expiration, created_at, last_heartbeat,
@@ -3463,6 +3458,11 @@ def get_user_profile():
                 
                 if not user:
                     return jsonify({"error": "User not found"}), 404
+                
+                # Check if account is suspended
+                if user['license_status'].upper() == 'SUSPENDED':
+                    logging.warning(f"⚠️ Suspended account tried to access profile: {mask_sensitive(license_key)}")
+                    return jsonify({"error": "Account suspended. Contact support."}), 403
                 
                 # 2. Get trading statistics
                 cursor.execute("""
@@ -3507,7 +3507,6 @@ def get_user_profile():
                 symbols_list = [s['symbol'] for s in symbols] if symbols else []
                 
                 # Calculate derived fields
-                from datetime import datetime, timezone
                 now = datetime.now(timezone.utc)
                 
                 # Days until expiration
