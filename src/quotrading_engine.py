@@ -3053,53 +3053,34 @@ def validate_signal_requirements(symbol: str, bar_time: datetime) -> Tuple[bool,
         logger.info(f"   🚀 Signal generation: ENABLED")
         logger.info("=" * 60)
     
-    # Check VWAP bands
-    vwap_bands = state[symbol]["vwap_bands"]
-    if any(v is None for v in vwap_bands.values()):
-        pass  # Silent - price bands not ready
+    # Check VWAP is available (needed for target/safety net exit)
+    # Note: VWAP bands are NOT used for entry signals in Capitulation Reversal strategy
+    vwap = state[symbol].get("vwap")
+    if vwap is None or vwap <= 0:
+        pass  # Silent - VWAP not ready
         return False, "VWAP not ready"
     
-    # Check trend (optional - DOES NOT block signals if neutral)
-    # Trend filtering happens in signal-specific functions:
-    #   - Uptrend: only longs allowed
-    #   - Downtrend: only shorts allowed
-    #   - Neutral: both allowed (mean reversion)
-    use_trend_filter = CONFIG.get("use_trend_filter", False)
-    if use_trend_filter:
-        trend = state[symbol]["trend_direction"]
-        if trend is None:
-            pass  # Silent - trend not ready
-            return False, "Trend not established"
-        # Neutral trend is OK - will trade both directions
+    # Trend filter - DISABLED for Capitulation Reversal strategy
+    # Flush direction determines trade direction (condition #8 in capitulation_detector.py)
+    # - Long: price < VWAP (buying at discount after flush down)
+    # - Short: price > VWAP (selling at premium after flush up)
     
-    # Check RSI (ITERATION 3 - selective entry thresholds)
-    use_rsi_filter = CONFIG.get("use_rsi_filter", True)
-    rsi_oversold = CONFIG.get("rsi_oversold", 35.0)  # Iteration 3
-    rsi_overbought = CONFIG.get("rsi_overbought", 65.0)  # Iteration 3
+    # Check RSI is available (needed for capitulation signal detection)
+    # Note: RSI thresholds (25/75) are hardcoded in capitulation_detector.py
+    rsi = state[symbol]["rsi"]
+    if rsi is None:
+        pass  # Silent - RSI not yet calculated, allow to proceed
+        # Signal-specific functions will handle RSI check with 25/75 thresholds
     
-    if use_rsi_filter:
-        rsi = state[symbol]["rsi"]
-        if rsi is None:
-            logger.debug("RSI not yet calculated")
-            # Allow trading without RSI if not available yet
-        # Note: RSI check moved to signal-specific functions for long/short
+    # Volume check - handled by capitulation_detector.py (condition #5: 2x average)
+    avg_volume = state[symbol].get("avg_volume")
+    if avg_volume is None:
+        pass  # Silent - average volume not yet calculated, allow to proceed
+        # Signal-specific functions will handle volume check with 2x threshold
     
-    # Check volume spike (optional - for confirmation)
-    use_volume_filter = CONFIG.get("use_volume_filter", True)
-    if use_volume_filter:
-        avg_volume = state[symbol]["avg_volume"]
-        if avg_volume is None:
-            logger.debug("Average volume not yet calculated")
-            # Allow trading without volume filter if not available yet
-    
-    # VWAP direction filter (optional - price vs VWAP for bias)
-    use_vwap_direction_filter = CONFIG.get("use_vwap_direction_filter", True)
-    if use_vwap_direction_filter:
-        vwap = state[symbol]["vwap"]
-        if vwap is None:
-            logger.debug("VWAP not yet calculated")
-            return False, "VWAP not ready"
-        # Note: VWAP direction check moved to signal-specific functions
+    # VWAP direction filter - DISABLED for Capitulation Reversal strategy
+    # Price vs VWAP check is done in capitulation_detector.py condition #8
+    # (Long: price < VWAP, Short: price > VWAP)
     
     # Check bid/ask spread and market condition (Phase: Bid/Ask Strategy)
     if bid_ask_manager is not None:
@@ -3628,11 +3609,11 @@ def check_for_signals(symbol: str) -> None:
     # Get bars for signal check
     prev_bar = state[symbol]["bars_1min"][-2]
     current_bar = state[symbol]["bars_1min"][-1]
-    vwap_bands = state[symbol]["vwap_bands"]
-    trend = state[symbol]["trend_direction"]
+    vwap = state[symbol].get("vwap", 0)
+    regime = state[symbol].get("current_regime", "NORMAL")
     
-    logger.debug(f"Signal check: trend={trend}, prev_low={prev_bar['low']:.2f}, "
-                f"current_close={current_bar['close']:.2f}, lower_band_2={vwap_bands['lower_2']:.2f}")
+    logger.debug(f"Signal check: regime={regime}, prev_low={prev_bar['low']:.2f}, "
+                f"current_close={current_bar['close']:.2f}, vwap={vwap:.2f}")
     
     # PERIODIC HEARTBEAT: Show bot is actively scanning for signals (every 15 minutes)
     # Does NOT reveal strategy details - just confirms bot is running
