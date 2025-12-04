@@ -591,107 +591,6 @@ bot_status: Dict[str, Any] = {
 FLATTEN_IN_PROGRESS_TIMEOUT = 30
 
 # AI MODE: Cooldown period for recently closed positions (seconds)
-# Prevents re-adopting a position immediately after it was closed
-# This fixes the spam issue where broker API latency causes the same position
-# to be detected as "new" multiple times after close
-AI_MODE_POSITION_COOLDOWN_SECONDS = 60
-
-# AI MODE: Grace period before considering a position closed (seconds)
-# Prevents "closed by user" spam when broker API returns inconsistent data
-# If position disappears from broker API for less than this time, we wait
-AI_MODE_CLOSE_GRACE_PERIOD_SECONDS = 10
-
-# AI MODE: Price tolerance for matching recently closed positions (0.5% = 0.005)
-# Positions within this tolerance are considered the same position
-AI_MODE_PRICE_MATCH_TOLERANCE = 0.005
-
-# AI MODE: Track recently closed positions to prevent re-adoption spam
-# Key: symbol, Value: dict with close_time, entry_price, side
-# This prevents re-adopting a position that was just closed due to API latency
-# Note: This is accessed from a single event loop, so thread safety is not required
-_recently_closed_positions: Dict[str, Dict[str, Any]] = {}
-
-# AI MODE: Track when position was last seen in broker API
-# Used to implement grace period before considering position as "closed"
-_last_position_seen: Dict[str, datetime] = {}
-
-
-def _mark_position_closed(symbol: str, entry_price: float, side: str) -> None:
-    """
-    Mark a position as recently closed to prevent re-adoption spam.
-    
-    AI Mode can see the same position multiple times from the broker API
-    due to latency between our close action and broker state update.
-    This prevents treating the same position as "new" after close.
-    
-    Args:
-        symbol: Symbol that was closed
-        entry_price: Entry price of closed position
-        side: Side of closed position ('long' or 'short')
-    """
-    _recently_closed_positions[symbol] = {
-        "close_time": datetime.now(),
-        "entry_price": entry_price,
-        "side": side
-    }
-    logger.debug(f"Marked position {symbol} as recently closed (entry={entry_price}, side={side})")
-
-
-def _is_position_recently_closed(symbol: str, entry_price: float, side: str) -> bool:
-    """
-    Check if a position matches one that was recently closed.
-    
-    Used to prevent re-adopting a position that we just closed.
-    The broker API may still return the position briefly after close.
-    
-    Args:
-        symbol: Symbol to check
-        entry_price: Entry price of position from broker
-        side: Side of position from broker
-        
-    Returns:
-        True if this position was recently closed (should not re-adopt)
-    """
-    if symbol not in _recently_closed_positions:
-        return False
-    
-    closed_info = _recently_closed_positions[symbol]
-    close_time = closed_info.get("close_time")
-    
-    if not close_time:
-        return False
-    
-    # Check if within cooldown period
-    elapsed = (datetime.now() - close_time).total_seconds()
-    if elapsed > AI_MODE_POSITION_COOLDOWN_SECONDS:
-        # Cooldown expired - remove from tracking and allow re-adoption
-        del _recently_closed_positions[symbol]
-        return False
-    
-    # Check if this matches the recently closed position (same entry price and side)
-    closed_entry = closed_info.get("entry_price", 0)
-    closed_side = closed_info.get("side", "")
-    
-    # Allow a small tolerance for price comparison
-    if closed_entry > 0 and entry_price > 0:
-        price_diff_pct = abs(entry_price - closed_entry) / closed_entry
-        if price_diff_pct < AI_MODE_PRICE_MATCH_TOLERANCE and side == closed_side:  # Same position
-            logger.debug(f"Position {symbol} matches recently closed (entry={entry_price}, closed_entry={closed_entry})")
-            return True
-    
-    # Different entry price or side - this is a new position
-    return False
-
-
-def _clear_recently_closed(symbol: str) -> None:
-    """
-    Clear the recently closed tracking for a symbol.
-    
-    Call when enough time has passed or position is confirmed different.
-    """
-    if symbol in _recently_closed_positions:
-        del _recently_closed_positions[symbol]
-
 
 def clear_flatten_flags() -> None:
     """
@@ -919,9 +818,9 @@ async def save_trade_experience_async(
             rl_brain.record_outcome(rl_state, True, pnl, duration_minutes, execution_data)
         return
     
-    # SHADOW MODE & AI MODE: Do NOT send data to cloud RL database
-    # These modes are for user experimentation and should not pollute the training data
-    if CONFIG.get("shadow_mode", False) or CONFIG.get("ai_mode", False):
+    # SHADOW MODE: Do NOT send data to cloud RL database
+    # This mode is for user experimentation and should not pollute the training data
+    if CONFIG.get("shadow_mode", False):
         return
     
     # LIVE MODE: Report to cloud ONLY (don't save locally)
@@ -2227,11 +2126,8 @@ def update_1min_bar(symbol: str, price: float, volume: int, dt: datetime) -> Non
             # Only display if bot has been running for at least 1 minute to avoid confusion
             # with rapid bar creation during startup
             # SILENCE DURING MAINTENANCE - no spam in logs
-            # SILENCE IN AI MODE - AI Mode just silently waits for user trades
             if bot_status.get("maintenance_idle", False):
                 pass  # Silent during maintenance - no market updates
-            elif CONFIG.get("ai_mode", False):
-                pass  # AI MODE: Silent - just waiting for user trades, no market spam
             elif bot_status.get("session_start_time"):
                 time_since_start = (get_current_time() - bot_status["session_start_time"]).total_seconds()
                 if time_since_start < 60:
@@ -2264,32 +2160,30 @@ def update_1min_bar(symbol: str, price: float, volume: int, dt: datetime) -> Non
                     logger.info(f"📊 Market: {symbol} @ ${current_bar['close']:.2f}{quote_info}{vol_info} | Bars: {bar_count}{vwap_info} | Condition: {market_cond} | Regime: {current_regime}")
             else:
                 # Fallback if session_start_time not set (shouldn't happen)
-                # Also suppress in AI Mode
-                if not CONFIG.get("ai_mode", False):
-                    vwap_data = state[symbol].get("vwap", {})
-                    market_cond = state[symbol].get("market_condition", "UNKNOWN")
-                    current_regime = state[symbol].get("current_regime", "NORMAL")
-                    
-                    # Get current bid/ask from bid_ask_manager if available
-                    quote_info = ""
-                    if bid_ask_manager is not None:
-                        quote = bid_ask_manager.get_current_quote(symbol)
-                        if quote:
-                            spread = quote.ask_price - quote.bid_price
-                            quote_info = f" | Bid: ${quote.bid_price:.2f} x {quote.bid_size} | Ask: ${quote.ask_price:.2f} x {quote.ask_size} | Spread: ${spread:.2f}"
-                    
-                    # Get latest bar volume
-                    vol_info = f" | Vol: {current_bar['volume']}"
-                    
-                    # Get VWAP if available
-                    vwap_info = ""
-                    if vwap_data and isinstance(vwap_data, dict):
-                        vwap_val = vwap_data.get('vwap', 0)
-                        std_dev = vwap_data.get('std_dev', 0)
-                        if vwap_val > 0:
-                            vwap_info = f" | VWAP: ${vwap_val:.2f} ± ${std_dev:.2f}"
-                    
-                    logger.info(f"📊 Market: {symbol} @ ${current_bar['close']:.2f}{quote_info}{vol_info} | Bars: {bar_count}{vwap_info} | Condition: {market_cond} | Regime: {current_regime}")
+                vwap_data = state[symbol].get("vwap", {})
+                market_cond = state[symbol].get("market_condition", "UNKNOWN")
+                current_regime = state[symbol].get("current_regime", "NORMAL")
+                
+                # Get current bid/ask from bid_ask_manager if available
+                quote_info = ""
+                if bid_ask_manager is not None:
+                    quote = bid_ask_manager.get_current_quote(symbol)
+                    if quote:
+                        spread = quote.ask_price - quote.bid_price
+                        quote_info = f" | Bid: ${quote.bid_price:.2f} x {quote.bid_size} | Ask: ${quote.ask_price:.2f} x {quote.ask_size} | Spread: ${spread:.2f}"
+                
+                # Get latest bar volume
+                vol_info = f" | Vol: {current_bar['volume']}"
+                
+                # Get VWAP if available
+                vwap_info = ""
+                if vwap_data and isinstance(vwap_data, dict):
+                    vwap_val = vwap_data.get('vwap', 0)
+                    std_dev = vwap_data.get('std_dev', 0)
+                    if vwap_val > 0:
+                        vwap_info = f" | VWAP: ${vwap_val:.2f} ± ${std_dev:.2f}"
+                
+                logger.info(f"📊 Market: {symbol} @ ${current_bar['close']:.2f}{quote_info}{vol_info} | Bars: {bar_count}{vwap_info} | Condition: {market_cond} | Regime: {current_regime}")
             
             # Update current regime after bar completion
             update_current_regime(symbol)
@@ -3560,20 +3454,9 @@ def check_for_signals(symbol: str) -> None:
     Check for trading signals on each completed 1-minute bar.
     Coordinates signal detection through helper functions.
     
-    In AI Mode: Signal generation is DISABLED. User trades manually.
-    AI Mode still provides FULL trade management (stop loss, trailing stops,
-    regime-aware exits, underwater timeout, etc.) - just no entry signals.
-    AI Mode can also manage multiple positions simultaneously.
-    
     Args:
         symbol: Instrument symbol
     """
-    # AI Mode: Skip signal generation only - user trades manually
-    # All position management (stops, trailing, regime changes) still works normally
-    # AI Mode can manage multiple positions opened by user
-    if CONFIG.get("ai_mode", False):
-        return
-    
     # Check safety conditions first
     is_safe, reason = check_safety_conditions(symbol)
     if not is_safe:
@@ -7800,49 +7683,34 @@ def main(symbol_override: str = None) -> None:
     logger.info("=" * 80)
     
     # Display mode and connection
-    if _bot_config.ai_mode:
-        mode_str = "AI MODE"
-    elif _bot_config.shadow_mode:
+    if _bot_config.shadow_mode:
         mode_str = "SIGNAL-ONLY MODE (Manual Trading)"
     else:
         mode_str = "LIVE TRADING"
     logger.info(f"Mode: {mode_str}")
     
-    # Show the configured symbol (both modes now use configured symbol)
+    # Show the configured symbol
     logger.info(f"Symbol: {trading_symbol}")
     
     # Show broker connection status (will be updated after broker connects)
     logger.info("Broker: Connecting...")
     
     # Display GUI Settings in professional format
-    # AI Mode: Show the symbol it's managing and max loss per trade
-    if _bot_config.ai_mode:
-        logger.info("")
-        logger.info("📋 AI Mode Configuration:")
-        logger.info(f"  • Managing Symbol: {trading_symbol}")
-        logger.info(f"  • Max Loss Per Trade: ${CONFIG.get('max_stop_loss_dollars', DEFAULT_MAX_STOP_LOSS_DOLLARS):.0f}")
-        logger.info("=" * 80)
-        logger.info("")
-    else:
-        logger.info("")
-        logger.info("📋 Trading Configuration:")
-        logger.info(f"  • Max Contracts: {CONFIG['max_contracts']}")
-        logger.info(f"  • Max Trades/Day: {CONFIG['max_trades_per_day']}")
-        logger.info(f"  • Max Loss Per Trade: ${CONFIG.get('max_stop_loss_dollars', DEFAULT_MAX_STOP_LOSS_DOLLARS):.0f}")
-        logger.info(f"  • Daily Loss Limit: ${CONFIG['daily_loss_limit']}")
-        logger.info(f"  • Entry Window: {CONFIG['entry_start_time']} - {CONFIG['entry_end_time']} ET")
-        logger.info(f"  • Force Close: {CONFIG['forced_flatten_time']} ET")
-        logger.info("=" * 80)
-        logger.info("")
+    logger.info("")
+    logger.info("📋 Trading Configuration:")
+    logger.info(f"  • Max Contracts: {CONFIG['max_contracts']}")
+    logger.info(f"  • Max Trades/Day: {CONFIG['max_trades_per_day']}")
+    logger.info(f"  • Max Loss Per Trade: ${CONFIG.get('max_stop_loss_dollars', DEFAULT_MAX_STOP_LOSS_DOLLARS):.0f}")
+    logger.info(f"  • Daily Loss Limit: ${CONFIG['daily_loss_limit']}")
+    logger.info(f"  • Entry Window: {CONFIG['entry_start_time']} - {CONFIG['entry_end_time']} ET")
+    logger.info(f"  • Force Close: {CONFIG['forced_flatten_time']} ET")
+    logger.info("=" * 80)
+    logger.info("")
     
-    # Initialize local RL brain for LIVE and BACKTEST modes (NOT AI Mode)
-    # AI Mode: Skip RL brain - users manually trade, AI just manages positions
+    # Initialize local RL brain for LIVE and BACKTEST modes
     # LIVE MODE: Reads from local symbol-specific folder for pattern matching, saves to cloud only
     # BACKTEST MODE: Reads and saves to local symbol-specific folder
-    if _bot_config.ai_mode:
-        # AI Mode: No RL brain needed - user makes all trading decisions
-        pass
-    elif is_backtest_mode() or CONFIG.get("backtest_mode", False):
+    if is_backtest_mode() or CONFIG.get("backtest_mode", False):
         pass  # Silent - backtest mode initialization
     else:
         pass  # Silent - live mode initialization
@@ -7898,12 +7766,10 @@ def main(symbol_override: str = None) -> None:
     
     # AI MODE: Clean startup - no "waiting for data" message
     # LIVE MODE: Show waiting for data message
-    if not _bot_config.ai_mode:
-        logger.info("📊 Waiting for market data... (Bars and quotes will appear once data flows)")
-        logger.info("")
+    logger.info("📊 Waiting for market data... (Bars and quotes will appear once data flows)")
+    logger.info("")
     
     # Initialize state for instrument (use override symbol if provided)
-    # Both AI MODE and LIVE MODE initialize state for the configured symbol
     initialize_state(trading_symbol)
     
     # CRITICAL: Try to restore position state from disk if bot was restarted
@@ -7952,52 +7818,17 @@ def main(symbol_override: str = None) -> None:
     timer_manager = TimerManager(event_loop, CONFIG, tz)
     timer_manager.start()
     
-    # AI MODE: Subscribe to configured symbol(s) at startup
-    # User chooses symbols in GUI, AI Mode manages positions only for those symbols
-    if _bot_config.ai_mode:
-        # AI Mode: Subscribe to market data for configured symbol to enable position management
-        # State is already initialized earlier in startup, just subscribe to data
-        subscribe_market_data(trading_symbol, on_tick)
-        
-        # Also subscribe to quotes for better price data
-        if broker is not None and hasattr(broker, 'subscribe_quotes'):
-            try:
-                broker.subscribe_quotes(trading_symbol, on_quote)
-            except Exception as e:
-                logger.debug(f"Failed to subscribe to quotes for {trading_symbol}: {e}")
-        
-        pass  # AI MODE managing message will be shown after date
-    else:
-        # LIVE MODE: Subscribe to market data (trades) - use trading_symbol
-        subscribe_market_data(trading_symbol, on_tick)
-        
-        # Subscribe to bid/ask quotes if broker supports it
-        if broker is not None and hasattr(broker, 'subscribe_quotes'):
-            pass  # Silent - quote subscription
-            try:
-                broker.subscribe_quotes(trading_symbol, on_quote)
-            except Exception as e:
-                logger.warning(f"Failed to subscribe to quotes: {e}")
-                logger.warning("Continuing without bid/ask quote data")
+    # LIVE MODE: Subscribe to market data (trades) - use trading_symbol
+    subscribe_market_data(trading_symbol, on_tick)
     
-    # AI MODE: Scan for existing positions at startup (only for configured symbol)
-    # If user already has positions on the configured symbol, adopt them immediately
-    if _bot_config.ai_mode:
+    # Subscribe to bid/ask quotes if broker supports it
+    if broker is not None and hasattr(broker, 'subscribe_quotes'):
+        pass  # Silent - quote subscription
         try:
-            existing_positions = get_all_open_positions()
-            if existing_positions:
-                logger.info("🤖 Checking for existing positions...")
-                for pos in existing_positions:
-                    pos_symbol = pos.get("symbol", "")
-                    # Only adopt positions for the configured symbol
-                    # Use symbols_match() to handle different symbol formats from broker
-                    if pos_symbol and symbols_match(pos_symbol, trading_symbol):
-                        logger.info(f"🤖 Found existing position on {pos_symbol} (configured: {trading_symbol}) - adopting...")
-                        # Run position scan to adopt
-                        _handle_ai_mode_position_scan()
-                        break
+            broker.subscribe_quotes(trading_symbol, on_quote)
         except Exception as e:
-            logger.debug(f"AI Mode startup scan error: {e}")
+            logger.warning(f"Failed to subscribe to quotes: {e}")
+            logger.warning("Continuing without bid/ask quote data")
     
     # RL is CLOUD-ONLY - no local RL components
     # Users get confidence from cloud, contribute to cloud hive mind
@@ -8008,13 +7839,8 @@ def main(symbol_override: str = None) -> None:
     current_time = datetime.now(tz)
     logger.info(f"📅 {current_time.strftime('%A, %B %d, %Y at %I:%M %p %Z')}")
     logger.info("")
-    if _bot_config.ai_mode:
-        logger.info(f"🤖 AI MODE: Managing positions for {trading_symbol}")
-        logger.info("🤖 AI MODE Ready - Waiting for your trades...")
-        logger.info("")
-    else:
-        logger.info("🚀 Bot Ready - Monitoring for Signals")
-        logger.info("")
+    logger.info("🚀 Bot Ready - Monitoring for Signals")
+    logger.info("")
     
     # Run event loop (blocks until shutdown signal)
     try:
@@ -8083,17 +7909,6 @@ def handle_tick_event(event) -> None:
     
     # Update 15-minute bars
     update_15min_bar(symbol, price, volume, dt)
-    
-    # AI MODE: Check for positions periodically for instant detection
-    # Use function attribute as tick counter to avoid redundant scans from multiple symbols
-    if CONFIG.get("ai_mode", False):
-        # Increment tick counter using function attribute for persistent storage
-        tick_counter = getattr(handle_tick_event, '_tick_counter', 0) + 1
-        handle_tick_event._tick_counter = tick_counter
-        
-        # Check every 50 global ticks (roughly every 2-3 seconds regardless of symbols)
-        if tick_counter % 50 == 0:
-            _handle_ai_mode_position_scan()
 
 
 def handle_time_check_event(data: Dict[str, Any]) -> None:
@@ -8172,325 +7987,6 @@ def handle_time_check_event(data: Dict[str, Any]) -> None:
         check_no_overnight_positions(symbol)
 
 
-def _handle_ai_mode_position_scan() -> None:
-    """
-    AI MODE: Scan broker positions for the configured symbol and adopt for management.
-    
-    AI Mode only manages positions for the symbol(s) chosen by the user at startup.
-    This keeps the logic simple and predictable.
-    """
-    # Get the configured symbol that AI Mode is managing
-    configured_symbol = CONFIG.get("instrument", "")
-    if not configured_symbol:
-        return
-    
-    try:
-        # Get ALL positions from broker
-        all_positions = get_all_open_positions()
-        
-        if not all_positions:
-            # No positions from broker - check if we had any we were tracking for configured symbol
-            # Add null checks to prevent KeyError on partially initialized state
-            if (configured_symbol in state and 
-                state[configured_symbol].get("position") and 
-                (state[configured_symbol]["position"].get("active") or 
-                 state[configured_symbol]["position"].get("flatten_pending"))):
-                
-                # FIX: Implement grace period before considering position as "closed"
-                # This prevents rapid open/close spam when broker API returns inconsistent data
-                if configured_symbol in _last_position_seen:
-                    last_seen = _last_position_seen[configured_symbol]
-                    elapsed = (datetime.now() - last_seen).total_seconds()
-                    
-                    if elapsed < AI_MODE_CLOSE_GRACE_PERIOD_SECONDS:
-                        # Position was seen recently - wait before declaring it closed
-                        # This handles broker API hiccups where position briefly disappears
-                        logger.debug(f"AI MODE: Position missing but within grace period ({elapsed:.1f}s < {AI_MODE_CLOSE_GRACE_PERIOD_SECONDS}s)")
-                        return
-                
-                # Grace period expired or no record of last seen - position is actually closed
-                was_flatten_pending = state[configured_symbol]["position"].get("flatten_pending", False)
-                
-                if was_flatten_pending:
-                    logger.info(f"🤖 AI MODE: Position {configured_symbol} flattened successfully")
-                else:
-                    logger.info(f"🤖 AI MODE: Position {configured_symbol} closed by user")
-                
-                # Calculate P&L if possible
-                entry_price = state[configured_symbol]["position"].get("entry_price", 0)
-                side = state[configured_symbol]["position"].get("side")
-                
-                # FIX: Mark this position as recently closed to prevent re-adoption spam
-                # This addresses broker API latency where position may still appear briefly after close
-                if entry_price and entry_price > 0 and side:
-                    _mark_position_closed(configured_symbol, entry_price, side)
-                
-                if state[configured_symbol].get("bars_1min"):
-                    exit_price = state[configured_symbol]["bars_1min"][-1]["close"]
-                    qty = state[configured_symbol]["position"].get("quantity", 0)
-                    tick_size, tick_value = get_symbol_tick_specs(configured_symbol)
-                    
-                    if side == "long":
-                        pnl_ticks = (exit_price - entry_price) / tick_size
-                    else:
-                        pnl_ticks = (entry_price - exit_price) / tick_size
-                    
-                    pnl_dollars = pnl_ticks * tick_value * qty
-                    result = "WIN" if pnl_dollars >= 0 else "LOSS"
-                    logger.info(f"  Result: {result} | P&L: ${pnl_dollars:.2f}")
-                
-                # Clear position state
-                state[configured_symbol]["position"]["active"] = False
-                state[configured_symbol]["position"]["quantity"] = 0
-                state[configured_symbol]["position"]["side"] = None
-                state[configured_symbol]["position"]["flatten_pending"] = False
-                
-                # FIX: Clear the last seen timestamp now that position is confirmed closed
-                if configured_symbol in _last_position_seen:
-                    del _last_position_seen[configured_symbol]
-                
-                # FIX: Clear flatten in progress flag now that position is confirmed closed
-                clear_flatten_flags()
-            return
-        
-        # Check each broker position - only manage the configured symbol
-        for pos in all_positions:
-            broker_symbol = pos.get("symbol", "")
-            if not broker_symbol:
-                continue
-            
-            # ONLY manage positions for the configured symbol
-            # Use symbols_match() to handle different symbol formats from broker
-            # (e.g., broker returns "F.US.MNQEP" or contract_id, user configured "MNQ")
-            if not symbols_match(broker_symbol, configured_symbol):
-                # Log skipped positions at INFO level to help diagnose symbol matching issues
-                logger.info(f"🤖 AI MODE: Position found but symbol doesn't match - broker returned '{broker_symbol}', you configured '{configured_symbol}'")
-                continue
-            
-            # Use the configured symbol for consistency in state management
-            # This ensures state[configured_symbol] is always used, even if broker returns different format
-            symbol = configured_symbol
-            
-            qty = pos.get("quantity", 0)
-            signed_qty = pos.get("signed_quantity", qty)
-            side = pos.get("side", "long")
-            broker_entry_price = pos.get("entry_price")  # Actual entry price from broker
-            
-            # Ensure state exists for this symbol (should already be initialized at startup)
-            if symbol not in state:
-                initialize_state(symbol)
-            
-            # FIX: Track when position was last seen in broker API
-            # This is used for grace period before declaring position as "closed"
-            _last_position_seen[symbol] = datetime.now()
-            
-            # Check if we're already tracking this position
-            bot_active = state[symbol]["position"]["active"]
-            bot_qty = state[symbol]["position"]["quantity"] if bot_active else 0
-            
-            if not bot_active and qty > 0:
-                # Potential new position detected
-                
-                # FIX: Check if this position was recently closed (prevents re-adoption spam)
-                # This addresses the issue where broker API latency causes the same position
-                # to appear as "new" multiple times after we closed it
-                if broker_entry_price and broker_entry_price > 0:
-                    if _is_position_recently_closed(symbol, broker_entry_price, side):
-                        logger.debug(f"AI MODE: Skipping position - recently closed (entry={broker_entry_price}, side={side})")
-                        continue
-                
-                # FIX: Check if market is closed - don't adopt positions during market close
-                # This prevents the spam cycle where:
-                # 1. Bot adopts position during closed market
-                # 2. Bot immediately tries to flatten (market closed)
-                # 3. Flatten fails or discrepancy occurs
-                # 4. Bot clears state and re-detects the same position
-                current_time = get_current_time()
-                trading_state = get_trading_state(current_time)
-                if trading_state == "closed":
-                    logger.debug(f"AI MODE: Skipping position adoption - market is closed")
-                    continue
-                
-                # New position detected - adopt it!
-                logger.info("=" * 60)
-                logger.info("🤖 AI MODE: New Position Detected")
-                logger.info(f"  {qty} {'LONG' if side == 'long' else 'SHORT'} @ {symbol}")
-                
-                # Use actual entry price from broker if available
-                # This is the REAL entry price, not just the current market price
-                entry_price = broker_entry_price
-                
-                # Fallback to current price only if broker doesn't provide entry price
-                if entry_price is None or entry_price <= 0:
-                    # Get current price as fallback
-                    if state[symbol]["bars_1min"]:
-                        entry_price = state[symbol]["bars_1min"][-1]["close"]
-                    elif bid_ask_manager is not None:
-                        quote = bid_ask_manager.get_current_quote(symbol)
-                        if quote:
-                            entry_price = (quote.bid_price + quote.ask_price) / 2
-                
-                # If still no entry price, try to get from broker directly
-                if (entry_price is None or entry_price <= 0) and broker is not None:
-                    try:
-                        # Try to get a quote from broker
-                        if hasattr(broker, 'get_quote'):
-                            quote = broker.get_quote(symbol)
-                            if quote:
-                                # Handle both dict-like and object quote formats
-                                if hasattr(quote, 'get'):
-                                    entry_price = quote.get('last_price') or quote.get('mid_price')
-                                elif hasattr(quote, 'last_price'):
-                                    entry_price = quote.last_price
-                                elif hasattr(quote, 'mid_price'):
-                                    entry_price = quote.mid_price
-                    except Exception:
-                        pass
-                
-                if entry_price is None or entry_price <= 0:
-                    logger.info("  Waiting for price data...")
-                    logger.info("=" * 60)
-                    continue
-                
-                # Log if we're using actual entry price vs estimated
-                if broker_entry_price and broker_entry_price > 0:
-                    logger.info(f"  Using actual entry price from broker: ${entry_price:.2f}")
-                else:
-                    logger.info(f"  Using estimated entry price: ${entry_price:.2f}")
-                
-                # Detect current market regime for better trade management
-                current_regime = state[symbol].get("current_regime", "NORMAL")
-                regime_params = REGIME_DEFINITIONS.get(current_regime, REGIME_DEFINITIONS["NORMAL"])
-                
-                # Adopt the position
-                state[symbol]["position"]["active"] = True
-                state[symbol]["position"]["quantity"] = qty
-                state[symbol]["position"]["side"] = side
-                state[symbol]["position"]["entry_price"] = entry_price
-                state[symbol]["position"]["entry_time"] = get_current_time()
-                state[symbol]["position"]["entry_regime"] = current_regime  # Store regime at entry
-                state[symbol]["position"]["current_regime"] = current_regime  # Track current regime
-                
-                # Calculate stop loss using max_loss_per_trade from the ACTUAL entry price
-                tick_size, tick_value = get_symbol_tick_specs(symbol)
-                max_stop_dollars = CONFIG.get("max_stop_loss_dollars", DEFAULT_MAX_STOP_LOSS_DOLLARS)
-                max_stop_ticks = max_stop_dollars / tick_value
-                stop_distance = max_stop_ticks * tick_size
-                stop_distance_ticks = max_stop_ticks
-                
-                if side == "long":
-                    stop_price = entry_price - stop_distance
-                else:
-                    stop_price = entry_price + stop_distance
-                
-                # Round to tick
-                stop_price = round(stop_price / tick_size) * tick_size
-                
-                state[symbol]["position"]["stop_price"] = stop_price
-                state[symbol]["position"]["trailing_stop"] = stop_price
-                state[symbol]["position"]["ai_mode_adopted"] = True
-                
-                # CRITICAL FIX: Set all fields needed for trade management (breakeven, trailing, etc.)
-                # These fields were missing, causing breakeven/trailing stops to not work
-                state[symbol]["position"]["original_stop_price"] = stop_price  # Needed for breakeven calculation
-                state[symbol]["position"]["breakeven_active"] = False
-                state[symbol]["position"]["breakeven_activated_time"] = None
-                state[symbol]["position"]["trailing_stop_active"] = False
-                state[symbol]["position"]["trailing_stop_price"] = None
-                state[symbol]["position"]["trailing_activated_time"] = None
-                # MFE/MAE tracking
-                state[symbol]["position"]["highest_price_reached"] = entry_price if side == "long" else None
-                state[symbol]["position"]["lowest_price_reached"] = entry_price if side == "short" else None
-                # Time-decay and partial exits
-                state[symbol]["position"]["time_decay_50_triggered"] = False
-                state[symbol]["position"]["time_decay_75_triggered"] = False
-                state[symbol]["position"]["time_decay_90_triggered"] = False
-                state[symbol]["position"]["original_stop_distance_ticks"] = stop_distance_ticks
-                state[symbol]["position"]["current_stop_distance_ticks"] = stop_distance_ticks
-                state[symbol]["position"]["initial_risk_ticks"] = stop_distance_ticks
-                state[symbol]["position"]["partial_exit_1_completed"] = False
-                state[symbol]["position"]["partial_exit_2_completed"] = False
-                state[symbol]["position"]["partial_exit_3_completed"] = False
-                state[symbol]["position"]["original_quantity"] = qty
-                state[symbol]["position"]["remaining_quantity"] = qty
-                state[symbol]["position"]["partial_exit_history"] = []
-                
-                logger.info(f"  Entry: ${entry_price:.2f} | Stop: ${stop_price:.2f}")
-                logger.info(f"  Max Loss: ${max_stop_dollars:.0f} ({max_stop_ticks:.0f} ticks)")
-                logger.info(f"  Market Regime: {current_regime} (BE mult: {regime_params.breakeven_mult}x, Trail mult: {regime_params.trailing_mult}x)")
-                
-                # CRITICAL FIX: Actually place the stop order with the broker!
-                # AI Mode was calculating stop price but NOT placing the order
-                stop_side = "SELL" if side == "long" else "BUY"
-                stop_order = place_stop_order(symbol, stop_side, qty, stop_price)
-                
-                if stop_order:
-                    state[symbol]["position"]["stop_order_id"] = stop_order.get("order_id")
-                    logger.info(f"  ✅ Stop order placed: ${stop_price:.2f} | Order ID: {stop_order.get('order_id')}")
-                else:
-                    # Stop order failed - log warning but continue managing position
-                    # The trailing stop logic will still work to protect the trade
-                    logger.warning(f"  ⚠️ Could not place stop order at ${stop_price:.2f}")
-                    logger.warning(f"  Trade will be managed with trailing stop logic")
-                
-                logger.info("=" * 60)
-                
-                # Save position state for recovery
-                save_position_state(symbol)
-                
-                # FIX: Clear recently closed tracking since we successfully adopted this position
-                # This allows future positions at the same price to be adopted
-                _clear_recently_closed(symbol)
-            
-            elif bot_active and qty > 0:
-                # Already tracking this position - show periodic status update
-                # Only show status every 30 seconds (10 position checks at 3 sec each)
-                status_counter = state[symbol].get("ai_status_counter", 0) + 1
-                state[symbol]["ai_status_counter"] = status_counter
-                
-                if status_counter % 10 == 0:  # Every ~30 seconds
-                    position = state[symbol]["position"]
-                    entry_price = position.get("entry_price", 0)
-                    stop_price = position.get("stop_price", 0)
-                    current_regime = state[symbol].get("current_regime", "NORMAL")
-                    
-                    # Get current price
-                    current_price = None
-                    if state[symbol]["bars_1min"]:
-                        current_price = state[symbol]["bars_1min"][-1]["close"]
-                    elif bid_ask_manager is not None:
-                        quote = bid_ask_manager.get_current_quote(symbol)
-                        if quote:
-                            current_price = (quote.bid_price + quote.ask_price) / 2
-                    
-                    if current_price and entry_price:
-                        tick_size, tick_value = get_symbol_tick_specs(symbol)
-                        
-                        # Calculate P&L
-                        if side == "long":
-                            pnl_ticks = (current_price - entry_price) / tick_size
-                        else:
-                            pnl_ticks = (entry_price - current_price) / tick_size
-                        
-                        pnl_dollars = pnl_ticks * tick_value * qty
-                        pnl_emoji = "📈" if pnl_dollars >= 0 else "📉"
-                        
-                        # Distance to stop
-                        if side == "long":
-                            stop_distance_ticks = (current_price - stop_price) / tick_size
-                        else:
-                            stop_distance_ticks = (stop_price - current_price) / tick_size
-                        
-                        # Get breakeven/trailing status
-                        breakeven_status = "BE" if position.get("breakeven_active", False) else "Initial"
-                        if position.get("trailing_stop_active", False):
-                            breakeven_status = "Trailing"
-                        
-                        logger.info(f"🤖 AI MODE Status: {qty} {'LONG' if side == 'long' else 'SHORT'} @ {symbol}")
-                        logger.info(f"  {pnl_emoji} P&L: ${pnl_dollars:+.2f} ({pnl_ticks:+.1f} ticks) | Stop: {stop_distance_ticks:.1f} ticks ({breakeven_status}) | Regime: {current_regime}")
-    
-    except Exception as e:
-        logger.debug(f"AI Mode position scan error: {e}")
 
 
 def handle_vwap_reset_event(data: Dict[str, Any]) -> None:
@@ -8505,10 +8001,8 @@ def handle_position_reconciliation_event(data: Dict[str, Any]) -> None:
     """
     Handle periodic position reconciliation check.
     Verifies bot's position state matches broker's actual position.
-    Runs every 5 seconds (Live Mode) or 3 seconds (AI Mode) to detect and correct any desyncs.
+    Runs every 5 seconds to detect and correct any desyncs.
     
-    AI MODE: Returns early after calling _handle_ai_mode_position_scan() which
-             handles all position detection and management for the configured symbol.
     LIVE MODE: Checks configured symbol for position mismatch and auto-corrects.
     
     CRITICAL FIX: Skip reconciliation when an entry order is pending to prevent
@@ -8540,14 +8034,8 @@ def handle_position_reconciliation_event(data: Dict[str, Any]) -> None:
                 bot_status["entry_order_pending_symbol"] = None
                 bot_status["entry_order_pending_id"] = None
     
-    # AI MODE: Handle position management separately and return early
-    # All AI Mode logic is in _handle_ai_mode_position_scan()
-    if CONFIG.get("ai_mode", False):
-        _handle_ai_mode_position_scan()
-        return
-    
     # ============================================================
-    # LIVE MODE ONLY: Position reconciliation for configured symbol
+    # LIVE MODE: Position reconciliation for configured symbol
     # ============================================================
     symbol = CONFIG["instrument"]
     
