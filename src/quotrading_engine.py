@@ -3052,8 +3052,21 @@ def validate_signal_requirements(symbol: str, bar_time: datetime) -> Tuple[bool,
         # Validate spread (Requirement 8)
         is_acceptable, spread_reason = bid_ask_manager.validate_entry_spread(symbol)
         if not is_acceptable:
-            pass  # Silent - spread check (internal filter)
+            # Log spread validation failures periodically to help diagnose live mode issues
+            spread_fail_counter = state[symbol].get("spread_fail_counter", 0) + 1
+            state[symbol]["spread_fail_counter"] = spread_fail_counter
+            
+            # Log first few failures and then every 30 bars
+            if spread_fail_counter <= 5 or spread_fail_counter % 30 == 0:
+                logger.info(f"⚠️  Signal blocked by spread validation: {spread_reason}")
+                if "No bid/ask quote" in spread_reason:
+                    logger.info(f"   This usually means the broker is not providing bid/ask quotes.")
+                    logger.info(f"   Check that on_quote() is being called by the broker adapter.")
+            
             return False, spread_reason
+        else:
+            # Reset counter on success
+            state[symbol]["spread_fail_counter"] = 0
         
         # Classify market condition (Requirement 11)
         try:
