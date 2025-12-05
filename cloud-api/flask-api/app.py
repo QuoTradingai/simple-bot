@@ -2089,7 +2089,14 @@ def update_license_status():
 
 @app.route('/api/admin/create-license', methods=['POST'])
 def create_license():
-    """Create a new license (admin only)"""
+    """Create a new license (admin only)
+    
+    Supports flexible duration:
+    - minutes_valid: Duration in minutes (for testing short-lived licenses)
+    - duration_days: Duration in days (default: 30)
+    
+    If minutes_valid is provided, it takes precedence over duration_days.
+    """
     try:
         data = request.get_json()
         
@@ -2100,6 +2107,10 @@ def create_license():
         
         email = data.get('email')
         license_type = data.get('license_type', 'standard')
+        
+        # Support both minutes_valid and duration_days
+        # minutes_valid takes precedence for testing short-lived licenses
+        minutes_valid = data.get('minutes_valid')
         duration_days = data.get('duration_days', 30)
         
         if not email:
@@ -2107,7 +2118,16 @@ def create_license():
         
         license_key = generate_license_key()
         account_id = f"ACC-{secrets.token_hex(8).upper()}"
-        expiration = datetime.now() + timedelta(days=duration_days)
+        
+        # Calculate expiration based on provided duration
+        if minutes_valid is not None:
+            expiration = datetime.now() + timedelta(minutes=int(minutes_valid))
+            logging.info(f"Creating license with {minutes_valid} minutes validity (expires: {expiration})")
+            duration_desc = f"{minutes_valid} minutes"
+        else:
+            expiration = datetime.now() + timedelta(days=duration_days)
+            logging.info(f"Creating license with {duration_days} days validity (expires: {expiration})")
+            duration_desc = f"{duration_days} days"
         
         conn = get_db_connection()
         if not conn:
@@ -2128,7 +2148,7 @@ def create_license():
                 "email": email,
                 "license_type": license_type,
                 "expires_at": expiration.isoformat(),
-                "duration_days": duration_days
+                "duration": duration_desc
             }), 201
             
         finally:
