@@ -3307,72 +3307,46 @@ def submit_outcome():
             exec_data = data.get('execution_data', {})
             
             # Insert outcome directly into PostgreSQL (instant, no locking)
-            # All 24 fields are now at root level (flat format)
+            # Simplified 16-field structure
             cursor.execute("""
                 INSERT INTO rl_experiences (
                     license_key,
-                    timestamp,
-                    symbol,
-                    price,
                     flush_size_ticks,
                     flush_velocity,
-                    flush_direction,
-                    bars_since_flush_start,
-                    distance_from_flush_low,
-                    rsi,
                     volume_climax_ratio,
-                    vwap_distance_ticks,
+                    flush_direction,
+                    rsi,
+                    distance_from_flush_low,
                     reversal_candle,
                     no_new_extreme,
-                    atr,
-                    hour,
-                    session,
+                    vwap_distance_ticks,
                     regime,
-                    stop_distance_ticks,
-                    target_distance_ticks,
-                    risk_reward_ratio,
+                    session,
+                    hour,
+                    symbol,
+                    timestamp,
                     pnl,
-                    duration,
                     took_trade,
-                    exploration_rate,
-                    mfe,
-                    mae,
-                    order_type_used,
-                    entry_slippage_ticks,
-                    exit_reason,
                     created_at
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
             """, (
                 license_key,
-                data.get('timestamp', datetime.now(timezone.utc).isoformat()),
-                data.get('symbol', 'ES'),
-                data.get('price', 0.0),
                 data.get('flush_size_ticks', 0.0),
                 data.get('flush_velocity', 0.0),
-                data.get('flush_direction', 'NEUTRAL'),
-                data.get('bars_since_flush_start', 0),
-                data.get('distance_from_flush_low', 0.0),
-                data.get('rsi', 50.0),
                 data.get('volume_climax_ratio', 1.0),
-                data.get('vwap_distance_ticks', 0.0),
+                data.get('flush_direction', 'NEUTRAL'),
+                data.get('rsi', 50.0),
+                data.get('distance_from_flush_low', 0.0),
                 data.get('reversal_candle', False),
                 data.get('no_new_extreme', False),
-                data.get('atr', 0.0),
-                data.get('hour', 0),
-                data.get('session', 'RTH'),
+                data.get('vwap_distance_ticks', 0.0),
                 data.get('regime', 'NORMAL'),
-                data.get('stop_distance_ticks', 0.0),
-                data.get('target_distance_ticks', 0.0),
-                data.get('risk_reward_ratio', 0.0),
+                data.get('session', 'RTH'),
+                data.get('hour', 0),
+                data.get('symbol', 'ES'),
+                data.get('timestamp', datetime.now(timezone.utc).isoformat()),
                 data.get('pnl', 0.0),
-                data.get('duration', 0.0),
-                data.get('took_trade', False),
-                data.get('exploration_rate', 0.0),
-                data.get('mfe', 0.0),
-                data.get('mae', 0.0),
-                data.get('order_type_used', 'market'),
-                data.get('entry_slippage_ticks', 0.0),
-                data.get('exit_reason', 'unknown')
+                data.get('took_trade', False)
             ))
             
             # Get total experiences and win rate for this symbol
@@ -4384,35 +4358,24 @@ def init_database_if_needed():
             CREATE TABLE IF NOT EXISTS rl_experiences (
                 id SERIAL PRIMARY KEY,
                 license_key VARCHAR(50) NOT NULL,
-                timestamp TIMESTAMP NOT NULL,
-                symbol VARCHAR(20) NOT NULL,
-                price DECIMAL(10,2) NOT NULL,
+                -- The 12 Pattern Matching Fields
                 flush_size_ticks DECIMAL(10,2) NOT NULL,
                 flush_velocity DECIMAL(10,2) NOT NULL,
-                flush_direction VARCHAR(10) NOT NULL,
-                bars_since_flush_start INTEGER NOT NULL,
-                distance_from_flush_low DECIMAL(10,2) NOT NULL,
-                rsi DECIMAL(5,2) NOT NULL,
                 volume_climax_ratio DECIMAL(10,2) NOT NULL,
-                vwap_distance_ticks DECIMAL(10,2) NOT NULL,
+                flush_direction VARCHAR(10) NOT NULL,
+                rsi DECIMAL(5,2) NOT NULL,
+                distance_from_flush_low DECIMAL(10,2) NOT NULL,
                 reversal_candle BOOLEAN NOT NULL,
                 no_new_extreme BOOLEAN NOT NULL,
-                atr DECIMAL(10,6) NOT NULL,
-                hour INTEGER NOT NULL,
-                session VARCHAR(10) NOT NULL,
+                vwap_distance_ticks DECIMAL(10,2) NOT NULL,
                 regime VARCHAR(50) NOT NULL,
-                stop_distance_ticks DECIMAL(10,2) NOT NULL,
-                target_distance_ticks DECIMAL(10,2) NOT NULL,
-                risk_reward_ratio DECIMAL(10,2) NOT NULL,
+                session VARCHAR(10) NOT NULL,
+                hour INTEGER NOT NULL,
+                -- The 4 Metadata Fields
+                symbol VARCHAR(20) NOT NULL,
+                timestamp TIMESTAMP NOT NULL,
                 pnl DECIMAL(10,2) NOT NULL,
-                duration DECIMAL(10,2) NOT NULL,
                 took_trade BOOLEAN NOT NULL,
-                exploration_rate DECIMAL(5,2) NOT NULL,
-                mfe DECIMAL(10,2) NOT NULL,
-                mae DECIMAL(10,2) NOT NULL,
-                order_type_used VARCHAR(20) NOT NULL,
-                entry_slippage_ticks DECIMAL(5,2) NOT NULL,
-                exit_reason VARCHAR(50) NOT NULL,
                 created_at TIMESTAMP DEFAULT NOW()
             )
         """)
@@ -4425,7 +4388,7 @@ def init_database_if_needed():
             "CREATE INDEX IF NOT EXISTS idx_rl_experiences_took_trade ON rl_experiences(took_trade)",
             "CREATE INDEX IF NOT EXISTS idx_rl_experiences_regime ON rl_experiences(regime)",
             "CREATE INDEX IF NOT EXISTS idx_rl_experiences_timestamp ON rl_experiences(timestamp DESC)",
-            "CREATE INDEX IF NOT EXISTS idx_rl_experiences_similarity ON rl_experiences(symbol, regime, rsi, vwap_distance_ticks, atr, flush_direction)"
+            "CREATE INDEX IF NOT EXISTS idx_rl_experiences_similarity ON rl_experiences(symbol, regime, rsi, flush_direction, session)"
         ]
         
         for idx in indexes:

@@ -122,65 +122,32 @@ class SignalConfidenceRL:
         else:
             pass  # Silent - live mode exploitation
     
-    def _generate_experience_key(self, experience: Dict, execution_data: Optional[Dict] = None) -> str:
+    def _generate_experience_key(self, experience: Dict) -> str:
         """
-        Generate a unique key for duplicate detection.
-        Uses ALL significant fields to identify truly identical experiences.
-        
-        This prevents incorrectly removing valid experiences that have:
-        - Same timestamp but different outcomes (P&L, duration, exit reason)
-        - Same signal but different execution quality (MFE/MAE, slippage)
+        Generate a unique key for duplicate detection using 16-field structure.
         
         Args:
-            experience: The experience dictionary with market state and outcome data
-            execution_data: Optional execution data dict (used during record_outcome)
+            experience: The experience dictionary with 16 fields
         
         Returns:
             Hash string for O(1) duplicate detection
         """
         import hashlib
         
-        # ALL fields that make an experience unique
-        # If any of these differ, experiences are NOT duplicates
-        # NOTE: exploration_rate is EXCLUDED because it's metadata about HOW
-        # the signal was taken, not WHAT the signal outcome was. Including it
-        # would cause the same trading signal at the same timestamp with the
-        # same outcome to be stored twice just because the exploration rate
-        # was different during collection.
+        # ALL 16 fields that make an experience unique
         key_fields = [
-            # Core identification fields
-            'timestamp', 'symbol', 'price',
-            # Outcome fields - these make each trade unique
-            'pnl', 'duration', 'took_trade', 'exit_reason',
-            # Market state fields (match actual field names in experience file)
-            'flush_size_ticks', 'flush_velocity', 'flush_direction',
-            'distance_from_flush_low', 'rsi', 'volume_climax_ratio',
-            'vwap_distance_ticks', 'atr', 'regime', 'hour', 'session',
-            # Execution quality fields
-            'mfe', 'mae', 'order_type_used', 'entry_slippage_ticks',
-            # Risk parameters
-            'stop_distance_ticks', 'target_distance_ticks', 'risk_reward_ratio',
-            # Binary confirmation flags
-            'reversal_candle', 'no_new_extreme',
-            # 'exploration_rate' - EXCLUDED: metadata about collection, not signal quality
+            # The 12 Pattern Matching Fields
+            'flush_size_ticks', 'flush_velocity', 'volume_climax_ratio', 'flush_direction',
+            'rsi', 'distance_from_flush_low', 'reversal_candle', 'no_new_extreme',
+            'vwap_distance_ticks', 'regime', 'session', 'hour',
+            # The 4 Metadata Fields
+            'symbol', 'timestamp', 'pnl', 'took_trade'
         ]
         
         # Build key from all significant values
-        # Handle exit_reason specially - check execution_data first, then experience dict
         values = []
         for field in key_fields:
-            if field == 'exit_reason':
-                # Check execution_data first (for new experiences being recorded)
-                if execution_data and 'exit_reason' in execution_data:
-                    val = execution_data['exit_reason']
-                elif 'exit_reason' in experience:
-                    val = experience['exit_reason']
-                else:
-                    val = None
-            elif field in experience:
-                val = experience[field]
-            else:
-                val = None
+            val = experience.get(field)
             
             # Round floats to 6 decimals to avoid precision issues
             if isinstance(val, float):
@@ -612,71 +579,33 @@ class SignalConfidenceRL:
                       execution_data: Optional[Dict] = None):
         """
         Record the outcome of this signal for learning.
-        FLAT FORMAT: All fields at top level (no nested state/action/reward structure).
+        SIMPLIFIED 16-FIELD STRUCTURE.
         
         Args:
-            state: Market state when signal triggered (flat dict with 16+ fields)
+            state: Market state when signal triggered (14 fields: 12 pattern matching + 2 metadata)
             took_trade: Whether we took the trade
             pnl: Profit/loss (0 if skipped)
-            duration_minutes: How long trade lasted
-            execution_data: Execution quality metrics (CRITICAL for RL learning)
-                CRITICAL FIELDS (must always include):
-                - exit_reason: How trade closed (target_hit/stop_hit/time_exit/regime_change)
-                  * RL learns: "Was this a good exit or did we panic?"
-                  * Pattern example: "When RSI=70 + regime=RANGING → time exits win 60%"
-                - order_type_used: "passive", "aggressive", "mixed"
-                  * RL learns: "When volatility is HIGH → use limit orders"
-                  * Helps optimize entry execution strategy
-                - entry_slippage_ticks: Actual slippage in ticks
-                  * RL learns: "Avoid trading during high slippage times"
-                  * Critical for live P&L vs theoretical P&L analysis
-                
-                IMPORTANT FIELDS:
-                - mfe: Max Favorable Excursion (dollars) - execution quality
-                - mae: Max Adverse Excursion (dollars) - risk management
-                - partial_fill: Whether partial fill occurred
-                - fill_ratio: Percentage filled (0.66 = 2 of 3)
-                - held_full_duration: Whether hit target/stop vs time exit
+            duration_minutes: IGNORED - not stored in simplified structure
+            execution_data: IGNORED - not stored in simplified structure
         """
         # FLAT FORMAT: Merge all fields at top level
-        # Start with market state (16 fields from capture_market_state)
+        # Start with market state (14 fields from capture_market_state)
         if not isinstance(state, dict):
             logger.error(f"Invalid state type: {type(state)}. Expected dict, skipping experience recording.")
             return
         
         experience = state.copy()
         
-        # Add outcome fields at top level (not nested)
+        # Add outcome fields at top level (only pnl and took_trade)
         experience['pnl'] = pnl
-        experience['duration'] = duration_minutes
         experience['took_trade'] = took_trade
-        experience['exploration_rate'] = self.exploration_rate
-        
-        # Add MFE/MAE if available
-        if execution_data:
-            if 'mfe' in execution_data:
-                experience['mfe'] = execution_data['mfe']
-            if 'mae' in execution_data:
-                experience['mae'] = execution_data['mae']
-            
-            # Add other execution metrics at top level
-            if 'order_type_used' in execution_data:
-                experience['order_type_used'] = execution_data['order_type_used']
-            if 'entry_slippage_ticks' in execution_data:
-                experience['entry_slippage_ticks'] = execution_data['entry_slippage_ticks']
-            if 'partial_fill' in execution_data:
-                experience['partial_fill'] = execution_data['partial_fill']
-            if 'fill_ratio' in execution_data:
-                experience['fill_ratio'] = execution_data['fill_ratio']
-            if 'exit_reason' in execution_data:
-                experience['exit_reason'] = execution_data['exit_reason']
         
         # Add to memory (learning enabled)
         # USER REQUEST: Only save trades that were actually taken
         if took_trade:
             # DUPLICATE PREVENTION: Check if this experience already exists
             # Use helper method to generate consistent key
-            exp_key = self._generate_experience_key(experience, execution_data)
+            exp_key = self._generate_experience_key(experience)
             
             # Check if this exact experience already exists (O(1) lookup with set)
             if exp_key in self.experience_keys:
@@ -702,29 +631,9 @@ class SignalConfidenceRL:
             if len(self.experiences) % 5 == 0:
                 self.save_experience()
             
-            # Log learning progress with execution details
+            # Log learning progress
             outcome = "WIN" if pnl > 0 else "LOSS"
-            log_msg = f"πΎ [FLAT FORMAT] Recorded {outcome}: ${pnl:.2f} in {duration_minutes}min | Streak: W{self.current_win_streak}/L{self.current_loss_streak}"
-            
-            # Add MFE/MAE info if available
-            if execution_data and ('mfe' in execution_data or 'mae' in execution_data):
-                exec_notes = []
-                if 'mfe' in execution_data:
-                    exec_notes.append(f"MFE: ${execution_data['mfe']:.2f}")
-                if 'mae' in execution_data:
-                    exec_notes.append(f"MAE: ${execution_data['mae']:.2f}")
-                
-                # Add other execution quality info if available
-                if execution_data.get("order_type_used"):
-                    exec_notes.append(f"Order: {execution_data['order_type_used']}")
-                if execution_data.get("entry_slippage_ticks", 0) > 0:
-                    exec_notes.append(f"Slippage: {execution_data['entry_slippage_ticks']:.1f}t")
-                if execution_data.get("partial_fill"):
-                    exec_notes.append(f"Partial: {execution_data.get('fill_ratio', 0):.0%}")
-                
-                if exec_notes:
-                    log_msg += f" | {', '.join(exec_notes)}"
-            
+            log_msg = f"πΎ [16-FIELD] Recorded {outcome}: ${pnl:.2f} | Streak: W{self.current_win_streak}/L{self.current_loss_streak}"
             pass  # Silent - learning progress is internal (not customer-facing)
     
     def get_stats(self) -> Dict:

@@ -3360,33 +3360,43 @@ def get_volatility_regime(atr: float, symbol: str) -> str:
 
 def capture_market_state(symbol: str, current_price: float) -> Dict[str, Any]:
     """
-    Capture comprehensive market state snapshot for CAPITULATION REVERSAL analysis.
+    Capture market state snapshot for CAPITULATION REVERSAL pattern matching.
     
-    NEW EXPERIENCE RECORD STRUCTURE (per user request):
-    - timestamp, symbol, price
-    - flush_size_ticks, flush_velocity, flush_direction, bars_since_flush_start
-    - distance_from_flush_low/high (ticks)
-    - rsi, volume_climax_ratio, vwap_distance_ticks
-    - reversal_candle (bool), no_new_extreme (bool)
-    - atr, hour, session, regime
-    - stop_distance_ticks, target_distance_ticks, risk_reward_ratio
+    SIMPLIFIED 16-FIELD STRUCTURE:
+    ================================
+    The 12 Pattern Matching Fields:
+    1. flush_size_ticks
+    2. flush_velocity
+    3. volume_climax_ratio
+    4. flush_direction
+    5. rsi
+    6. distance_from_flush_low
+    7. reversal_candle
+    8. no_new_extreme
+    9. vwap_distance_ticks
+    10. regime
+    11. session
+    12. hour
+    
+    The 4 Metadata Fields:
+    13. symbol
+    14. timestamp
+    15. pnl (added later by record_outcome)
+    16. took_trade (added later by record_outcome)
+    
+    DROPPED FIELDS: price, bars_since_flush_start, atr, stop_distance_ticks, 
+    target_distance_ticks, risk_reward_ratio, duration, exploration_rate, 
+    mfe, mae, order_type_used, entry_slippage_ticks, exit_reason
     
     Args:
         symbol: Instrument symbol
         current_price: Current market price
     
     Returns:
-        Dictionary with market state features (flat structure)
+        Dictionary with 14 market state features (pnl and took_trade added later)
     """
     vwap = state[symbol].get("vwap", current_price)
     rsi = state[symbol].get("rsi", 50)
-    
-    # Get ATR (use 1min bars for consistency)
-    atr = calculate_atr_1min(symbol, CONFIG.get("atr_period", 14))
-    if atr is None or atr == 0:
-        atr = calculate_atr(symbol, CONFIG.get("atr_period", 14))
-        if atr is None:
-            atr = 0
     
     # Get current time and session
     current_time = get_current_time()
@@ -3409,7 +3419,6 @@ def capture_market_state(symbol: str, current_price: float) -> Dict[str, Any]:
         volume_climax_ratio = current_bar.get("volume", 0) / avg_volume_20 if avg_volume_20 > 0 else 1.0
     else:
         volume_climax_ratio = 1.0
-        avg_volume_20 = 1
     
     # Distance from VWAP in ticks
     vwap_actual = state[symbol].get("vwap", current_price)
@@ -3422,18 +3431,14 @@ def capture_market_state(symbol: str, current_price: float) -> Dict[str, Any]:
     flush_size_ticks = 0.0
     flush_velocity = 0.0
     flush_direction = "NONE"
-    bars_since_flush_start = 0
     distance_from_flush_low = 0.0
-    distance_from_flush_high = 0.0
     
     if cap_detector.last_flush:
         flush = cap_detector.last_flush
         flush_size_ticks = flush.flush_size_ticks
         flush_velocity = flush.flush_velocity
         flush_direction = flush.direction
-        bars_since_flush_start = cap_detector.bars_since_flush
         distance_from_flush_low = (current_price - flush.flush_low) / tick_size if tick_size > 0 else 0
-        distance_from_flush_high = (flush.flush_high - current_price) / tick_size if tick_size > 0 else 0
     
     # Reversal candle detection (current bar closes green for longs, red for shorts)
     reversal_candle = False
@@ -3452,60 +3457,26 @@ def capture_market_state(symbol: str, current_price: float) -> Dict[str, Any]:
             reversal_candle = current_bar["close"] < current_bar["open"]
             no_new_extreme = current_bar["high"] <= prev_bar["high"]
     
-    # Calculate stop and target distances for risk/reward
-    stop_distance_ticks = 0.0
-    target_distance_ticks = 0.0
-    risk_reward_ratio = 0.0
-    
-    if cap_detector.last_flush and vwap_actual:
-        flush = cap_detector.last_flush
-        if flush.direction == "DOWN":
-            # Long setup: stop below flush low, target at VWAP
-            stop_price = flush.flush_low - (2 * tick_size)  # 2 ticks buffer
-            stop_distance_ticks = (current_price - stop_price) / tick_size if tick_size > 0 else 0
-            target_distance_ticks = (vwap_actual - current_price) / tick_size if tick_size > 0 else 0
-        elif flush.direction == "UP":
-            # Short setup: stop above flush high, target at VWAP
-            stop_price = flush.flush_high + (2 * tick_size)  # 2 ticks buffer
-            stop_distance_ticks = (stop_price - current_price) / tick_size if tick_size > 0 else 0
-            target_distance_ticks = (current_price - vwap_actual) / tick_size if tick_size > 0 else 0
-        
-        if stop_distance_ticks > 0:
-            risk_reward_ratio = target_distance_ticks / stop_distance_ticks
-    
-    # Build the new experience record structure
+    # Build the simplified 16-field experience record structure
     market_state = {
-        # Basic info
-        "timestamp": current_time.isoformat(),
-        "symbol": symbol,
-        "price": current_price,
-        
-        # Flush metrics
+        # The 12 Pattern Matching Fields
         "flush_size_ticks": round(flush_size_ticks, 1),
         "flush_velocity": round(flush_velocity, 2),
-        "flush_direction": flush_direction,
-        "bars_since_flush_start": bars_since_flush_start,
-        "distance_from_flush_low": round(distance_from_flush_low, 1),
-        
-        # Key indicators
-        "rsi": round(rsi, 1) if rsi is not None else 50,
         "volume_climax_ratio": round(volume_climax_ratio, 2),
-        "vwap_distance_ticks": round(vwap_distance_ticks, 1),
-        
-        # Reversal confirmation
+        "flush_direction": flush_direction,
+        "rsi": round(rsi, 1) if rsi is not None else 50,
+        "distance_from_flush_low": round(distance_from_flush_low, 1),
         "reversal_candle": reversal_candle,
         "no_new_extreme": no_new_extreme,
-        
-        # Context
-        "atr": round(atr, 4) if atr else 0,
-        "hour": hour,
-        "session": session,
+        "vwap_distance_ticks": round(vwap_distance_ticks, 1),
         "regime": regime,
+        "session": session,
+        "hour": hour,
         
-        # Risk/Reward
-        "stop_distance_ticks": round(stop_distance_ticks, 1),
-        "target_distance_ticks": round(target_distance_ticks, 1),
-        "risk_reward_ratio": round(risk_reward_ratio, 2)
+        # The 4 Metadata Fields
+        "symbol": symbol,
+        "timestamp": current_time.isoformat(),
+        # pnl and took_trade will be added by record_outcome()
     }
     
     return market_state

@@ -981,38 +981,25 @@
                                         <th style="width: 120px">Timestamp</th>
                                         <th style="width: 100px">License</th>
                                         <th style="width: 60px">Symbol</th>
-                                        <th style="width: 70px">Price</th>
                                         <th style="width: 80px">Flush Size</th>
                                         <th style="width: 80px">Flush Vel</th>
-                                        <th style="width: 80px">Flush Dir</th>
-                                        <th style="width: 90px">Bars Since</th>
-                                        <th style="width: 90px">Dist From Low</th>
-                                        <th style="width: 60px">RSI</th>
                                         <th style="width: 90px">Vol Climax</th>
-                                        <th style="width: 90px">VWAP Dist</th>
+                                        <th style="width: 80px">Flush Dir</th>
+                                        <th style="width: 60px">RSI</th>
+                                        <th style="width: 90px">Dist From Low</th>
                                         <th style="width: 80px">Rev Candle</th>
                                         <th style="width: 90px">No New Ext</th>
-                                        <th style="width: 60px">ATR</th>
-                                        <th style="width: 50px">Hour</th>
-                                        <th style="width: 70px">Session</th>
+                                        <th style="width: 90px">VWAP Dist</th>
                                         <th style="width: 90px">Regime</th>
-                                        <th style="width: 80px">Stop Dist</th>
-                                        <th style="width: 90px">Target Dist</th>
-                                        <th style="width: 70px">Risk/Rew</th>
+                                        <th style="width: 70px">Session</th>
+                                        <th style="width: 50px">Hour</th>
                                         <th style="width: 80px">P&L</th>
-                                        <th style="width: 70px">Duration</th>
                                         <th style="width: 80px">Took Trade</th>
-                                        <th style="width: 90px">Explore Rate</th>
-                                        <th style="width: 70px">MFE</th>
-                                        <th style="width: 70px">MAE</th>
-                                        <th style="width: 80px">Order Type</th>
-                                        <th style="width: 80px">Entry Slip</th>
-                                        <th style="width: 90px">Exit Reason</th>
                                     </tr>
                                 </thead>
                                 <tbody id="dbRlExpTable">
                                     <tr>
-                                        <td colspan="27" class="empty-state">
+                                        <td colspan="17" class="empty-state">
                                             <div class="empty-state-icon">🧠</div>
                                             <div class="empty-state-text">Loading data from PostgreSQL...</div>
                                         </td>
@@ -3315,7 +3302,7 @@
             if (!rows || rows.length === 0) {
                 tbody.innerHTML = `
                     <tr>
-                        <td colspan="30" class="empty-state">
+                        <td colspan="17" class="empty-state">
                             <div class="empty-state-icon">🗄️</div>
                             <div class="empty-state-text">No RL experiences found</div>
                         </td>
@@ -3333,7 +3320,7 @@
             if (filteredRows.length === 0) {
                 tbody.innerHTML = `
                     <tr>
-                        <td colspan="30" class="empty-state">
+                        <td colspan="17" class="empty-state">
                             <div class="empty-state-icon">🔍</div>
                             <div class="empty-state-text">No ${symbolFilter} experiences found</div>
                         </td>
@@ -3352,33 +3339,20 @@
                         <td>${formatDateTime(row.timestamp)}</td>
                         <td style="font-family: monospace; font-size: 11px;">${row.license_key?.substring(0, 8)}...</td>
                         <td><strong>${row.symbol}</strong></td>
-                        <td>$${row.price?.toFixed(2)}</td>
                         <td>${row.flush_size_ticks?.toFixed(1)}</td>
                         <td>${row.flush_velocity?.toFixed(2)}</td>
-                        <td><span class="badge" style="background: ${row.flush_direction === 'DOWN' ? '#fce8e6' : '#e8f5e9'}; color: ${row.flush_direction === 'DOWN' ? '#d93025' : '#1e8e3e'}; font-size: 11px;">${row.flush_direction}</span></td>
-                        <td>${row.bars_since_flush_start}</td>
-                        <td>${row.distance_from_flush_low?.toFixed(1)}</td>
-                        <td>${row.rsi?.toFixed(1)}</td>
                         <td>${row.volume_climax_ratio?.toFixed(2)}</td>
-                        <td>${row.vwap_distance_ticks?.toFixed(1)}</td>
+                        <td><span class="badge" style="background: ${row.flush_direction === 'DOWN' ? '#fce8e6' : '#e8f5e9'}; color: ${row.flush_direction === 'DOWN' ? '#d93025' : '#1e8e3e'}; font-size: 11px;">${row.flush_direction}</span></td>
+                        <td>${row.rsi?.toFixed(1)}</td>
+                        <td>${row.distance_from_flush_low?.toFixed(1)}</td>
                         <td style="text-align: center; font-size: 14px;">${reversalIcon}</td>
                         <td style="text-align: center; font-size: 14px;">${noNewExtIcon}</td>
-                        <td>${row.atr?.toFixed(4)}</td>
-                        <td>${row.hour}</td>
-                        <td><span class="badge" style="background: #fef7e0; color: #ea8600; font-size: 11px;">${row.session}</span></td>
+                        <td>${row.vwap_distance_ticks?.toFixed(1)}</td>
                         <td><span class="badge" style="background: #e8f0fe; color: #1967d2; font-size: 11px;">${row.regime}</span></td>
-                        <td>${row.stop_distance_ticks?.toFixed(1)}</td>
-                        <td>${row.target_distance_ticks?.toFixed(1)}</td>
-                        <td>${row.risk_reward_ratio?.toFixed(2)}</td>
+                        <td><span class="badge" style="background: #fef7e0; color: #ea8600; font-size: 11px;">${row.session}</span></td>
+                        <td>${row.hour}</td>
                         <td class="${pnlClass}"><strong>$${row.pnl?.toFixed(2)}</strong></td>
-                        <td>${row.duration?.toFixed(1)}m</td>
                         <td style="text-align: center; font-size: 14px;">${tookTradeIcon}</td>
-                        <td>${(row.exploration_rate * 100)?.toFixed(1)}%</td>
-                        <td class="profit">$${row.mfe?.toFixed(2)}</td>
-                        <td class="loss">$${row.mae?.toFixed(2)}</td>
-                        <td>${row.order_type_used}</td>
-                        <td>${row.entry_slippage_ticks?.toFixed(2)}</td>
-                        <td>${row.exit_reason}</td>
                     </tr>
                 `;
             }).join('');
