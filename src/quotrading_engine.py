@@ -3048,22 +3048,34 @@ def validate_signal_requirements(symbol: str, bar_time: datetime) -> Tuple[bool,
     
     # Check bid/ask spread and market condition (Phase: Bid/Ask Strategy)
     # SKIP IN BACKTEST MODE - historical data doesn't have bid/ask spreads
+    # NOTE: Bid/ask validation is OPTIONAL - the bot uses market orders for entry
+    # Bid/ask is only used for exit optimization (collecting spread), not required for trading
     if bid_ask_manager is not None and not is_backtest_mode():
-        # Validate spread (Requirement 8)
+        # Validate spread (Requirement 8) - but don't block signals if unavailable
+        # Market orders work fine without bid/ask quotes
         is_acceptable, spread_reason = bid_ask_manager.validate_entry_spread(symbol)
         if not is_acceptable:
-            # Log spread validation failures periodically to help diagnose live mode issues
+            # Log spread validation failures periodically to help diagnose issues
             spread_fail_counter = state[symbol].get("spread_fail_counter", 0) + 1
             state[symbol]["spread_fail_counter"] = spread_fail_counter
             
             # Log first few failures and then every 30 bars
             if spread_fail_counter <= 5 or spread_fail_counter % 30 == 0:
-                logger.info(f"⚠️  Signal blocked by spread validation: {spread_reason}")
+                # Only block if spread is too wide (quality issue)
+                # Don't block if quotes are missing (broker issue - market orders still work)
                 if "No bid/ask quote" in spread_reason:
-                    logger.info(f"   This usually means the broker is not providing bid/ask quotes.")
-                    logger.info(f"   Check that on_quote() is being called by the broker adapter.")
-            
-            return False, spread_reason
+                    logger.warning(f"⚠️  Bid/ask quotes unavailable: {spread_reason}")
+                    logger.warning(f"   Bot will use market orders (no spread optimization on exits)")
+                    logger.warning(f"   Quote feed issue - check broker adapter or on_quote() calls")
+                    # Don't block signals - market orders work without quotes
+                    pass
+                else:
+                    # Spread is too wide - this is a quality issue, should block
+                    logger.info(f"⚠️  Signal blocked by spread validation: {spread_reason}")
+                    return False, spread_reason
+            elif "No bid/ask quote" not in spread_reason:
+                # Spread quality issue - block the signal
+                return False, spread_reason
         else:
             # Reset counter on success
             state[symbol]["spread_fail_counter"] = 0
