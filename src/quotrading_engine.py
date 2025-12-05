@@ -3047,7 +3047,8 @@ def validate_signal_requirements(symbol: str, bar_time: datetime) -> Tuple[bool,
     # (Long: price < VWAP, Short: price > VWAP)
     
     # Check bid/ask spread and market condition (Phase: Bid/Ask Strategy)
-    if bid_ask_manager is not None:
+    # SKIP IN BACKTEST MODE - historical data doesn't have bid/ask spreads
+    if bid_ask_manager is not None and not is_backtest_mode():
         # Validate spread (Requirement 8)
         is_acceptable, spread_reason = bid_ask_manager.validate_entry_spread(symbol)
         if not is_acceptable:
