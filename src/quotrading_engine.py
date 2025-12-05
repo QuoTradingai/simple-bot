@@ -1215,8 +1215,7 @@ def check_broker_connection() -> None:
                     bot_status["maintenance_idle"] = False
                     bot_status["idle_type"] = None
                     bot_status["trading_enabled"] = True
-                    logger.critical("  [RECONNECT] [OK] Trading enabled. Bot fully operational.")
-                    logger.critical("  [RECONNECT] [OK] Daily limits and VWAP reset at 6:00 PM ET")
+                    logger.info("Trading resumed after maintenance")
                 else:
                     logger.error("  [RECONNECT] [ERROR] Connection failed - Will retry periodically")
         except Exception as e:
@@ -6434,7 +6433,6 @@ def perform_daily_reset(symbol: str, new_date: Any) -> None:
     """
     logger.info(SEPARATOR_LINE)
     logger.info(f"DAILY RESET - New Trading Day: {new_date}")
-    logger.info(f"Resetting at 6:00 PM ET after maintenance window")
     logger.info(SEPARATOR_LINE)
     
     # Log session summary before reset
@@ -7824,11 +7822,11 @@ def handle_time_check_event(data: Dict[str, Any]) -> None:
 
 
 def handle_vwap_reset_event(data: Dict[str, Any]) -> None:
-    """Handle VWAP reset event"""
-    symbol = CONFIG["instrument"]
-    if symbol in state:
-        tz = pytz.timezone(CONFIG["timezone"])
-        check_vwap_reset(symbol, datetime.now(tz))
+    """Handle VWAP reset event - DISABLED per strategy requirements"""
+    # VWAP reset disabled: Strategy only needs accurate VWAP for current bar (condition 8)
+    # No need to reset VWAP at maintenance open - just keep calculating as usual
+    # The capitulation reversal strategy doesn't depend on VWAP bands or mean reversion
+    pass
 
 
 def handle_position_reconciliation_event(data: Dict[str, Any]) -> None:
