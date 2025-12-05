@@ -3561,7 +3561,6 @@ def check_for_signals(symbol: str) -> None:
     # Check for long signal
     long_passed = check_long_signal_conditions(symbol, prev_bar, current_bar)
     if long_passed:
-    if long_passed:
         # MARKET STATE CAPTURE - Record comprehensive market conditions
         # Capture current market state (flat structure with all 16 indicators)
         market_state = capture_market_state(symbol, current_bar["close"])
@@ -3605,7 +3604,6 @@ def check_for_signals(symbol: str) -> None:
     
     # Check for short signal
     short_passed = check_short_signal_conditions(symbol, prev_bar, current_bar)
-    if short_passed:
     if short_passed:
         # MARKET STATE CAPTURE - Record comprehensive market conditions
         # Capture current market state (flat structure with all 16 indicators)
