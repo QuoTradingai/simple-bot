@@ -3566,7 +3566,7 @@ def check_for_signals(symbol: str) -> None:
         market_state = capture_market_state(symbol, current_bar["close"])
         
         # DEBUG: Log market state to diagnose why pattern matching may fail
-        logger.debug(f"[MARKET STATE] Long - flush_dir={market_state.get('flush_direction')}, "
+        logger.info(f"🔍 [MARKET STATE] Long - flush_dir={market_state.get('flush_direction')}, "
                     f"size={market_state.get('flush_size_ticks'):.1f}t, "
                     f"vel={market_state.get('flush_velocity'):.2f}, "
                     f"rsi={market_state.get('rsi'):.1f}")
@@ -3616,7 +3616,7 @@ def check_for_signals(symbol: str) -> None:
         market_state = capture_market_state(symbol, current_bar["close"])
         
         # DEBUG: Log market state to diagnose why pattern matching may fail
-        logger.debug(f"[MARKET STATE] Short - flush_dir={market_state.get('flush_direction')}, "
+        logger.info(f"🔍 [MARKET STATE] Short - flush_dir={market_state.get('flush_direction')}, "
                     f"size={market_state.get('flush_size_ticks'):.1f}t, "
                     f"vel={market_state.get('flush_velocity'):.2f}, "
                     f"rsi={market_state.get('rsi'):.1f}")
