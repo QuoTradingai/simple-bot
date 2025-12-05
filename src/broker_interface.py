@@ -292,14 +292,11 @@ class BrokerSDKImplementation(BrokerInterface):
             Contract ID string, or None if not found
         """
         # SDK Instrument objects use 'id' attribute for contract ID
-        contract_id = getattr(instrument, 'id', None)
-        if contract_id:
-            return str(contract_id)
-        
-        # Fallback to 'contract_id' for compatibility (though SDK doesn't use this)
-        contract_id = getattr(instrument, 'contract_id', None)
-        if contract_id:
-            return str(contract_id)
+        # Try 'id' first, then 'contract_id' as fallback for compatibility
+        for attr in ('id', 'contract_id'):
+            contract_id = getattr(instrument, attr, None)
+            if contract_id:
+                return str(contract_id)
         
         # Return None if not found
         return None

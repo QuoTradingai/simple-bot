@@ -947,13 +947,13 @@ def validate_license_at_startup() -> None:
             # Check if it's a session conflict or license expiration
             data = response.json()
             
-            # Check for license expiration first
-            if not data.get("license_valid", True):
+            # Check for license expiration first (explicit check for False)
+            if "license_valid" in data and data["license_valid"] is False:
                 reason = data.get('message', 'Unknown error')
                 logger.critical("=" * 70)
                 logger.critical("INVALID OR EXPIRED LICENSE")
                 logger.critical(f"Reason: {reason}")
-                if "expired" in reason.lower() or "expir" in reason.lower():
+                if "expir" in reason.lower():
                     logger.critical("")
                     logger.critical("  ⚠️ YOUR LICENSE HAS EXPIRED")
                     logger.critical("")
@@ -979,8 +979,21 @@ def validate_license_at_startup() -> None:
                 logger.critical("=" * 70)
                 sys.exit(1)
             else:
-                logger.critical(f"License validation failed - HTTP {response.status_code}")
-                logger.critical("Please contact support@quotrading.com")
+                # Generic 403 error - could be license expiration without explicit flag
+                reason = data.get('message', 'Unknown error')
+                logger.critical("=" * 70)
+                logger.critical("LICENSE VALIDATION FAILED")
+                logger.critical(f"Reason: {reason}")
+                # Check message for expiration keywords as fallback
+                if "expir" in reason.lower():
+                    logger.critical("")
+                    logger.critical("  ⚠️ YOUR LICENSE HAS EXPIRED")
+                    logger.critical("")
+                    logger.critical("  Your license key has expired and needs to be renewed.")
+                    logger.critical("  Please renew your subscription to continue trading.")
+                    logger.critical("")
+                logger.critical("  Contact: support@quotrading.com")
+                logger.critical("=" * 70)
                 sys.exit(1)
         else:
             logger.critical(f"License validation failed - HTTP {response.status_code}")
