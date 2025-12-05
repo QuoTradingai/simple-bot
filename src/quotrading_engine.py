@@ -944,9 +944,26 @@ def validate_license_at_startup() -> None:
                 logger.critical("=" * 70)
                 sys.exit(1)
         elif response.status_code == 403:
-            # Check if it's a session conflict
+            # Check if it's a session conflict or license expiration
             data = response.json()
-            if data.get("session_conflict"):
+            
+            # Check for license expiration first
+            if not data.get("license_valid", True):
+                reason = data.get('message', 'Unknown error')
+                logger.critical("=" * 70)
+                logger.critical("INVALID OR EXPIRED LICENSE")
+                logger.critical(f"Reason: {reason}")
+                if "expired" in reason.lower() or "expir" in reason.lower():
+                    logger.critical("")
+                    logger.critical("  ⚠️ YOUR LICENSE HAS EXPIRED")
+                    logger.critical("")
+                    logger.critical("  Your license key has expired and needs to be renewed.")
+                    logger.critical("  Please renew your subscription to continue trading.")
+                    logger.critical("")
+                logger.critical("  Contact: support@quotrading.com")
+                logger.critical("=" * 70)
+                sys.exit(1)
+            elif data.get("session_conflict"):
                 # Session conflict - another device is ACTIVELY using this license
                 # Server already auto-clears stale sessions, so this is a real conflict
                 logger.critical("=" * 70)

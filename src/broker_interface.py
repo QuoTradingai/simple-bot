@@ -278,6 +278,32 @@ class BrokerSDKImplementation(BrokerInterface):
         # Return empty string as last resort
         return ''
     
+    def _get_instrument_contract_id(self, instrument: Any) -> Optional[str]:
+        """
+        Get the contract ID from an SDK Instrument object.
+        
+        The SDK uses 'id' attribute for contract ID (not 'contract_id').
+        This helper safely extracts the contract ID with proper error handling.
+        
+        Args:
+            instrument: SDK Instrument object
+            
+        Returns:
+            Contract ID string, or None if not found
+        """
+        # SDK Instrument objects use 'id' attribute for contract ID
+        contract_id = getattr(instrument, 'id', None)
+        if contract_id:
+            return str(contract_id)
+        
+        # Fallback to 'contract_id' for compatibility (though SDK doesn't use this)
+        contract_id = getattr(instrument, 'contract_id', None)
+        if contract_id:
+            return str(contract_id)
+        
+        # Return None if not found
+        return None
+    
     def _extract_trading_symbol_from_contract_id(self, contract_id: str) -> Optional[str]:
         """
         Extract trading symbol from TopStep contract_id.
@@ -1445,16 +1471,18 @@ class BrokerSDKImplementation(BrokerInterface):
                     # Use helper method to get instrument symbol
                     instr_symbol = self._get_instrument_symbol(instr)
                     if instr_symbol == clean_symbol or instr_symbol.startswith(clean_symbol):
-                        contract_id = instr.contract_id
-                        self._contract_id_cache[symbol] = contract_id
-                        pass  # Silent - contract ID cached
-                        return contract_id
+                        contract_id = self._get_instrument_contract_id(instr)
+                        if contract_id:
+                            self._contract_id_cache[symbol] = contract_id
+                            pass  # Silent - contract ID cached
+                            return contract_id
                 
                 # No exact match - use first result
-                contract_id = instruments[0].contract_id
-                self._contract_id_cache[symbol] = contract_id
-                pass  # Silent - using first match
-                return contract_id
+                contract_id = self._get_instrument_contract_id(instruments[0])
+                if contract_id:
+                    self._contract_id_cache[symbol] = contract_id
+                    pass  # Silent - using first match
+                    return contract_id
             
             logger.error(f"No contracts found for symbol: {symbol}")
             return None
