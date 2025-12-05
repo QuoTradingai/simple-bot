@@ -59,11 +59,11 @@ class CloudAPIClient:
         Report trade outcome to cloud for data collection.
         
         Args:
-            state: Market state when trade was taken (17 fields: timestamp, symbol, price, etc.)
+            state: Market state when trade was taken (14 fields: 12 pattern matching + 2 metadata)
             took_trade: Whether trade was actually taken
             pnl: Profit/loss in dollars
-            duration: Trade duration in seconds
-            execution_data: Optional execution quality metrics (mfe, mae, exit_reason, order_type_used, entry_slippage_ticks)
+            duration: Trade duration in seconds (IGNORED - not stored in cloud)
+            execution_data: Optional execution quality metrics (IGNORED - not stored in cloud)
         
         Returns:
             True if successfully reported, False otherwise
@@ -73,8 +73,8 @@ class CloudAPIClient:
                 state=original_state,
                 took_trade=True,
                 pnl=125.50,
-                duration=1800,
-                execution_data={"mfe": 200.0, "mae": 50.0, "exit_reason": "target_hit"}
+                duration=1800,  # ignored
+                execution_data={}  # ignored
             )
         """
         # Skip reporting if license is invalid
@@ -83,22 +83,17 @@ class CloudAPIClient:
             return False
         
         try:
-            # FLAT FORMAT: CAPITULATION REVERSAL STRATEGY FIELDS
-            # New experience record structure per user request
+            # SIMPLIFIED 16-FIELD STRUCTURE
+            # The 12 Pattern Matching Fields + 4 Metadata Fields
             payload = {
                 "license_key": self.license_key,
-                # All market state fields (21 fields from capture_market_state)
-                **state,  # timestamp, symbol, price, flush_size_ticks, flush_velocity, flush_direction, 
-                         # bars_since_flush_start, distance_from_flush_low, rsi, volume_climax_ratio,
-                         # vwap_distance_ticks, reversal_candle, no_new_extreme, atr, hour, session, regime,
-                         # stop_distance_ticks, target_distance_ticks, risk_reward_ratio
-                # Trade outcomes (5 fields)
+                # All market state fields (14 fields from capture_market_state)
+                **state,  # flush_size_ticks, flush_velocity, volume_climax_ratio, flush_direction,
+                         # rsi, distance_from_flush_low, reversal_candle, no_new_extreme,
+                         # vwap_distance_ticks, regime, session, hour, symbol, timestamp
+                # Trade outcomes (2 fields - pnl and took_trade)
                 "took_trade": took_trade,
-                "pnl": pnl,
-                "duration": duration,
-                "mfe": execution_data.get("mfe", 0.0) if execution_data else 0.0,
-                "mae": execution_data.get("mae", 0.0) if execution_data else 0.0,
-                "exit_reason": execution_data.get("exit_reason", "unknown") if execution_data else "unknown"
+                "pnl": pnl
             }
             
             response = requests.post(
@@ -131,22 +126,17 @@ class CloudAPIClient:
             return False
         
         try:
-            # FLAT FORMAT: CAPITULATION REVERSAL STRATEGY FIELDS
-            # New experience record structure per user request
+            # SIMPLIFIED 16-FIELD STRUCTURE
+            # The 12 Pattern Matching Fields + 4 Metadata Fields
             payload = {
                 "license_key": self.license_key,
-                # All market state fields (21 fields from capture_market_state)
-                **state,  # timestamp, symbol, price, flush_size_ticks, flush_velocity, flush_direction, 
-                         # bars_since_flush_start, distance_from_flush_low, rsi, volume_climax_ratio,
-                         # vwap_distance_ticks, reversal_candle, no_new_extreme, atr, hour, session, regime,
-                         # stop_distance_ticks, target_distance_ticks, risk_reward_ratio
-                # Trade outcomes (5 fields)
+                # All market state fields (14 fields from capture_market_state)
+                **state,  # flush_size_ticks, flush_velocity, volume_climax_ratio, flush_direction,
+                         # rsi, distance_from_flush_low, reversal_candle, no_new_extreme,
+                         # vwap_distance_ticks, regime, session, hour, symbol, timestamp
+                # Trade outcomes (2 fields - pnl and took_trade)
                 "took_trade": took_trade,
-                "pnl": pnl,
-                "duration": duration,
-                "mfe": execution_data.get("mfe", 0.0) if execution_data else 0.0,
-                "mae": execution_data.get("mae", 0.0) if execution_data else 0.0,
-                "exit_reason": execution_data.get("exit_reason", "unknown") if execution_data else "unknown"
+                "pnl": pnl
             }
             
             session = await self._get_session()

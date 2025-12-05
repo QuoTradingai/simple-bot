@@ -1105,7 +1105,13 @@ def validate_license(license_key: str):
             
             # Check expiration
             if user['license_expiration']:
-                if datetime.now() > user['license_expiration']:
+                # Ensure timezone-aware comparison
+                now_utc = datetime.now(timezone.utc)
+                expiration = user['license_expiration']
+                # If expiration is naive, make it UTC-aware
+                if expiration.tzinfo is None:
+                    expiration = expiration.replace(tzinfo=timezone.utc)
+                if now_utc > expiration:
                     return False, "License expired", user['license_expiration']
             
             # Log successful validation
@@ -1186,7 +1192,9 @@ def check_symbol_session_conflict(conn, license_key: str, symbol: str, device_fi
             
             # Check if session is still active (within timeout)
             if last_heartbeat:
-                time_since_last = datetime.now() - last_heartbeat
+                now_utc = datetime.now(timezone.utc)
+                heartbeat = last_heartbeat if last_heartbeat.tzinfo else last_heartbeat.replace(tzinfo=timezone.utc)
+                time_since_last = now_utc - heartbeat
                 
                 if time_since_last < timedelta(seconds=SESSION_TIMEOUT_SECONDS):
                     # Active session exists
@@ -1454,7 +1462,9 @@ def validate_license_endpoint():
                             # Prevents API key sharing on same OR different devices
                             if last_heartbeat:
                                 # Heartbeat EXISTS - calculate age
-                                time_since_last = datetime.now() - last_heartbeat
+                                now_utc = datetime.now(timezone.utc)
+                                heartbeat = last_heartbeat if last_heartbeat.tzinfo else last_heartbeat.replace(tzinfo=timezone.utc)
+                                time_since_last = now_utc - heartbeat
                                 
                                 # If heartbeat exists and is recent (< SESSION_TIMEOUT_SECONDS)
                                 # Block ALL logins regardless of device - NO EXCEPTIONS
@@ -1641,7 +1651,9 @@ def heartbeat():
                         if stored_device and stored_device != device_fingerprint:
                             # Check if the stored device is still active
                             if last_heartbeat:
-                                time_since_last = datetime.now() - last_heartbeat
+                                now_utc = datetime.now(timezone.utc)
+                                heartbeat = last_heartbeat if last_heartbeat.tzinfo else last_heartbeat.replace(tzinfo=timezone.utc)
+                                time_since_last = now_utc - heartbeat
                                 if time_since_last < timedelta(seconds=SESSION_TIMEOUT_SECONDS):
                                     # SESSION CONFLICT: Another device is active
                                     logging.warning(f"⚠️ Runtime session conflict for {license_key}: Device {device_fingerprint[:8]}... tried heartbeat while {stored_device[:8]}... is active (last seen {int(time_since_last.total_seconds())}s ago)")
@@ -1922,7 +1934,9 @@ def main():
                         
                         if user and user['device_fingerprint'] and user['last_heartbeat']:
                             # Check if any session exists (for info only, don't block launcher validation)
-                            time_since_heartbeat = (datetime.now() - user['last_heartbeat']).total_seconds()
+                            now_utc = datetime.now(timezone.utc)
+                            heartbeat = user['last_heartbeat'] if user['last_heartbeat'].tzinfo else user['last_heartbeat'].replace(tzinfo=timezone.utc)
+                            time_since_heartbeat = (now_utc - heartbeat).total_seconds()
                             
                             # Just log if session exists - launcher can still validate
                             # The actual blocking happens when bot tries to start via /api/validate-license
@@ -1946,7 +1960,12 @@ def main():
         days_until_expiration = None
         hours_until_expiration = None
         if expiration_date:
-            time_until_expiration = expiration_date - datetime.now()
+            now_utc = datetime.now(timezone.utc)
+            expiration = expiration_date
+            # If expiration is naive, make it UTC-aware
+            if expiration.tzinfo is None:
+                expiration = expiration.replace(tzinfo=timezone.utc)
+            time_until_expiration = expiration - now_utc
             days_until_expiration = time_until_expiration.days
             hours_until_expiration = time_until_expiration.total_seconds() / 3600
         
@@ -2121,11 +2140,11 @@ def create_license():
         
         # Calculate expiration based on provided duration
         if minutes_valid is not None:
-            expiration = datetime.now() + timedelta(minutes=int(minutes_valid))
+            expiration = datetime.now(timezone.utc) + timedelta(minutes=int(minutes_valid))
             logging.info(f"Creating license with {minutes_valid} minutes validity (expires: {expiration})")
             duration_desc = f"{minutes_valid} minutes"
         else:
-            expiration = datetime.now() + timedelta(days=duration_days)
+            expiration = datetime.now(timezone.utc) + timedelta(days=duration_days)
             logging.info(f"Creating license with {duration_days} days validity (expires: {expiration})")
             duration_desc = f"{duration_days} days"
         
@@ -2885,10 +2904,10 @@ def admin_add_user():
         
         # Calculate expiration based on provided duration
         if minutes_valid is not None:
-            expiration = datetime.now() + timedelta(minutes=int(minutes_valid))
+            expiration = datetime.now(timezone.utc) + timedelta(minutes=int(minutes_valid))
             logging.info(f"Creating license with {minutes_valid} minutes validity (expires: {expiration})")
         else:
-            expiration = datetime.now() + timedelta(days=int(days_valid))
+            expiration = datetime.now(timezone.utc) + timedelta(days=int(days_valid))
             logging.info(f"Creating license with {days_valid} days validity (expires: {expiration})")
         
         with conn.cursor() as cursor:
@@ -3288,66 +3307,46 @@ def submit_outcome():
             exec_data = data.get('execution_data', {})
             
             # Insert outcome directly into PostgreSQL (instant, no locking)
-            # All 24 fields are now at root level (flat format)
+            # Simplified 16-field structure
             cursor.execute("""
                 INSERT INTO rl_experiences (
                     license_key,
-                    timestamp,
-                    symbol,
-                    price,
-                    returns,
-                    vwap_distance,
-                    vwap_slope,
-                    atr,
-                    atr_slope,
+                    flush_size_ticks,
+                    flush_velocity,
+                    volume_climax_ratio,
+                    flush_direction,
                     rsi,
-                    macd_hist,
-                    stoch_k,
-                    volume_ratio,
-                    volume_slope,
-                    hour,
-                    session,
+                    distance_from_flush_low,
+                    reversal_candle,
+                    no_new_extreme,
+                    vwap_distance_ticks,
                     regime,
-                    volatility_regime,
+                    session,
+                    hour,
+                    symbol,
+                    timestamp,
                     pnl,
-                    duration,
                     took_trade,
-                    exploration_rate,
-                    mfe,
-                    mae,
-                    order_type_used,
-                    entry_slippage_ticks,
-                    exit_reason,
                     created_at
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
             """, (
                 license_key,
-                data.get('timestamp', datetime.now().isoformat()),
-                data.get('symbol', 'ES'),
-                data.get('price', 0.0),
-                data.get('returns', 0.0),
-                data.get('vwap_distance', 0.0),
-                data.get('vwap_slope', 0.0),
-                data.get('atr', 0.0),
-                data.get('atr_slope', 0.0),
+                data.get('flush_size_ticks', 0.0),
+                data.get('flush_velocity', 0.0),
+                data.get('volume_climax_ratio', 1.0),
+                data.get('flush_direction', 'NEUTRAL'),
                 data.get('rsi', 50.0),
-                data.get('macd_hist', 0.0),
-                data.get('stoch_k', 50.0),
-                data.get('volume_ratio', 1.0),
-                data.get('volume_slope', 0.0),
-                data.get('hour', 0),
-                data.get('session', 'RTH'),
+                data.get('distance_from_flush_low', 0.0),
+                data.get('reversal_candle', False),
+                data.get('no_new_extreme', False),
+                data.get('vwap_distance_ticks', 0.0),
                 data.get('regime', 'NORMAL'),
-                data.get('volatility_regime', 'MEDIUM'),
+                data.get('session', 'RTH'),
+                data.get('hour', 0),
+                data.get('symbol', 'ES'),
+                data.get('timestamp', datetime.now(timezone.utc).isoformat()),
                 data.get('pnl', 0.0),
-                data.get('duration', 0.0),
-                data.get('took_trade', False),
-                data.get('exploration_rate', 0.0),
-                data.get('mfe', 0.0),
-                data.get('mae', 0.0),
-                data.get('order_type_used', 'market'),
-                data.get('entry_slippage_ticks', 0.0),
-                data.get('exit_reason', 'unknown')
+                data.get('took_trade', False)
             ))
             
             # Get total experiences and win rate for this symbol
@@ -4359,32 +4358,24 @@ def init_database_if_needed():
             CREATE TABLE IF NOT EXISTS rl_experiences (
                 id SERIAL PRIMARY KEY,
                 license_key VARCHAR(50) NOT NULL,
-                timestamp TIMESTAMP NOT NULL,
-                symbol VARCHAR(20) NOT NULL,
-                price DECIMAL(10,2) NOT NULL,
-                returns DECIMAL(10,6) NOT NULL,
-                vwap_distance DECIMAL(10,6) NOT NULL,
-                vwap_slope DECIMAL(10,6) NOT NULL,
-                atr DECIMAL(10,6) NOT NULL,
-                atr_slope DECIMAL(10,6) NOT NULL,
+                -- The 12 Pattern Matching Fields
+                flush_size_ticks DECIMAL(10,2) NOT NULL,
+                flush_velocity DECIMAL(10,2) NOT NULL,
+                volume_climax_ratio DECIMAL(10,2) NOT NULL,
+                flush_direction VARCHAR(10) NOT NULL,
                 rsi DECIMAL(5,2) NOT NULL,
-                macd_hist DECIMAL(10,6) NOT NULL,
-                stoch_k DECIMAL(5,2) NOT NULL,
-                volume_ratio DECIMAL(10,2) NOT NULL,
-                volume_slope DECIMAL(10,2) NOT NULL,
-                hour INTEGER NOT NULL,
-                session VARCHAR(10) NOT NULL,
+                distance_from_flush_low DECIMAL(10,2) NOT NULL,
+                reversal_candle BOOLEAN NOT NULL,
+                no_new_extreme BOOLEAN NOT NULL,
+                vwap_distance_ticks DECIMAL(10,2) NOT NULL,
                 regime VARCHAR(50) NOT NULL,
-                volatility_regime VARCHAR(20) NOT NULL,
+                session VARCHAR(10) NOT NULL,
+                hour INTEGER NOT NULL,
+                -- The 4 Metadata Fields
+                symbol VARCHAR(20) NOT NULL,
+                timestamp TIMESTAMP NOT NULL,
                 pnl DECIMAL(10,2) NOT NULL,
-                duration DECIMAL(10,2) NOT NULL,
                 took_trade BOOLEAN NOT NULL,
-                exploration_rate DECIMAL(5,2) NOT NULL,
-                mfe DECIMAL(10,2) NOT NULL,
-                mae DECIMAL(10,2) NOT NULL,
-                order_type_used VARCHAR(20) NOT NULL,
-                entry_slippage_ticks DECIMAL(5,2) NOT NULL,
-                exit_reason VARCHAR(50) NOT NULL,
                 created_at TIMESTAMP DEFAULT NOW()
             )
         """)
@@ -4397,7 +4388,7 @@ def init_database_if_needed():
             "CREATE INDEX IF NOT EXISTS idx_rl_experiences_took_trade ON rl_experiences(took_trade)",
             "CREATE INDEX IF NOT EXISTS idx_rl_experiences_regime ON rl_experiences(regime)",
             "CREATE INDEX IF NOT EXISTS idx_rl_experiences_timestamp ON rl_experiences(timestamp DESC)",
-            "CREATE INDEX IF NOT EXISTS idx_rl_experiences_similarity ON rl_experiences(symbol, regime, volatility_regime, rsi, vwap_distance, atr)"
+            "CREATE INDEX IF NOT EXISTS idx_rl_experiences_similarity ON rl_experiences(symbol, regime, rsi, flush_direction, session)"
         ]
         
         for idx in indexes:
