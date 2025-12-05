@@ -2303,6 +2303,12 @@ def inject_complete_bar(symbol: str, bar: Dict[str, Any]) -> None:
     """
     global backtest_current_time
     
+    # DEBUG: Confirm bars are being injected
+    inject_count = state[symbol].get("inject_count", 0) + 1
+    state[symbol]["inject_count"] = inject_count
+    if inject_count <= 3:
+        print(f"DEBUG: inject_complete_bar called #{inject_count}, timestamp={bar.get('timestamp')}")
+    
     # BACKTEST MODE: Update simulation time so all time-based logic uses historical time
     if is_backtest_mode() and 'timestamp' in bar:
         backtest_current_time = bar['timestamp']
@@ -3041,7 +3047,8 @@ def validate_signal_requirements(symbol: str, bar_time: datetime) -> Tuple[bool,
     # (Long: price < VWAP, Short: price > VWAP)
     
     # Check bid/ask spread and market condition (Phase: Bid/Ask Strategy)
-    if bid_ask_manager is not None:
+    # SKIP IN BACKTEST MODE - historical data doesn't have bid/ask spreads
+    if bid_ask_manager is not None and not is_backtest_mode():
         # Validate spread (Requirement 8)
         is_acceptable, spread_reason = bid_ask_manager.validate_entry_spread(symbol)
         if not is_acceptable:
@@ -3133,14 +3140,16 @@ def check_long_signal_conditions(symbol: str, prev_bar: Dict[str, Any],
         regime=current_regime
     )
     
+    # Store entry details for both success and failure (for diagnostic logging)
+    state[symbol]["entry_details"] = details
+    
     if not all_passed:
         # Log periodically which conditions are failing (for debugging)
         if details.get("reason"):
             logger.debug(f"Long rejected: {details['reason']}")
         return False
     
-    # Store entry details for position management
-    state[symbol]["entry_details"] = details
+    # Store flush extremes for position management (only on success)
     state[symbol]["flush_low"] = details.get("flush_low")
     state[symbol]["flush_high"] = details.get("flush_high")
     
@@ -3210,14 +3219,16 @@ def check_short_signal_conditions(symbol: str, prev_bar: Dict[str, Any],
         regime=current_regime
     )
     
+    # Store entry details for both success and failure (for diagnostic logging)
+    state[symbol]["entry_details"] = details
+    
     if not all_passed:
         # Log periodically which conditions are failing (for debugging)
         if details.get("reason"):
             logger.debug(f"Short rejected: {details['reason']}")
         return False
     
-    # Store entry details for position management
-    state[symbol]["entry_details"] = details
+    # Store flush extremes for position management (only on success)
     state[symbol]["flush_low"] = details.get("flush_low")
     state[symbol]["flush_high"] = details.get("flush_high")
     
@@ -3477,6 +3488,9 @@ def capture_market_state(symbol: str, current_price: float) -> Dict[str, Any]:
         "symbol": symbol,
         "timestamp": current_time.isoformat(),
         # pnl and took_trade will be added by record_outcome()
+        
+        # Additional field for display purposes (not used in pattern matching)
+        "price": current_price,
     }
     
     return market_state
@@ -3492,12 +3506,23 @@ def check_for_signals(symbol: str) -> None:
     Args:
         symbol: Instrument symbol
     """
+    # DEBUG: Confirm function is being called
+    call_count = state[symbol].get("check_for_signals_count", 0) + 1
+    state[symbol]["check_for_signals_count"] = call_count
+    if call_count <= 5:
+        print(f"DEBUG: check_for_signals called #{call_count}")
+    
     # Check safety conditions first
     is_safe, reason = check_safety_conditions(symbol)
     if not is_safe:
         # SILENCE DURING MAINTENANCE - no spam in logs
         if not bot_status.get("maintenance_idle", False):
             logger.info(f"[SIGNAL CHECK] Safety check failed: {reason}")
+        # DEBUG: Log first few safety failures
+        safety_fail_count = state[symbol].get("safety_fail_count", 0) + 1
+        state[symbol]["safety_fail_count"] = safety_fail_count
+        if safety_fail_count <= 3:
+            print(f"DEBUG: Safety check failed - {reason}")
         return
     
     # Get the latest bar
@@ -3515,6 +3540,10 @@ def check_for_signals(symbol: str) -> None:
         # This helps users understand the bot is running but conditions aren't met
         validation_fail_counter = state[symbol].get("validation_fail_counter", 0) + 1
         state[symbol]["validation_fail_counter"] = validation_fail_counter
+        
+        # DEBUG: Log first few validation failures
+        if validation_fail_counter <= 5:
+            print(f"DEBUG: Validation failed - {reason}")
         
         # Log every 15 minutes (15 bars) - just show the reason, not strategy details
         if validation_fail_counter % 15 == 0:
@@ -3542,14 +3571,27 @@ def check_for_signals(symbol: str) -> None:
         price = current_bar["close"]
         logger.info(f"📊 Bot active | Price: ${price:.2f} | Scanning for entry signals...")
     
+    # DIAGNOSTIC: Log signal condition checks periodically (every 30 bars = ~30 minutes)
+    # This helps users understand why signals aren't being generated
+    diagnostic_counter = state[symbol].get("diagnostic_counter", 0) + 1
+    state[symbol]["diagnostic_counter"] = diagnostic_counter
+    should_log_diagnostic = (diagnostic_counter % 30 == 0)
+    
     # Declare global RL brain for both signal checks
     global rl_brain
     
     # Check for long signal
-    if check_long_signal_conditions(symbol, prev_bar, current_bar):
+    long_passed = check_long_signal_conditions(symbol, prev_bar, current_bar)
+    if long_passed:
         # MARKET STATE CAPTURE - Record comprehensive market conditions
         # Capture current market state (flat structure with all 16 indicators)
         market_state = capture_market_state(symbol, current_bar["close"])
+        
+        # DEBUG: Log market state to diagnose why pattern matching may fail
+        logger.info(f"🔍 [MARKET STATE] Long - flush_dir={market_state.get('flush_direction')}, "
+                    f"size={market_state.get('flush_size_ticks'):.1f}t, "
+                    f"vel={market_state.get('flush_velocity'):.2f}, "
+                    f"rsi={market_state.get('rsi'):.1f}")
         
         # Ask cloud RL API for decision (or local RL as fallback)
         # Market state has all fields needed: rsi, vwap_distance, atr, volume_ratio, etc.
@@ -3581,12 +3623,25 @@ def check_for_signals(symbol: str) -> None:
         
         execute_entry(symbol, "long", current_bar["close"])
         return
+    elif should_log_diagnostic:
+        # Log why long signal didn't trigger (every 30 bars)
+        entry_details = state[symbol].get("entry_details", {})
+        failed_conditions = entry_details.get("failed_conditions", [])
+        if failed_conditions:
+            logger.info(f"💡 Long signal check - conditions not met: {', '.join(failed_conditions)}")
     
     # Check for short signal
-    if check_short_signal_conditions(symbol, prev_bar, current_bar):
+    short_passed = check_short_signal_conditions(symbol, prev_bar, current_bar)
+    if short_passed:
         # MARKET STATE CAPTURE - Record comprehensive market conditions
         # Capture current market state (flat structure with all 16 indicators)
         market_state = capture_market_state(symbol, current_bar["close"])
+        
+        # DEBUG: Log market state to diagnose why pattern matching may fail
+        logger.info(f"🔍 [MARKET STATE] Short - flush_dir={market_state.get('flush_direction')}, "
+                    f"size={market_state.get('flush_size_ticks'):.1f}t, "
+                    f"vel={market_state.get('flush_velocity'):.2f}, "
+                    f"rsi={market_state.get('rsi'):.1f}")
         
         # Ask cloud RL API for decision (or local RL as fallback)
         # Market state has all fields needed: rsi, vwap_distance, atr, volume_ratio, etc.
@@ -3618,6 +3673,12 @@ def check_for_signals(symbol: str) -> None:
         
         execute_entry(symbol, "short", current_bar["close"])
         return
+    elif should_log_diagnostic:
+        # Log why short signal didn't trigger (every 30 bars)
+        entry_details = state[symbol].get("entry_details", {})
+        failed_conditions = entry_details.get("failed_conditions", [])
+        if failed_conditions:
+            logger.info(f"💡 Short signal check - conditions not met: {', '.join(failed_conditions)}")
 
 
 # ============================================================================

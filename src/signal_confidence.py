@@ -230,23 +230,35 @@ class SignalConfidenceRL:
         # FILTER BASED ON LEARNED THRESHOLD (calculate first)
         take = confidence > optimal_threshold
         
+        # LOG CONFIDENCE FOR ALL SIGNALS
+        threshold_source = "User" if self.user_threshold is not None else "Learned"
+        logger.info(f"[RL Confidence] Signal confidence: {confidence:.1%} vs threshold {optimal_threshold:.1%} ({threshold_source}) - {reason}")
+        
+        # Print for diagnostics
+        print(f"[RL Decision Check] Confidence {confidence*100:.1f}% vs Threshold {optimal_threshold*100:.1f}% = {'PASS' if take else 'FAIL'}")
+        
         # Exploration: Give rejected signals a chance to be taken
         # This allows the system to learn from signals it would normally skip
         if not take and random.random() < effective_exploration:
             # This signal was rejected, but exploration gives it a chance
             take = True
-            threshold_source = "User" if self.user_threshold is not None else "Learned"
             reason = f"Exploring ({effective_exploration*100:.0f}% chance for rejected signals, {len(self.experiences)} exp) | Threshold: {optimal_threshold:.1%} ({threshold_source})"
             self.signals_taken += 1
+            logger.info(f"[RL Decision] EXPLORATION TRADE TAKEN - {reason}")
+            print(f"[RL Decision] ✅ EXPLORATION TRADE (was rejected but exploring)")
             return take, confidence, reason
         
         # Normal behavior: use threshold decision
         if take:
             self.signals_taken += 1
             reason += f" APPROVED ({confidence:.1%} > {optimal_threshold:.1%})"
+            logger.info(f"[RL Decision] ✅ SIGNAL APPROVED - {reason}")
+            print(f"[RL Decision] ✅ TRADE APPROVED (confidence > threshold)")
         else:
             self.signals_skipped += 1
             reason += f" REJECTED ({confidence:.1%} < {optimal_threshold:.1%})"
+            logger.info(f"[RL Decision] ❌ SIGNAL REJECTED - {reason}")
+            print(f"[RL Decision] ❌ TRADE REJECTED (confidence < threshold)")
         
         # Decay exploration over time
         self.exploration_rate = max(self.min_exploration, 
@@ -277,12 +289,20 @@ class SignalConfidenceRL:
         """
         # Need at least 10 experiences before using them for decisions
         if len(self.experiences) < 10:
+            logger.debug(f"[RL] Limited experience: {len(self.experiences)}/10 required - using safety default 35%")
             return 0.35, f"Limited experience ({len(self.experiences)} trades) - safety default"
         
         # Step 1: Find 10 most similar past trades
         similar = self.find_similar_states(current_state, max_results=10)
         
         if not similar:
+            logger.warning(f"[RL] No similar trades found despite {len(self.experiences)} experiences - pattern matching may be too strict")
+            logger.debug(f"[RL] Current state: flush_size={current_state.get('flush_size_ticks')}, "
+                        f"velocity={current_state.get('flush_velocity')}, "
+                        f"rsi={current_state.get('rsi')}, "
+                        f"regime={current_state.get('regime')}")
+            # Print to console for diagnostics
+            print(f"[RL Confidence] 35.0% (DEFAULT) - No similar trades found despite {len(self.experiences)} experiences")
             return 0.35, "No similar situations - safety default"
         
         # Step 2: Calculate metrics from similar trades
@@ -293,9 +313,13 @@ class SignalConfidenceRL:
         # Average Profit = Sum of profits / Count
         avg_profit = sum(exp.get('pnl', 0) for exp in similar) / len(similar)
         
+        logger.debug(f"[RL] Found {len(similar)} similar trades: {wins} wins, {len(similar)-wins} losses, "
+                    f"WR={win_rate*100:.0f}%, avg_profit=${avg_profit:.2f}")
+        
         # Step 3: If average profit is negative → Auto reject (0% confidence)
         if avg_profit < 0:
             reason = f"{len(similar)} similar: {win_rate*100:.0f}% WR, ${avg_profit:.0f} avg (NEGATIVE EV - REJECTED)"
+            logger.info(f"[RL] Signal REJECTED due to negative expected value: {reason}")
             return 0.0, reason
         
         # Profit Score = min(Average Profit / 300, 1.0)
@@ -306,6 +330,10 @@ class SignalConfidenceRL:
         confidence = max(0.0, min(1.0, confidence))
         
         reason = f"{len(similar)} similar: {win_rate*100:.0f}% WR, ${avg_profit:.0f} avg"
+        logger.debug(f"[RL] Calculated confidence: {confidence:.1%} - {reason}")
+        
+        # Print to console for diagnostics (shows in backtest)
+        print(f"[RL Confidence] {confidence*100:.1f}% - {reason}")
         
         return confidence, reason
     
@@ -343,6 +371,14 @@ class SignalConfidenceRL:
         """
         if not self.experiences:
             return []
+        
+        # DEBUG: Log current state for diagnosis
+        logger.debug(f"[RL Pattern Matching] Searching for similar trades among {len(self.experiences)} experiences")
+        logger.debug(f"[RL Pattern Matching] Current: flush_size={current.get('flush_size_ticks', 0):.1f}, "
+                    f"velocity={current.get('flush_velocity', 0):.1f}, "
+                    f"direction={current.get('flush_direction', 'NONE')}, "
+                    f"rsi={current.get('rsi', 50):.1f}, "
+                    f"regime={current.get('regime', 'NORMAL')}")
         
         # Calculate similarity score for each past experience
         scored = []
@@ -421,6 +457,19 @@ class SignalConfidenceRL:
         
         # Sort by similarity (most similar first)
         scored.sort(key=lambda x: x[0])
+        
+        # DEBUG: Show similarity scores of top matches
+        if scored:
+            top_5 = scored[:min(5, len(scored))]
+            logger.debug(f"[RL Pattern Matching] Top 5 similarity scores: {[f'{s:.3f}' for s, _ in top_5]}")
+            best_match = top_5[0][1]
+            logger.debug(f"[RL Pattern Matching] Best match: flush_size={best_match.get('flush_size_ticks', 0):.1f}, "
+                        f"velocity={best_match.get('flush_velocity', 0):.1f}, "
+                        f"direction={best_match.get('flush_direction', 'NONE')}, "
+                        f"rsi={best_match.get('rsi', 50):.1f}, "
+                        f"pnl=${best_match.get('pnl', 0):.2f}")
+        else:
+            logger.warning(f"[RL Pattern Matching] No scored experiences - this should not happen!")
         
         # Return top N most similar (default 10)
         return [exp for _, exp in scored[:max_results]]

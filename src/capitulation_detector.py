@@ -191,7 +191,9 @@ class CapitulationDetector:
             "flush_low": lowest_low,
             "flush_high": highest_high,
             "vwap": vwap,
-            "regime": regime
+            "regime": regime,
+            "current_volume": current_volume,
+            "avg_volume_20": avg_volume_20
         }
         
         if all_passed:
@@ -224,6 +226,28 @@ class CapitulationDetector:
             failed = [k for k, v in conditions.items() if not v]
             details["failed_conditions"] = failed
             details["reason"] = f"Failed conditions: {', '.join(failed)}"
+            # Log when CLOSE to signal (8 or 9 conditions passed)
+            passed_count = 9 - len(failed)
+            if passed_count >= 8:
+                logger.info(f"🎯 CLOSE TO LONG SIGNAL! {passed_count}/9 passed. Failed: {', '.join(failed)}")
+                rsi_str = f"{rsi:.1f}" if rsi is not None else "N/A"
+                logger.info(f"   flush={flush_range_ticks:.1f}t, vel={velocity:.2f}, rsi={rsi_str}, vol={current_volume:.0f} (avg={avg_volume_20:.0f}, ratio={current_volume/avg_volume_20 if avg_volume_20 > 0 else 0:.2f}x)")
+                logger.info(f"   dist_from_low={distance_from_low:.1f}t, reversal={current_bar['close']:.2f}>{current_bar['open']:.2f}, below_vwap={current_bar['close']:.2f}<{vwap:.2f}")
+            # DEBUG: Periodic sampling of failures to see what's failing
+            import random
+            if random.random() < 0.002:  # 0.2% sample
+                print(f"❌ Long failed ({len(failed)}/9): {', '.join(failed[:4])}")
+            
+            # DIAGNOSTIC: Log ALL near-misses (8 or 9 conditions) to help debug why 0 signals
+            if passed_count >= 8:
+                rsi_str = f"{rsi:.1f}" if rsi is not None else "N/A"
+                print(f"⚠️ Near-miss LONG: {passed_count}/9 passed. Failed: {', '.join(failed)}")
+                print(f"   Bar: close={current_bar['close']:.2f}, open={current_bar['open']:.2f}, vol={current_volume:.0f}")
+                print(f"   Flush: {flush_range_ticks:.1f}t (need {self.MIN_FLUSH_TICKS}+), vel={velocity:.2f} (need {self.MIN_VELOCITY_TICKS_PER_BAR}+)")
+                print(f"   RSI: {rsi_str} (need <{self.RSI_OVERSOLD_EXTREME})")
+                print(f"   Volume: {current_volume:.0f} vs avg={avg_volume_20:.0f} (need {current_volume}/{avg_volume_20:.0f} >= {self.VOLUME_SPIKE_THRESHOLD})")
+                print(f"   Distance from low: {distance_from_low:.1f}t (need <={self.NEAR_EXTREME_TICKS})")
+                print(f"   VWAP: close={current_bar['close']:.2f} vs {vwap:.2f} (need below)")
         
         return all_passed, details
     
@@ -341,6 +365,12 @@ class CapitulationDetector:
             failed = [k for k, v in conditions.items() if not v]
             details["failed_conditions"] = failed
             details["reason"] = f"Failed conditions: {', '.join(failed)}"
+            # Log when CLOSE to signal (8 or 9 conditions passed)
+            passed_count = 9 - len(failed)
+            if passed_count >= 8:
+                logger.info(f"🎯 CLOSE TO SHORT SIGNAL! {passed_count}/9 passed. Failed: {', '.join(failed)}")
+                rsi_str = f"{rsi:.1f}" if rsi is not None else "N/A"
+                logger.info(f"   pump={flush_range_ticks:.1f}t, vel={velocity:.2f}, rsi={rsi_str}, vol={current_volume:.0f} (avg={avg_volume_20:.0f})")
         
         return all_passed, details
     
