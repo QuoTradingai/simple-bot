@@ -1105,7 +1105,13 @@ def validate_license(license_key: str):
             
             # Check expiration
             if user['license_expiration']:
-                if datetime.now() > user['license_expiration']:
+                # Ensure timezone-aware comparison
+                now_utc = datetime.now(timezone.utc)
+                expiration = user['license_expiration']
+                # If expiration is naive, make it UTC-aware
+                if expiration.tzinfo is None:
+                    expiration = expiration.replace(tzinfo=timezone.utc)
+                if now_utc > expiration:
                     return False, "License expired", user['license_expiration']
             
             # Log successful validation
@@ -1186,7 +1192,9 @@ def check_symbol_session_conflict(conn, license_key: str, symbol: str, device_fi
             
             # Check if session is still active (within timeout)
             if last_heartbeat:
-                time_since_last = datetime.now() - last_heartbeat
+                now_utc = datetime.now(timezone.utc)
+                heartbeat = last_heartbeat if last_heartbeat.tzinfo else last_heartbeat.replace(tzinfo=timezone.utc)
+                time_since_last = now_utc - heartbeat
                 
                 if time_since_last < timedelta(seconds=SESSION_TIMEOUT_SECONDS):
                     # Active session exists
@@ -1454,7 +1462,9 @@ def validate_license_endpoint():
                             # Prevents API key sharing on same OR different devices
                             if last_heartbeat:
                                 # Heartbeat EXISTS - calculate age
-                                time_since_last = datetime.now() - last_heartbeat
+                                now_utc = datetime.now(timezone.utc)
+                                heartbeat = last_heartbeat if last_heartbeat.tzinfo else last_heartbeat.replace(tzinfo=timezone.utc)
+                                time_since_last = now_utc - heartbeat
                                 
                                 # If heartbeat exists and is recent (< SESSION_TIMEOUT_SECONDS)
                                 # Block ALL logins regardless of device - NO EXCEPTIONS
@@ -1641,7 +1651,9 @@ def heartbeat():
                         if stored_device and stored_device != device_fingerprint:
                             # Check if the stored device is still active
                             if last_heartbeat:
-                                time_since_last = datetime.now() - last_heartbeat
+                                now_utc = datetime.now(timezone.utc)
+                                heartbeat = last_heartbeat if last_heartbeat.tzinfo else last_heartbeat.replace(tzinfo=timezone.utc)
+                                time_since_last = now_utc - heartbeat
                                 if time_since_last < timedelta(seconds=SESSION_TIMEOUT_SECONDS):
                                     # SESSION CONFLICT: Another device is active
                                     logging.warning(f"⚠️ Runtime session conflict for {license_key}: Device {device_fingerprint[:8]}... tried heartbeat while {stored_device[:8]}... is active (last seen {int(time_since_last.total_seconds())}s ago)")
@@ -1922,7 +1934,9 @@ def main():
                         
                         if user and user['device_fingerprint'] and user['last_heartbeat']:
                             # Check if any session exists (for info only, don't block launcher validation)
-                            time_since_heartbeat = (datetime.now() - user['last_heartbeat']).total_seconds()
+                            now_utc = datetime.now(timezone.utc)
+                            heartbeat = user['last_heartbeat'] if user['last_heartbeat'].tzinfo else user['last_heartbeat'].replace(tzinfo=timezone.utc)
+                            time_since_heartbeat = (now_utc - heartbeat).total_seconds()
                             
                             # Just log if session exists - launcher can still validate
                             # The actual blocking happens when bot tries to start via /api/validate-license
@@ -1946,7 +1960,12 @@ def main():
         days_until_expiration = None
         hours_until_expiration = None
         if expiration_date:
-            time_until_expiration = expiration_date - datetime.now()
+            now_utc = datetime.now(timezone.utc)
+            expiration = expiration_date
+            # If expiration is naive, make it UTC-aware
+            if expiration.tzinfo is None:
+                expiration = expiration.replace(tzinfo=timezone.utc)
+            time_until_expiration = expiration - now_utc
             days_until_expiration = time_until_expiration.days
             hours_until_expiration = time_until_expiration.total_seconds() / 3600
         
@@ -2121,11 +2140,11 @@ def create_license():
         
         # Calculate expiration based on provided duration
         if minutes_valid is not None:
-            expiration = datetime.now() + timedelta(minutes=int(minutes_valid))
+            expiration = datetime.now(timezone.utc) + timedelta(minutes=int(minutes_valid))
             logging.info(f"Creating license with {minutes_valid} minutes validity (expires: {expiration})")
             duration_desc = f"{minutes_valid} minutes"
         else:
-            expiration = datetime.now() + timedelta(days=duration_days)
+            expiration = datetime.now(timezone.utc) + timedelta(days=duration_days)
             logging.info(f"Creating license with {duration_days} days validity (expires: {expiration})")
             duration_desc = f"{duration_days} days"
         
@@ -2885,10 +2904,10 @@ def admin_add_user():
         
         # Calculate expiration based on provided duration
         if minutes_valid is not None:
-            expiration = datetime.now() + timedelta(minutes=int(minutes_valid))
+            expiration = datetime.now(timezone.utc) + timedelta(minutes=int(minutes_valid))
             logging.info(f"Creating license with {minutes_valid} minutes validity (expires: {expiration})")
         else:
-            expiration = datetime.now() + timedelta(days=int(days_valid))
+            expiration = datetime.now(timezone.utc) + timedelta(days=int(days_valid))
             logging.info(f"Creating license with {days_valid} days validity (expires: {expiration})")
         
         with conn.cursor() as cursor:
