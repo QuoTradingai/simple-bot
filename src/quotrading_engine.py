@@ -3362,7 +3362,7 @@ def capture_market_state(symbol: str, current_price: float) -> Dict[str, Any]:
     """
     Capture comprehensive market state snapshot for cloud RL database.
     
-    REQUIRED FIELDS FOR CLOUD API (24 fields):
+    REQUIRED FIELDS FOR CLOUD API (17 market state fields):
     - timestamp, symbol, price
     - returns, vwap_distance, vwap_slope
     - atr, atr_slope, rsi
@@ -3464,7 +3464,9 @@ def capture_market_state(symbol: str, current_price: float) -> Dict[str, Any]:
     if rsi is None:
         rsi = 50.0
     
-    # Calculate MACD histogram
+    # Calculate MACD histogram (simplified placeholder)
+    # Note: This is a simplified approximation. Full MACD requires:
+    # MACD Line = 12-EMA - 26-EMA, Signal Line = 9-EMA of MACD, Histogram = MACD - Signal
     macd_hist = 0.0
     if len(bars_1min) >= 26:
         closes = [bar["close"] for bar in list(bars_1min)[-26:]]
@@ -3481,11 +3483,9 @@ def capture_market_state(symbol: str, current_price: float) -> Dict[str, Any]:
             for close in closes[1:]:
                 ema_26 = alpha_26 * close + (1 - alpha_26) * ema_26
             
-            # MACD line
+            # MACD line (simplified - using as proxy for histogram)
             macd_line = ema_12 - ema_26
-            
-            # Signal line (9-period EMA of MACD) - simplified
-            macd_hist = macd_line * 0.1  # Simplified histogram
+            macd_hist = macd_line * 0.1  # Scaled approximation
     
     # Calculate Stochastic K
     stoch_k = 50.0
@@ -3523,7 +3523,12 @@ def capture_market_state(symbol: str, current_price: float) -> Dict[str, Any]:
         window_size = 14
         for offset in [0, 20, 40, 60, 80]:
             if len(bars_1min) >= offset + window_size + 1:
-                offset_bars = list(bars_1min)[-(offset + window_size + 1):-(offset) if offset > 0 else None]
+                # Get the correct window of bars for this offset
+                if offset == 0:
+                    offset_bars = list(bars_1min)[-(window_size + 1):]
+                else:
+                    offset_bars = list(bars_1min)[-(offset + window_size + 1):-(offset + 1)]
+                
                 if len(offset_bars) >= window_size + 1:
                     tr_list = []
                     for i in range(1, len(offset_bars)):
