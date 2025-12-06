@@ -123,7 +123,7 @@ def test_csv_format():
                 if not row['depth_price']:
                     print(f"⚠ Warning: Depth row missing depth data")
             
-            print(f"  Row {row_count}: ES - {data_type} - OK")
+            print(f"  Row {row_count}: {data_type} - OK")
         
         print(f"✓ Read {row_count} rows successfully")
     
