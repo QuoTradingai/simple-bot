@@ -237,7 +237,14 @@ class CapitulationDetector:
             # ENHANCED DIAGNOSTIC: Log ALL 9 conditions with actual values every 10 checks
             # This helps diagnose what's different between backtest and live
             import random
-            diagnostic_sample = random.random() < 0.1 or passed_count >= 7  # 10% sample OR close to signal
+            # Check if shutdown is in progress (avoid logging during shutdown)
+            try:
+                from quotrading_engine import _shutdown_in_progress as shutdown_flag
+                skip_diagnostic = shutdown_flag
+            except (ImportError, AttributeError):
+                skip_diagnostic = False
+            
+            diagnostic_sample = (random.random() < 0.1 or passed_count >= 7) and not skip_diagnostic  # 10% sample OR close to signal
             if diagnostic_sample:
                 rsi_str = f"{rsi:.1f}" if rsi is not None else "N/A"
                 print(f"\n🔍 SIGNAL CHECK DIAGNOSTIC (Passed: {passed_count}/9)")
@@ -389,7 +396,14 @@ class CapitulationDetector:
             
             # ENHANCED DIAGNOSTIC: Log ALL 9 conditions with actual values every 10 checks
             import random
-            diagnostic_sample = random.random() < 0.1 or passed_count >= 7  # 10% sample OR close to signal
+            # Check if shutdown is in progress (avoid logging during shutdown)
+            try:
+                from quotrading_engine import _shutdown_in_progress as shutdown_flag
+                skip_diagnostic = shutdown_flag
+            except (ImportError, AttributeError):
+                skip_diagnostic = False
+            
+            diagnostic_sample = (random.random() < 0.1 or passed_count >= 7) and not skip_diagnostic  # 10% sample OR close to signal
             if diagnostic_sample:
                 rsi_str = f"{rsi:.1f}" if rsi is not None else "N/A"
                 print(f"\n🔍 SHORT SIGNAL CHECK DIAGNOSTIC (Passed: {passed_count}/9)")
