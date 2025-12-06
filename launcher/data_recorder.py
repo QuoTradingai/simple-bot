@@ -10,8 +10,8 @@ Captures:
 - Timestamps
 
 Output:
-- Single CSV file with all data
-- Each row tagged with symbol
+- Separate CSV file per symbol
+- Append mode for continuous recording
 - Chronologically ordered
 """
 
@@ -168,8 +168,8 @@ class MarketDataRecorder:
                 
                 self.log("✓ Connected to market data stream")
                 
-                # Initialize CSV file
-                self.log(f"Initializing CSV file: {self.output_file}")
+                # Initialize CSV files
+                self.log(f"Initializing CSV files in: {self.output_dir}")
                 self._initialize_csv()
                 
                 # Subscribe to market data for each symbol

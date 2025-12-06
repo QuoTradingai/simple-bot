@@ -1,6 +1,6 @@
 """
 Test script for Market Data Recorder
-Validates the CSV output format and data structure
+Validates the CSV output format and data structure for per-symbol files
 """
 
 import csv
@@ -8,10 +8,9 @@ from pathlib import Path
 
 
 def test_csv_format():
-    """Test that the CSV format matches expected structure."""
+    """Test that the CSV format matches expected structure for per-symbol files."""
     expected_headers = [
         'timestamp',
-        'symbol',
         'data_type',
         'bid_price',
         'bid_size',
@@ -26,8 +25,8 @@ def test_csv_format():
         'depth_size'
     ]
     
-    # Create a sample CSV to test format
-    test_file = Path("test_market_data.csv")
+    # Create a sample CSV to test format (simulating ES.csv)
+    test_file = Path("test_ES.csv")
     
     # Write sample data
     with open(test_file, 'w', newline='') as f:
@@ -37,7 +36,6 @@ def test_csv_format():
         # Sample quote
         writer.writerow([
             '2025-12-06T14:30:15.123456',
-            'ES',
             'quote',
             '4500.25',
             '10',
@@ -55,7 +53,6 @@ def test_csv_format():
         # Sample trade
         writer.writerow([
             '2025-12-06T14:30:15.234567',
-            'ES',
             'trade',
             '',  # bid_price
             '',  # bid_size
@@ -73,7 +70,6 @@ def test_csv_format():
         # Sample depth
         writer.writerow([
             '2025-12-06T14:30:15.345678',
-            'ES',
             'depth',
             '',
             '',
@@ -86,24 +82,6 @@ def test_csv_format():
             'bid',  # depth_side
             '4500.25',
             '10'
-        ])
-        
-        # Sample for different symbol
-        writer.writerow([
-            '2025-12-06T14:30:15.456789',
-            'NQ',
-            'quote',
-            '16200.00',
-            '15',
-            '16200.25',
-            '12',
-            '',
-            '',
-            '',
-            '',
-            '',
-            '',
-            ''
         ])
     
     # Verify the file can be read
@@ -128,7 +106,6 @@ def test_csv_format():
             
             # Check that required fields are present
             assert 'timestamp' in row
-            assert 'symbol' in row
             assert 'data_type' in row
             
             data_type = row['data_type']
@@ -146,25 +123,9 @@ def test_csv_format():
                 if not row['depth_price']:
                     print(f"⚠ Warning: Depth row missing depth data")
             
-            print(f"  Row {row_count}: {row['symbol']} - {data_type} - OK")
+            print(f"  Row {row_count}: ES - {data_type} - OK")
         
         print(f"✓ Read {row_count} rows successfully")
-    
-    # Test that we can filter by symbol (without pandas)
-    print("\nTesting symbol filtering...")
-    es_count = 0
-    nq_count = 0
-    
-    with open(test_file, 'r') as f:
-        reader = csv.DictReader(f)
-        for row in reader:
-            if row['symbol'] == 'ES':
-                es_count += 1
-            elif row['symbol'] == 'NQ':
-                nq_count += 1
-    
-    print(f"✓ ES rows: {es_count}")
-    print(f"✓ NQ rows: {nq_count}")
     
     # Test that we can filter by data type (without pandas)
     print("\nTesting data type filtering...")

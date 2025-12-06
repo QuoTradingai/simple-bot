@@ -4,6 +4,8 @@ Example: Using Recorded Market Data for Backtesting
 
 This example demonstrates how to load and use market data
 recorded by the Market Data Recorder for backtesting purposes.
+
+Each symbol has its own CSV file (ES.csv, NQ.csv, etc.)
 """
 
 import csv
@@ -14,13 +16,12 @@ from typing import Dict, List, Any, Optional, Callable
 TIMESTAMP_DISPLAY_LENGTH = 19  # Length of timestamp to display (YYYY-MM-DD HH:MM:SS)
 
 
-def load_market_data(csv_file: str, symbol: str = None) -> List[Dict]:
+def load_market_data(csv_file: str) -> List[Dict]:
     """
     Load market data from CSV file.
     
     Args:
-        csv_file: Path to CSV file
-        symbol: Optional symbol filter (e.g., 'ES', 'NQ')
+        csv_file: Path to CSV file (e.g., 'market_data/ES.csv')
     
     Returns:
         List of data records
@@ -29,9 +30,6 @@ def load_market_data(csv_file: str, symbol: str = None) -> List[Dict]:
     with open(csv_file, 'r') as f:
         reader = csv.DictReader(f)
         for row in reader:
-            # Filter by symbol if specified
-            if symbol and row['symbol'] != symbol:
-                continue
             data.append(row)
     
     return data
@@ -64,14 +62,14 @@ def analyze_market_data(csv_file: str, symbol: str):
     Example analysis of recorded market data.
     
     Args:
-        csv_file: Path to CSV file
-        symbol: Symbol to analyze (e.g., 'ES')
+        csv_file: Path to CSV file for the symbol (e.g., 'market_data/ES.csv')
+        symbol: Symbol name (e.g., 'ES') - for display purposes
     """
     print(f"Analyzing market data for {symbol}")
     print("=" * 60)
     
-    # Load all data for symbol
-    data = load_market_data(csv_file, symbol=symbol)
+    # Load all data from the symbol's file
+    data = load_market_data(csv_file)
     print(f"Total records: {len(data)}")
     
     # Get different data types
@@ -152,14 +150,14 @@ def replay_market_data(csv_file: str, symbol: str, limit: int = 100):
     Replay market data chronologically (useful for backtesting).
     
     Args:
-        csv_file: Path to CSV file
-        symbol: Symbol to replay
+        csv_file: Path to CSV file for the symbol (e.g., 'market_data/ES.csv')
+        symbol: Symbol name (e.g., 'ES') - for display purposes
         limit: Maximum number of records to replay
     """
     print(f"Replaying market data for {symbol} (first {limit} records)")
     print("=" * 60)
     
-    data = load_market_data(csv_file, symbol=symbol)
+    data = load_market_data(csv_file)
     
     # Sort by timestamp to ensure chronological order
     data_sorted = sorted(data, key=lambda x: x['timestamp'])
@@ -187,12 +185,16 @@ def simple_backtest_example(csv_file: str, symbol: str):
     
     This is a very basic example showing how to use the data.
     In a real backtest, you would implement your actual trading strategy.
+    
+    Args:
+        csv_file: Path to CSV file for the symbol (e.g., 'market_data/ES.csv')
+        symbol: Symbol name (e.g., 'ES') - for display purposes
     """
     print(f"Simple Backtest Example: {symbol}")
     print("=" * 60)
     
     # Load data
-    data = load_market_data(csv_file, symbol=symbol)
+    data = load_market_data(csv_file)
     quotes = get_quotes(data)
     
     if not quotes:
@@ -212,7 +214,7 @@ def simple_backtest_example(csv_file: str, symbol: str):
             
             if spread > spread_threshold:
                 wide_spread_count += 1
-                print(f"[{quote['timestamp'][:19]}] Wide spread detected: ${spread:.2f}")
+                print(f"[{quote['timestamp'][:TIMESTAMP_DISPLAY_LENGTH]}] Wide spread detected: ${spread:.2f}")
                 # In real backtest, you might avoid trading during wide spreads
     
     print()
@@ -222,7 +224,7 @@ def simple_backtest_example(csv_file: str, symbol: str):
 
 if __name__ == "__main__":
     # Example usage
-    csv_file = "market_data.csv"  # Your recorded data file
+    csv_file = "market_data/ES.csv"  # Your recorded data file for ES
     symbol = "ES"
     
     print("Market Data Backtesting Example")
