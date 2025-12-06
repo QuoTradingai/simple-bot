@@ -3013,7 +3013,7 @@ def validate_signal_requirements(symbol: str, bar_time: datetime) -> Tuple[bool,
             try:
                 notifier = get_notifier()
                 notifier.send_error_alert(
-                    error_message=f"Daily Loss Limit Reached: ${state[symbol]['daily_pnl']:.2f} / -${effective_loss_limit:.2f}. Bot stopped trading for today. Will auto-resume tomorrow.",
+                    error_message=f"Daily Loss Limit Reached: ${state[symbol]['daily_pnl']:.2f} / -${effective_loss_limit:.2f}. Bot stopped trading for today. Daily counters reset at 6:00 PM ET.",
                     error_type="Daily Loss Limit"
                 )
                 state[symbol]["loss_limit_alerted"] = True
@@ -5444,7 +5444,7 @@ def check_exit_conditions(symbol: str) -> None:
         position["active"] = False
         position["flatten_pending"] = True  # Track that we're waiting for flatten confirmation
         
-        logger.info("Position flattened - bot will continue running and auto-resume when market opens")
+        logger.info("Position flattened - bot will continue running")
         return
     
     # Market closed - Force close all positions
@@ -6579,7 +6579,7 @@ def perform_daily_reset(symbol: str, new_date: Any) -> None:
     
     # Re-enable trading if it was stopped for any daily limit reason
     # "daily_loss_limit" = specific daily loss limit breached
-    # "daily_limits_reached" = approaching failure without recovery mode
+    # "daily_limits_reached" = approaching daily loss threshold
     if bot_status["stop_reason"] in ["daily_loss_limit", "daily_limits_reached"]:
         bot_status["trading_enabled"] = True
         bot_status["stop_reason"] = None

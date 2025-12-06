@@ -124,7 +124,7 @@ class BotConfiguration:
     # Safety Parameters - USER CONFIGURABLE
     daily_loss_limit: float = 1000.0  # USER CONFIGURABLE - max $ loss per day (or auto-calculated)
     daily_loss_percent: float = 2.0  # USER CONFIGURABLE - max daily loss as % of account
-    account_size: float = 50000.0  # USER CONFIGURABLE - account size for risk calculations (needed for recovery mode to track initial balance)
+    account_size: float = 50000.0  # USER CONFIGURABLE - account size for risk calculations
     auto_calculate_limits: bool = True  # USER CONFIGURABLE - auto-calculate limits from account balance
     tick_timeout_seconds: int = 999999  # Disabled for testing
     proactive_stop_buffer_ticks: int = 2
