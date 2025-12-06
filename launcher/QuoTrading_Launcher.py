@@ -2846,9 +2846,32 @@ Time-Based Exit: {time_exit}
         # Initialize instructions
         update_instructions()
         
+        # Buttons frame for Save and Test
+        buttons_frame = tk.Frame(content, bg=self.colors['card'])
+        buttons_frame.pack(pady=(20, 0))
+        
+        # Test Alert Button
+        test_btn = tk.Button(
+            buttons_frame,
+            text="📧 Test Alerts",
+            command=lambda: self._test_alerts_settings(
+                provider_var, email_var, email_pass_var,
+                smtp_server_var, smtp_port_var, smtp_tls_var,
+                phone_var, carrier_var
+            ),
+            font=("Segoe UI", 9, "bold"),
+            bg=self.colors['warning'],
+            fg='white',
+            cursor="hand2",
+            relief=tk.FLAT,
+            padx=30,
+            pady=10
+        )
+        test_btn.pack(side=tk.LEFT, padx=(0, 10))
+        
         # Save Button
         save_btn = tk.Button(
-            content,
+            buttons_frame,
             text="💾 Save Alert Settings",
             command=lambda: self._save_alerts_settings(
                 settings_dialog,
@@ -2864,7 +2887,7 @@ Time-Based Exit: {time_exit}
             padx=30,
             pady=10
         )
-        save_btn.pack(pady=(20, 0))
+        save_btn.pack(side=tk.LEFT)
     
     def _save_alerts_settings(self, dialog, provider_var, email_var, email_pass_var,
                              additional_emails_var, smtp_server_var, smtp_port_var,
@@ -2895,6 +2918,109 @@ Time-Based Exit: {time_exit}
         self.save_config()
         messagebox.showinfo("Alert Settings Saved", "Your alert settings have been saved successfully!")
         dialog.destroy()
+    
+    def _test_alerts_settings(self, provider_var, email_var, email_pass_var,
+                             smtp_server_var, smtp_port_var, smtp_tls_var,
+                             phone_var, carrier_var):
+        """Test alert settings by sending a test notification."""
+        # Temporarily save settings to config for testing
+        temp_config = {
+            "smtp_provider": provider_var.get(),
+            "alert_email": email_var.get(),
+            "alert_email_password": email_pass_var.get(),
+            "smtp_server": smtp_server_var.get(),
+            "smtp_port": int(smtp_port_var.get()) if smtp_port_var.get().isdigit() else 587,
+            "smtp_tls": smtp_tls_var.get(),
+            "alert_phone": phone_var.get(),
+            "alert_carrier": carrier_var.get(),
+            "alerts_enabled": True  # Force enable for testing
+        }
+        
+        # Validation
+        if not temp_config["alert_email"] or not temp_config["alert_email_password"]:
+            messagebox.showerror(
+                "Missing Configuration",
+                "Please enter both email address and password before testing."
+            )
+            return
+        
+        # Save current config and temporarily use test config
+        original_config = self.config.copy()
+        self.config.update(temp_config)
+        self.save_config()
+        
+        # Show testing dialog
+        self.show_loading("Sending test alert...")
+        
+        def test_in_thread():
+            """Run test in background thread."""
+            try:
+                # Import notifications module
+                import sys
+                from pathlib import Path
+                src_path = Path(__file__).parent.parent / "src"
+                if str(src_path) not in sys.path:
+                    sys.path.insert(0, str(src_path))
+                
+                from notifications import AlertNotifier
+                
+                # Create notifier with test config
+                notifier = AlertNotifier(config_path="config.json")
+                
+                # Send test alert
+                success = notifier.send_test_alert()
+                
+                # Report result on main thread
+                def on_success():
+                    self.hide_loading()
+                    messagebox.showinfo(
+                        "Test Successful! ✅",
+                        "Test alert sent successfully!\n\n"
+                        "Check your email and phone (if configured) for the test message.\n\n"
+                        "If you don't receive it within a few minutes:\n"
+                        "• Check your spam/junk folder\n"
+                        "• Verify your email password/app password\n"
+                        "• Ensure your email provider settings are correct"
+                    )
+                
+                def on_failure():
+                    self.hide_loading()
+                    messagebox.showerror(
+                        "Test Failed ❌",
+                        "Failed to send test alert.\n\n"
+                        "Please check:\n"
+                        "• Email address is correct\n"
+                        "• Email password/app password is valid\n"
+                        "• SMTP provider settings match your email service\n"
+                        "• Your internet connection is working\n\n"
+                        "For Gmail users: You need an App Password, not your regular password.\n"
+                        "Go to: Google Account → Security → 2-Step Verification → App Passwords"
+                    )
+                
+                if success:
+                    self.root.after(0, on_success)
+                else:
+                    self.root.after(0, on_failure)
+                    
+            except Exception as e:
+                def on_error():
+                    self.hide_loading()
+                    messagebox.showerror(
+                        "Test Error",
+                        f"An error occurred while testing alerts:\n\n{str(e)}\n\n"
+                        "Please check your configuration and try again."
+                    )
+                self.root.after(0, on_error)
+            finally:
+                # Restore original config (don't keep test settings if not saved)
+                def restore_config():
+                    self.config = original_config
+                    self.save_config()
+                # Don't restore - let user decide to save or not
+        
+        # Start test in background thread
+        thread = threading.Thread(target=test_in_thread, daemon=True)
+        thread.start()
     
     def show_alerts_config_dialog(self):
         """Show dialog to configure email/SMS alert settings."""
@@ -3225,18 +3351,27 @@ Time-Based Exit: {time_exit}
             # User cancelled
             dialog.destroy()
         
+        def test_alerts():
+            """Test alerts using current form values."""
+            self._test_alerts_settings(
+                provider_var, email_var, email_pass_var,
+                smtp_server_var, smtp_port_var, smtp_tls_var,
+                phone_var, carrier_var
+            )
+        
+        # Test button (left side)
         tk.Button(
             button_frame,
-            text="Save Configuration",
-            command=save_and_close,
+            text="📧 Test Alerts",
+            command=test_alerts,
             font=("Segoe UI", 9, "bold"),
-            bg=self.colors['success_dark'],
+            bg=self.colors['warning'],
             fg='white',
             cursor="hand2",
             relief=tk.FLAT,
             padx=20,
             pady=8
-        ).pack(side=tk.RIGHT, padx=(5, 0))
+        ).pack(side=tk.LEFT)
         
         tk.Button(
             button_frame,
@@ -3250,6 +3385,19 @@ Time-Based Exit: {time_exit}
             padx=20,
             pady=8
         ).pack(side=tk.RIGHT)
+        
+        tk.Button(
+            button_frame,
+            text="Save Configuration",
+            command=save_and_close,
+            font=("Segoe UI", 9, "bold"),
+            bg=self.colors['success_dark'],
+            fg='white',
+            cursor="hand2",
+            relief=tk.FLAT,
+            padx=20,
+            pady=8
+        ).pack(side=tk.RIGHT, padx=(5, 0))
     
     def create_env_file(self):
         """Create .env file from GUI settings.
