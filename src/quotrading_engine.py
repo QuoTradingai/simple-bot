@@ -3013,7 +3013,7 @@ def validate_signal_requirements(symbol: str, bar_time: datetime) -> Tuple[bool,
             try:
                 notifier = get_notifier()
                 notifier.send_error_alert(
-                    error_message=f"Daily Loss Limit Reached: ${state[symbol]['daily_pnl']:.2f} / -${effective_loss_limit:.2f}. Bot stopped trading for today. Will auto-resume tomorrow.",
+                    error_message=f"Daily Loss Limit Reached: ${state[symbol]['daily_pnl']:.2f} / -${effective_loss_limit:.2f}. Bot stopped trading for today. Daily counters reset at 6:00 PM ET.",
                     error_type="Daily Loss Limit"
                 )
                 state[symbol]["loss_limit_alerted"] = True
@@ -3064,8 +3064,8 @@ def validate_signal_requirements(symbol: str, bar_time: datetime) -> Tuple[bool,
         logger.info(f"   🚀 Signal generation: ENABLED")
         logger.info("=" * 60)
     
-    # Check VWAP is available (needed for target/safety net exit)
-    # Note: VWAP bands are NOT used for entry signals in Capitulation Reversal strategy
+    # Check VWAP is available (still calculated for reference)
+    # Note: VWAP is not the primary target in current strategy
     vwap = state[symbol].get("vwap")
     if vwap is None or vwap <= 0:
         pass  # Silent - VWAP not ready
@@ -3073,8 +3073,8 @@ def validate_signal_requirements(symbol: str, bar_time: datetime) -> Tuple[bool,
     
     # Trend filter - DISABLED for Capitulation Reversal strategy
     # Flush direction determines trade direction (condition #8 in capitulation_detector.py)
-    # - Long: price < VWAP (buying at discount after flush down)
-    # - Short: price > VWAP (selling at premium after flush up)
+    # - Long: price check after flush down
+    # - Short: price check after flush up
     
     # Check RSI is available (needed for capitulation signal detection)
     # Note: RSI thresholds (25/75) are hardcoded in capitulation_detector.py
@@ -3090,8 +3090,7 @@ def validate_signal_requirements(symbol: str, bar_time: datetime) -> Tuple[bool,
         # Signal-specific functions will handle volume check with 2x threshold
     
     # VWAP direction filter - DISABLED for Capitulation Reversal strategy
-    # Price vs VWAP check is done in capitulation_detector.py condition #8
-    # (Long: price < VWAP, Short: price > VWAP)
+    # Price checks are done in capitulation_detector.py condition #8
     
     # Check bid/ask spread and market condition (Phase: Bid/Ask Strategy)
     # SKIP IN BACKTEST MODE - historical data doesn't have bid/ask spreads
@@ -3178,9 +3177,9 @@ def check_long_signal_conditions(symbol: str, prev_bar: Dict[str, Any],
     rsi = state[symbol]["rsi"]
     current_regime = state[symbol].get("current_regime", "NORMAL")
     
-    # CRITICAL: VWAP is required for capitulation strategy (it's the target)
+    # VWAP check (still calculated for reference)
     if vwap is None or vwap <= 0:
-        logger.debug("Long rejected - VWAP not available (required for mean reversion target)")
+        logger.debug("Long rejected - VWAP not available")
         return False
     
     # Need at least 10 bars for flush detection
@@ -3262,9 +3261,9 @@ def check_short_signal_conditions(symbol: str, prev_bar: Dict[str, Any],
     rsi = state[symbol]["rsi"]
     current_regime = state[symbol].get("current_regime", "NORMAL")
     
-    # CRITICAL: VWAP is required for capitulation strategy (it's the target)
+    # VWAP check (still calculated for reference)
     if vwap is None or vwap <= 0:
-        logger.debug("Short rejected - VWAP not available (required for mean reversion target)")
+        logger.debug("Short rejected - VWAP not available")
         return False
     
     # Need at least 10 bars for flush detection
@@ -4518,17 +4517,17 @@ def check_stop_hit(symbol: str, current_bar: Dict[str, Any], position: Dict[str,
 
 def check_reversal_signal(symbol: str, current_bar: Dict[str, Any], position: Dict[str, Any]) -> Tuple[bool, Optional[float]]:
     """
-    Check if price has reached VWAP BEFORE trailing stop activates.
+    Check if price has reached reversal level before trailing stop activates.
     
     CAPITULATION REVERSAL EXIT STRATEGY:
     - Trailing stop handles all profit-taking (activates at 15+ ticks profit)
-    - VWAP is a SAFETY NET only used if price reaches VWAP before trailing activates
-    - Once trailing is active (15+ ticks), ignore VWAP and let trailing ride
+    - Early exit check: If price reverses before trailing activates, exit early
+    - Once trailing is active (15+ ticks), let trailing ride
     
     Logic:
-    - If price reaches VWAP before trailing activates (before 15 ticks profit): exit at VWAP
-    - If trailing activates first (15+ ticks profit): let it ride, ignore VWAP target
-    - Trailing stop eventually exits you, either at VWAP or beyond
+    - If price reverses before trailing activates (before 15 ticks profit): exit early
+    - If trailing activates first (15+ ticks profit): let it ride
+    - Trailing stop eventually exits the position
     
     This captures more profit on big reversals while still protecting gains on weak ones.
     
@@ -4568,15 +4567,15 @@ def check_reversal_signal(symbol: str, current_bar: Dict[str, Any], position: Di
         # Trailing stop should be active - don't use VWAP target
         return False, None
     
-    # Trailing not active yet - check if we've reached VWAP (safety net)
+    # Trailing not active yet - check if we've reached reversal point (early exit)
     if side == "long":
         if current_price >= vwap:
-            logger.info(f"📊 VWAP TARGET HIT (before trailing): Price ${current_price:.2f} >= VWAP ${vwap:.2f}")
+            logger.info(f"📊 REVERSAL HIT (before trailing): Price ${current_price:.2f} >= ${vwap:.2f}")
             return True, current_price
     
     if side == "short":
         if current_price <= vwap:
-            logger.info(f"📊 VWAP TARGET HIT (before trailing): Price ${current_price:.2f} <= VWAP ${vwap:.2f}")
+            logger.info(f"📊 REVERSAL HIT (before trailing): Price ${current_price:.2f} <= ${vwap:.2f}")
             return True, current_price
     
     return False, None
@@ -5444,7 +5443,7 @@ def check_exit_conditions(symbol: str) -> None:
         position["active"] = False
         position["flatten_pending"] = True  # Track that we're waiting for flatten confirmation
         
-        logger.info("Position flattened - bot will continue running and auto-resume when market opens")
+        logger.info("Position flattened - bot will continue running")
         return
     
     # Market closed - Force close all positions
@@ -5647,10 +5646,10 @@ def check_exit_conditions(symbol: str) -> None:
     # EIGHTH - Time-decay tightening (last priority, gradual adjustment)
     check_time_decay_tightening(symbol, bar_time)
     
-    # Check for VWAP target hit (mean reversion complete)
-    target_hit, price = check_reversal_signal(symbol, current_bar, position)
-    if target_hit:
-        execute_exit(symbol, price, "target_hit")
+    # Check for reversal signal (early exit before trailing activates)
+    reversal_hit, price = check_reversal_signal(symbol, current_bar, position)
+    if reversal_hit:
+        execute_exit(symbol, price, "reversal_hit")
         return
 
 
@@ -6479,39 +6478,22 @@ def execute_flatten_with_limit_orders(symbol: str, order_side: str, contracts: i
 
 def check_vwap_reset(symbol: str, current_time: datetime) -> None:
     """
-    Check if VWAP should reset at 6:00 PM ET (futures market day start).
-    For 24/5 trading: VWAP resets at 6:00 PM ET when futures trading day begins.
+    DEPRECATED: VWAP reset not used in current strategy.
+    Function kept for compatibility but does nothing.
     
     Args:
         symbol: Instrument symbol
         current_time: Current datetime in Eastern Time
     """
-    current_date = current_time.date()
-    vwap_reset_time = datetime_time(18, 0)  # 6:00 PM ET - futures trading day starts
-    
-    # Check if we've crossed 6:00 PM ET on a new day
-    if state[symbol]["vwap_day"] is None:
-        # First run - initialize VWAP day
-        state[symbol]["vwap_day"] = current_date
-        pass  # Silent - VWAP day initialization
-        return
-    
-    # If it's a new day and we're past 6:00 PM ET, reset VWAP
-    # OR if it's the same calendar day but we just crossed 6:00 PM ET
-    last_reset_date = state[symbol]["vwap_day"]
-    crossed_reset_time = current_time.time() >= vwap_reset_time
-    
-    # New trading day starts at 6:00 PM ET, so check if we've moved to a new VWAP session
-    if crossed_reset_time and last_reset_date != current_date:
-        perform_vwap_reset(symbol, current_date, current_time)
+    pass  # Function disabled - not part of current strategy
 
 
 def perform_vwap_reset(symbol: str, new_date: Any, reset_time: datetime) -> None:
     """
-    DISABLED: VWAP reset function - not called per strategy requirements.
-    Strategy only needs accurate VWAP value for current bar.
+    DEPRECATED: VWAP reset not used in current strategy.
+    Function kept for compatibility but does nothing.
     """
-    pass  # Function disabled - VWAP continues calculating without reset
+    pass  # Function disabled - not part of current strategy
 
 
 def check_daily_reset(symbol: str, current_time: datetime) -> None:
@@ -6524,13 +6506,13 @@ def check_daily_reset(symbol: str, current_time: datetime) -> None:
         current_time: Current datetime in Eastern Time
     """
     current_date = current_time.date()
-    vwap_reset_time = datetime_time(18, 0)  # 6:00 PM ET - futures trading day starts
+    reset_time = datetime_time(18, 0)  # 6:00 PM ET - futures trading day starts
     
     # If we have a trading day stored and it's different from current date
     if state[symbol]["trading_day"] is not None:
         if state[symbol]["trading_day"] != current_date:
-            # Reset daily counters at 6:00 PM ET (same as VWAP reset)
-            if current_time.time() >= vwap_reset_time:
+            # Reset daily counters at 6:00 PM ET
+            if current_time.time() >= reset_time:
                 perform_daily_reset(symbol, current_date)
     else:
         # First run - initialize trading day
@@ -6542,7 +6524,6 @@ def perform_daily_reset(symbol: str, new_date: Any) -> None:
     """
     Perform the actual daily reset operations.
     Resets daily counters and session stats.
-    VWAP reset is handled separately by perform_vwap_reset.
     
     Args:
         symbol: Instrument symbol
@@ -6579,7 +6560,7 @@ def perform_daily_reset(symbol: str, new_date: Any) -> None:
     
     # Re-enable trading if it was stopped for any daily limit reason
     # "daily_loss_limit" = specific daily loss limit breached
-    # "daily_limits_reached" = approaching failure without recovery mode
+    # "daily_limits_reached" = approaching daily loss threshold
     if bot_status["stop_reason"] in ["daily_loss_limit", "daily_limits_reached"]:
         bot_status["trading_enabled"] = True
         bot_status["stop_reason"] = None
@@ -7564,7 +7545,7 @@ FLATTEN SCHEDULE (UTC - CME Futures):
 - After 5:00 PM ET: Maintenance window (Mon-Thu) or weekend (Fri-Sun)
 
 DAILY RESETS:
-- 6:00 PM ET: Daily session opens (after maintenance window) - VWAP resets here at market open (6 PM EST)
+- 6:00 PM ET: Daily session opens (after maintenance window)
 - Daily counters reset at 6:00 PM ET when new session starts
 
 CRITICAL SAFETY RULES (24/5 FUTURES - UTC):
@@ -7942,10 +7923,9 @@ def handle_time_check_event(data: Dict[str, Any]) -> None:
 
 
 def handle_vwap_reset_event(data: Dict[str, Any]) -> None:
-    """Handle VWAP reset event - DISABLED per strategy requirements"""
-    # VWAP reset disabled: Strategy only needs accurate VWAP for current bar (condition 8)
-    # No need to reset VWAP at maintenance open - just keep calculating as usual
-    # The capitulation reversal strategy doesn't depend on VWAP bands or mean reversion
+    """Handle VWAP reset event - DISABLED (not used in current strategy)"""
+    # VWAP reset disabled: Not part of current strategy
+    # VWAP is still calculated for reference but doesn't need periodic resets
     pass
 
 
