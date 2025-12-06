@@ -90,6 +90,21 @@ def get_device_fingerprint() -> str:
     return fingerprint_hash
 
 
+def ensure_utc_aware(dt: datetime) -> datetime:
+    """
+    Ensure a datetime object is UTC-aware.
+    
+    Args:
+        dt: datetime object (may be naive or aware)
+    
+    Returns:
+        UTC-aware datetime object
+    """
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt
+
+
 def check_launcher_lock(api_key: str) -> tuple[bool, dict]:
     """
     Check if another launcher instance is using this API key on this machine.
@@ -599,8 +614,7 @@ class QuoTradingLauncher:
                         try:
                             expiry_date = datetime.fromisoformat(expiry_date_str.replace('Z', '+00:00'))
                             # Ensure expiry_date is timezone-aware (UTC)
-                            if expiry_date.tzinfo is None:
-                                expiry_date = expiry_date.replace(tzinfo=timezone.utc)
+                            expiry_date = ensure_utc_aware(expiry_date)
                             time_until_expiration = expiry_date - datetime.now(timezone.utc)
                             days_until_expiration = time_until_expiration.days
                             hours_until_expiration = time_until_expiration.total_seconds() / 3600
@@ -1742,8 +1756,7 @@ class QuoTradingLauncher:
                 expiration_dt = license_expiration
             
             # Ensure expiration_dt is timezone-aware (UTC)
-            if expiration_dt.tzinfo is None:
-                expiration_dt = expiration_dt.replace(tzinfo=timezone.utc)
+            expiration_dt = ensure_utc_aware(expiration_dt)
             
             # Calculate time remaining
             now = datetime.now(timezone.utc)
