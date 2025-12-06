@@ -1739,7 +1739,7 @@ class QuoTradingLauncher:
                 expiration_dt = license_expiration
             
             # Calculate time remaining
-            now = datetime.now()
+            now = datetime.now(timezone.utc)
             time_remaining = expiration_dt - now
             
             # Check if expired
