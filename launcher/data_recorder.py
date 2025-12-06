@@ -53,7 +53,7 @@ class MarketDataRecorder:
         username: str,
         api_token: str,
         symbols: List[str],
-        output_file: str,
+        output_dir: str,
         log_callback: Optional[Callable[[str], None]] = None
     ):
         """
@@ -64,15 +64,18 @@ class MarketDataRecorder:
             username: Broker username
             api_token: Broker API token
             symbols: List of symbols to record
-            output_file: Output CSV file path
+            output_dir: Output directory for CSV files (one per symbol)
             log_callback: Optional callback for logging messages to GUI
         """
         self.broker_name = broker
         self.username = username
         self.api_token = api_token
         self.symbols = symbols
-        self.output_file = output_file
+        self.output_dir = Path(output_dir)
         self.log_callback = log_callback
+        
+        # Create output directory if it doesn't exist
+        self.output_dir.mkdir(parents=True, exist_ok=True)
         
         # Broker connection
         self.broker = None
@@ -80,9 +83,11 @@ class MarketDataRecorder:
         
         # Recording state
         self.is_recording = False
-        self.csv_file = None
-        self.csv_writer = None
-        self.csv_lock = threading.Lock()
+        
+        # Per-symbol CSV files and writers
+        self.csv_files = {}  # symbol -> file handle
+        self.csv_writers = {}  # symbol -> csv.writer
+        self.csv_locks = {symbol: threading.Lock() for symbol in symbols}
         
         # Statistics
         self.stats = {symbol: {
@@ -198,7 +203,7 @@ class MarketDataRecorder:
                 self.log("=" * 50)
                 self.log("RECORDING STARTED")
                 self.log(f"Recording {len(self.contract_ids)} symbols: {', '.join(self.contract_ids.keys())}")
-                self.log(f"Output: {self.output_file}")
+                self.log(f"Output directory: {self.output_dir}")
                 self.log("=" * 50)
                 
                 # Start statistics reporter
@@ -213,14 +218,9 @@ class MarketDataRecorder:
             raise
     
     def _initialize_csv(self):
-        """Initialize CSV file with headers."""
-        self.csv_file = open(self.output_file, 'w', newline='')
-        self.csv_writer = csv.writer(self.csv_file)
-        
-        # Write header
+        """Initialize CSV files for each symbol with headers (append mode)."""
         headers = [
             'timestamp',
-            'symbol',
             'data_type',  # quote, trade, or depth
             'bid_price',
             'bid_size',
@@ -234,16 +234,31 @@ class MarketDataRecorder:
             'depth_price',
             'depth_size'
         ]
-        self.csv_writer.writerow(headers)
-        self.csv_file.flush()
+        
+        for symbol in self.symbols:
+            csv_path = self.output_dir / f"{symbol}.csv"
+            
+            # Check if file exists to determine if we need to write headers
+            file_exists = csv_path.exists()
+            
+            # Open in append mode to continue from where we left off
+            self.csv_files[symbol] = open(csv_path, 'a', newline='')
+            self.csv_writers[symbol] = csv.writer(self.csv_files[symbol])
+            
+            # Write header only if file is new
+            if not file_exists:
+                self.csv_writers[symbol].writerow(headers)
+                self.csv_files[symbol].flush()
+                self.log(f"✓ Created new CSV file: {csv_path}")
+            else:
+                self.log(f"✓ Appending to existing CSV file: {csv_path}")
     
-    def _write_csv_row(self, data: Dict[str, Any]):
-        """Write a row to CSV file (thread-safe)."""
-        with self.csv_lock:
-            if self.csv_writer and self.is_recording:
+    def _write_csv_row(self, symbol: str, data: Dict[str, Any]):
+        """Write a row to the symbol's CSV file (thread-safe)."""
+        with self.csv_locks[symbol]:
+            if symbol in self.csv_writers and self.is_recording:
                 row = [
                     data.get('timestamp', ''),
-                    data.get('symbol', ''),
                     data.get('data_type', ''),
                     data.get('bid_price', ''),
                     data.get('bid_size', ''),
@@ -257,11 +272,11 @@ class MarketDataRecorder:
                     data.get('depth_price', ''),
                     data.get('depth_size', '')
                 ]
-                self.csv_writer.writerow(row)
+                self.csv_writers[symbol].writerow(row)
                 
                 # Flush periodically to ensure data is written
-                if sum(self.stats[data['symbol']].values()) % CSV_FLUSH_FREQUENCY == 0:
-                    self.csv_file.flush()
+                if sum(self.stats[symbol].values()) % CSV_FLUSH_FREQUENCY == 0:
+                    self.csv_files[symbol].flush()
     
     def _on_quote(self, symbol: str, data: Any):
         """Handle quote data."""
@@ -289,7 +304,6 @@ class MarketDataRecorder:
             
             row_data = {
                 'timestamp': timestamp,
-                'symbol': symbol,
                 'data_type': 'quote',
                 'bid_price': bid_price or '',
                 'bid_size': bid_size or '',
@@ -297,7 +311,7 @@ class MarketDataRecorder:
                 'ask_size': ask_size or ''
             }
             
-            self._write_csv_row(row_data)
+            self._write_csv_row(symbol, row_data)
             self.stats[symbol]['quotes'] += 1
             
         except Exception as e:
@@ -325,14 +339,13 @@ class MarketDataRecorder:
             
             row_data = {
                 'timestamp': timestamp,
-                'symbol': symbol,
                 'data_type': 'trade',
                 'trade_price': trade_price or '',
                 'trade_size': trade_size or '',
                 'trade_side': trade_side or ''
             }
             
-            self._write_csv_row(row_data)
+            self._write_csv_row(symbol, row_data)
             self.stats[symbol]['trades'] += 1
             
         except Exception as e:
@@ -361,14 +374,13 @@ class MarketDataRecorder:
                     if price is not None:
                         row_data = {
                             'timestamp': timestamp,
-                            'symbol': symbol,
                             'data_type': 'depth',
                             'depth_level': i,
                             'depth_side': side or '',
                             'depth_price': price or '',
                             'depth_size': size or ''
                         }
-                        self._write_csv_row(row_data)
+                        self._write_csv_row(symbol, row_data)
             
             self.stats[symbol]['depth_updates'] += 1
             
@@ -398,12 +410,16 @@ class MarketDataRecorder:
         self.log("Stopping recorder...")
         self.is_recording = False
         
-        # Close CSV file
-        if self.csv_file:
-            with self.csv_lock:
-                self.csv_file.flush()
-                self.csv_file.close()
-            self.log(f"✓ CSV file saved: {self.output_file}")
+        # Close all CSV files
+        for symbol, csv_file in self.csv_files.items():
+            try:
+                with self.csv_locks[symbol]:
+                    csv_file.flush()
+                    csv_file.close()
+                csv_path = self.output_dir / f"{symbol}.csv"
+                self.log(f"✓ CSV file saved: {csv_path}")
+            except Exception as e:
+                self.log(f"⚠ Error closing file for {symbol}: {e}")
         
         # Disconnect WebSocket
         if self.websocket:

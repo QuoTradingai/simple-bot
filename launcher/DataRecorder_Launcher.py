@@ -201,16 +201,13 @@ class DataRecorderLauncher:
             fg=self.colors['text_light']
         ).pack(anchor=tk.W, pady=(0, 10))
         
-        # Symbol checkboxes
+        # Symbol checkboxes - Only essential symbols for now
         self.symbol_vars = {}
         symbols = [
             ("ES", "E-mini S&P 500"),
             ("MES", "Micro E-mini S&P 500"),
             ("NQ", "E-mini Nasdaq 100"),
             ("MNQ", "Micro E-mini Nasdaq 100"),
-            ("YM", "E-mini Dow"),
-            ("RTY", "E-mini Russell 2000"),
-            ("CL", "Crude Oil Futures"),
             ("GC", "Gold Futures"),
         ]
         
@@ -247,10 +244,10 @@ class DataRecorderLauncher:
         )
         output_frame.pack(fill=tk.X, pady=(0, 15))
         
-        # Output file
+        # Output directory
         tk.Label(
             output_frame,
-            text="Output CSV File:",
+            text="Output Directory:",
             font=("Segoe UI", 9),
             bg=self.colors['card'],
             fg=self.colors['text']
@@ -259,12 +256,12 @@ class DataRecorderLauncher:
         file_frame = tk.Frame(output_frame, bg=self.colors['card'])
         file_frame.grid(row=0, column=1, sticky=tk.W, pady=5, padx=(10, 0))
         
-        self.output_file_var = tk.StringVar(
-            value=self.config.get("output_file", "market_data.csv")
+        self.output_dir_var = tk.StringVar(
+            value=self.config.get("output_dir", "market_data")
         )
         output_entry = tk.Entry(
             file_frame,
-            textvariable=self.output_file_var,
+            textvariable=self.output_dir_var,
             font=("Segoe UI", 9),
             bg=self.colors['input_bg'],
             width=25
@@ -274,13 +271,22 @@ class DataRecorderLauncher:
         browse_btn = tk.Button(
             file_frame,
             text="Browse",
-            command=self.browse_output_file,
+            command=self.browse_output_dir,
             font=("Segoe UI", 9),
             bg=self.colors['secondary'],
             relief=tk.FLAT,
             cursor="hand2"
         )
         browse_btn.pack(side=tk.LEFT, padx=(5, 0))
+        
+        # Info label
+        tk.Label(
+            output_frame,
+            text="Each symbol will be saved to a separate CSV file in this directory",
+            font=("Segoe UI", 7),
+            bg=self.colors['card'],
+            fg=self.colors['text_secondary']
+        ).grid(row=1, column=0, columnspan=2, sticky=tk.W, pady=(0, 5))
         
         # Status section
         status_frame = tk.LabelFrame(
@@ -340,15 +346,14 @@ class DataRecorderLauncher:
         # Add status log
         self.log_message("Ready to record market data. Configure settings and click START.")
     
-    def browse_output_file(self):
-        """Open file browser for output file selection."""
-        filename = filedialog.asksaveasfilename(
-            defaultextension=".csv",
-            filetypes=[("CSV files", "*.csv"), ("All files", "*.*")],
-            initialfile=self.output_file_var.get()
+    def browse_output_dir(self):
+        """Open directory browser for output directory selection."""
+        directory = filedialog.askdirectory(
+            initialdir=self.output_dir_var.get(),
+            title="Select Output Directory"
         )
-        if filename:
-            self.output_file_var.set(filename)
+        if directory:
+            self.output_dir_var.set(directory)
     
     def log_message(self, message: str):
         """Add message to status log."""
@@ -381,12 +386,12 @@ class DataRecorderLauncher:
             )
             return
         
-        # Get output file
-        output_file = self.output_file_var.get().strip()
-        if not output_file:
+        # Get output directory
+        output_dir = self.output_dir_var.get().strip()
+        if not output_dir:
             messagebox.showerror(
-                "No Output File",
-                "Please specify an output CSV file."
+                "No Output Directory",
+                "Please specify an output directory."
             )
             return
         
@@ -395,7 +400,7 @@ class DataRecorderLauncher:
         self.config["broker_username"] = username
         self.config["broker_token"] = token
         self.config["symbols"] = selected_symbols
-        self.config["output_file"] = output_file
+        self.config["output_dir"] = output_dir
         self.save_config()
         
         # Update UI
@@ -405,17 +410,17 @@ class DataRecorderLauncher:
         
         # Start recorder in background thread
         self.log_message(f"Starting data recorder for symbols: {', '.join(selected_symbols)}")
-        self.log_message(f"Output file: {output_file}")
+        self.log_message(f"Output directory: {output_dir}")
         
         self.recorder_thread = threading.Thread(
             target=self.run_recorder,
-            args=(broker, username, token, selected_symbols, output_file),
+            args=(broker, username, token, selected_symbols, output_dir),
             daemon=True
         )
         self.recorder_thread.start()
     
     def run_recorder(self, broker: str, username: str, token: str, 
-                     symbols: List[str], output_file: str):
+                     symbols: List[str], output_dir: str):
         """Run the data recorder (in background thread)."""
         try:
             # Import recorder
@@ -427,7 +432,7 @@ class DataRecorderLauncher:
                 username=username,
                 api_token=token,
                 symbols=symbols,
-                output_file=output_file,
+                output_dir=output_dir,
                 log_callback=self.log_message
             )
             
