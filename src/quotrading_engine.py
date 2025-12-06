@@ -270,6 +270,10 @@ def _cleanup_event_loop(loop: asyncio.AbstractEventLoop) -> None:
         loop: The event loop to clean up
     """
     try:
+        # Check if loop is already closed
+        if loop.is_closed():
+            return
+        
         # Cancel all pending tasks
         pending = asyncio.all_tasks(loop)
         for task in pending:
@@ -288,7 +292,8 @@ def _cleanup_event_loop(loop: asyncio.AbstractEventLoop) -> None:
         # If cleanup fails, still try to close the loop
         # Suppress any errors as we're in cleanup
         try:
-            loop.close()
+            if not loop.is_closed():
+                loop.close()
         except Exception:
             pass
 
